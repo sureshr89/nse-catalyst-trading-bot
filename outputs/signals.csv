@@ -1,3 +1,0 @@
-timestamp,symbol,industry,signal,market_direction,industry_direction,stock_direction,breakout_level,entry,stop_loss,target,quantity,approved,reason
-2026-08-07T09:56:00+05:30,IDEA,Telecommunication,BUY,BULLISH,BULLISH,BULLISH,12.72,12.72,12.69,12.75,41666,False,Position value Rs 529991.52 exceeds capital Rs 250000.00
-2026-08-07T11:03:00+05:30,M&M,Automobile and Auto Components,BUY,BULLISH,BULLISH,BULLISH,3456.8,3456.8,3439.8,3473.8,73,False,Position value Rs 252346.40 exceeds capital Rs 250000.00
