@@ -218,6 +218,8 @@ TOTAL_CAPITAL = 250000
 
 MAX_RISK_PER_TRADE = 1250
 
+MIN_REQUIRED_RISK = 1240
+
 RISK_PERCENT = 0.5
 
 
@@ -227,6 +229,34 @@ RISK_PERCENT = 0.5
 
 MAX_TRADES_PER_STOCK = 1
 
+# ============================================================
+# POSITION MANAGEMENT
+# ============================================================
+
+# Maximum simultaneous open positions
+MAX_OPEN_POSITIONS = 2
+
+# ============================================================
+# DAILY LIMITS
+# ============================================================
+
+# Stop trading after 3 full stop losses
+DAILY_MAX_LOSS = 3750
+
+# Stop taking new trades after reaching the target
+DAILY_PROFIT_TARGET = 5000
+
+# Wait after a stop loss before taking a new trade
+COOLDOWN_MINUTES = 15
+
+# ============================================================
+# POSITION SIZING
+# ============================================================
+
+# Quantity is calculated automatically using:
+# 1. Maximum risk per trade
+# 2. Available capital
+POSITION_SIZE_METHOD = "RISK_AND_CAPITAL"
 
 # ============================================================
 # TRADING MODE
@@ -333,6 +363,34 @@ if __name__ == "__main__":
     print(
         "Maximum Risk / Trade    :",
         MAX_RISK_PER_TRADE
+    )
+    print(
+        "Minimum Required Risk   :",
+        MIN_REQUIRED_RISK
+    )
+    print(
+        "Maximum Open Positions  :",
+        MAX_OPEN_POSITIONS
+    )
+
+    print(
+        "Daily Max Loss          :",
+        DAILY_MAX_LOSS
+    )
+
+    print(
+        "Daily Profit Target     :",
+        DAILY_PROFIT_TARGET
+    )
+
+    print(
+        "Cooldown (Minutes)      :",
+        COOLDOWN_MINUTES
+    )
+
+    print(
+        "Position Sizing         :",
+        POSITION_SIZE_METHOD
     )
 
     print("-" * 80)

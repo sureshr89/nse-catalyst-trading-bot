@@ -1,31 +1,3 @@
-"""
-PAPER TRADE ENGINE
-==================
-
-Simulates approved trades.
-
-Responsibilities
-----------------
-1. Open an approved paper position
-2. Track open positions
-3. Check 1-minute candle for SL / Target
-4. Mandatory square-off at 15:00
-5. Calculate P&L
-6. Maintain closed positions
-
-Important
----------
-This engine DOES NOT:
-- Find setups
-- Generate entries
-- Calculate market direction
-- Place broker orders
-
-If both SL and Target are touched in the same candle,
-STOP LOSS is assumed first because OHLC data cannot tell
-which level was touched first.
-"""
-
 from datetime import datetime
 
 from config.settings import (
@@ -34,8 +6,10 @@ from config.settings import (
     LAST_ENTRY_TIME,
     SQUARE_OFF_TIME,
     MARKET_CLOSE,
+    TOTAL_CAPITAL,
+    MAX_OPEN_POSITIONS,
+    MIN_REQUIRED_RISK,
 )
-
 
 class PaperTradeEngine:
 
@@ -76,6 +50,9 @@ class PaperTradeEngine:
         # Sequential paper trade ID
 
         self.trade_counter = 0
+        self.total_capital = TOTAL_CAPITAL
+        self.available_capital = TOTAL_CAPITAL
+        self.used_capital = 0
 
     # ============================================================
     # TIME HELPERS
@@ -295,6 +272,29 @@ class PaperTradeEngine:
             )
         )
 
+        position_value = entry * quantity
+
+        actual_risk = self._number(
+            trade.get("actual_risk")
+        )
+        if (
+            actual_risk is None
+            or actual_risk < MIN_REQUIRED_RISK
+        ):
+            return {
+                "opened": False,
+                "reason": (
+                    "Trade risk below required "
+                    f"₹{MIN_REQUIRED_RISK}."
+                )
+            }
+
+        if position_value > self.available_capital:
+            return {
+                "opened": False,
+                "reason": "Insufficient available capital"
+            }
+
         entry_time = trade.get(
             "entry_time"
         )
@@ -399,6 +399,12 @@ class PaperTradeEngine:
         # CREATE TRADE
         # --------------------------------------------------------
 
+        if len(self.open_positions) >= MAX_OPEN_POSITIONS:
+            return {
+                "opened": False,
+                "reason": "Maximum open positions reached"
+            }
+
         self.trade_counter += 1
 
         trade_id = (
@@ -490,6 +496,9 @@ class PaperTradeEngine:
         self.open_positions[
             symbol
         ] = position
+
+        self.used_capital += position_value
+        self.available_capital -= position_value
 
         return {
 
@@ -609,6 +618,14 @@ class PaperTradeEngine:
         self.closed_positions.append(
             closed
         )
+
+        position_value = (
+            position["entry"] *
+            position["quantity"]
+        )
+
+        self.used_capital -= position_value
+        self.available_capital += position_value
 
         del self.open_positions[
             symbol
@@ -964,6 +981,21 @@ class PaperTradeEngine:
             "total_pnl":
                 round(
                     total_pnl,
+                    2
+                ),
+
+            "total_capital":
+                self.total_capital,
+
+            "available_capital":
+                round(
+                    self.available_capital,
+                    2
+                ),
+
+            "used_capital":
+                round(
+                    self.used_capital,
                     2
                 )
         }

@@ -1,37 +1,3 @@
-"""
-1-MINUTE ENTRY ENGINE
-=====================
-
-Purpose
--------
-Take the valid 5-minute pullback setup produced by SetupEngine
-and wait for the final 1-minute breakout/breakdown confirmation.
-
-BUY
----
-1. Valid BUY setup exists.
-2. Frozen high comes from SetupEngine.
-3. Pullback has already completed.
-4. Entry allowed only from 09:45 to 13:30.
-5. Completed 1-minute candle must CLOSE ABOVE frozen high.
-6. Entry = breakout candle close.
-7. Stop Loss = pullback low.
-8. Target = 1:1 risk/reward.
-9. Quantity is calculated using MAX_RISK_PER_TRADE.
-
-SELL
-----
-1. Valid SELL setup exists.
-2. Frozen low comes from SetupEngine.
-3. Pullback has already completed.
-4. Entry allowed only from 09:45 to 13:30.
-5. Completed 1-minute candle must CLOSE BELOW frozen low.
-6. Entry = breakdown candle close.
-7. Stop Loss = pullback high.
-8. Target = 1:1 risk/reward.
-9. Quantity is calculated using MAX_RISK_PER_TRADE.
-"""
-
 from datetime import time
 import math
 
@@ -41,7 +7,8 @@ from config.settings import (
     TRADING_START,
     LAST_ENTRY_TIME,
     RISK_REWARD_RATIO,
-    MAX_RISK_PER_TRADE
+    MAX_RISK_PER_TRADE,
+    TOTAL_CAPITAL
 )
 
 
@@ -156,27 +123,36 @@ class EntryEngine:
     # ============================================================
 
     def calculate_quantity(
-        self,
-        entry,
-        stop_loss
+            self,
+            entry,
+            stop_loss,
+            available_capital=TOTAL_CAPITAL
     ):
-
-        risk_per_share = abs(
-            entry - stop_loss
-        )
+        risk_per_share = abs(entry - stop_loss)
 
         if risk_per_share <= 0:
             return 0
 
-        quantity = math.floor(
-            self.max_risk
-            / risk_per_share
+        risk_quantity = math.floor(
+            self.max_risk / risk_per_share
         )
 
-        return max(
-            quantity,
-            0
+        if risk_quantity <= 0:
+            return 0
+
+        required_capital = (
+            risk_quantity * entry
         )
+
+        # Take trade ONLY if we have enough capital
+        # to build the FULL ₹1250 risk position.
+
+        if required_capital > available_capital:
+            return 0
+
+        return risk_quantity
+
+
 
     # ============================================================
     # BUILD BUY TRADE
@@ -185,7 +161,8 @@ class EntryEngine:
     def _build_buy_trade(
         self,
         candle,
-        setup
+        setup,
+        available_capital=TOTAL_CAPITAL
     ):
 
         entry = float(
@@ -213,7 +190,8 @@ class EntryEngine:
 
         quantity = self.calculate_quantity(
             entry,
-            stop_loss
+            stop_loss,
+            available_capital
         )
 
         if quantity <= 0:
@@ -321,7 +299,8 @@ class EntryEngine:
     def _build_sell_trade(
         self,
         candle,
-        setup
+        setup,
+        available_capital=TOTAL_CAPITAL
     ):
 
         entry = float(
@@ -349,7 +328,8 @@ class EntryEngine:
 
         quantity = self.calculate_quantity(
             entry,
-            stop_loss
+            stop_loss,
+            available_capital
         )
 
         if quantity <= 0:
@@ -518,7 +498,8 @@ class EntryEngine:
 
                 return self._build_buy_trade(
                     candle,
-                    setup
+                    setup,
+                    TOTAL_CAPITAL
                 )
 
         return None
@@ -588,7 +569,8 @@ class EntryEngine:
 
                 return self._build_sell_trade(
                     candle,
-                    setup
+                    setup,
+                    TOTAL_CAPITAL
                 )
 
         return None

@@ -3,18 +3,23 @@ __pycache__/
 *.py[cod]
 *.pyo
 
-# Virtual environment
+# Virtual environments
 .venv/
+venv/
 
-# PyCharm
+# IDE
 .idea/
-
-# VS Code
 .vscode/
 
-# Output CSV files
-outputs/*.csv
-
-# OS files
+# OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+
+# Streamlit
+.streamlit/
+
+# Pytest
+.pytest_cache/

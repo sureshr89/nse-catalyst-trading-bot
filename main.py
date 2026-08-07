@@ -1,21 +1,3 @@
-"""
-NIFTY LARGEMIDCAP 250 PULLBACK BREAKOUT BOT
-============================================
-
-MAIN APPLICATION - PAPER TRADING
-
-FLOW
-----
-Scanner
- -> Risk Engine
- -> Paper Trade Engine
- -> 1-Minute Position Monitoring
- -> Stop Loss / Target / 15:00 Square Off
- -> Trade Journal
-
-No live broker orders are placed.
-"""
-
 import time
 from datetime import datetime
 
@@ -26,6 +8,9 @@ from config.settings import (
     LAST_ENTRY_TIME,
     SQUARE_OFF_TIME,
     SCAN_INTERVAL_SECONDS,
+    MAX_OPEN_POSITIONS,
+    DAILY_MAX_LOSS,
+    DAILY_PROFIT_TARGET,
 )
 
 from scanner.scanner_engine import ScannerEngine
@@ -78,6 +63,8 @@ class TradingBot:
         # repeatedly.
 
         self.processed_signals = set()
+        self.daily_pnl = 0.0
+        self.cooldown_until = None
 
     # ============================================================
     # CURRENT TIME
@@ -195,6 +182,22 @@ class TradingBot:
             signal.get("signal")
         )
         print("-" * 100)
+
+        # --------------------------------------------------------
+        # DAILY LIMIT CHECKS
+        # --------------------------------------------------------
+
+        if self.daily_pnl <= -DAILY_MAX_LOSS:
+            print(
+                "Daily max loss reached. Skipping new trades."
+            )
+            return
+
+        if self.daily_pnl >= DAILY_PROFIT_TARGET:
+            print(
+                "Daily profit target reached. Skipping new trades."
+            )
+            return
 
         # --------------------------------------------------------
         # EXISTING POSITION CHECK
@@ -516,6 +519,10 @@ class TradingBot:
             )
         )
 
+        self.daily_pnl += float(
+            closed_trade.get("pnl", 0)
+        )
+
         # --------------------------------------------------------
         # SAVE CLOSED TRADE
         # --------------------------------------------------------
@@ -608,6 +615,10 @@ class TradingBot:
                 "total_pnl"
             ]
         )
+
+        print("Available Capital :", session["available_capital"])
+        print("Used Capital      :", session["used_capital"])
+        print("Daily P&L         :", round(self.daily_pnl, 2))
 
         print(
             "Journal Trades    :",
