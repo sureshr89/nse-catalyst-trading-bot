@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config.settings import (
     PAPER_TRADING,
@@ -11,6 +11,7 @@ from config.settings import (
     MAX_OPEN_POSITIONS,
     DAILY_MAX_LOSS,
     DAILY_PROFIT_TARGET,
+    COOLDOWN_MINUTES,
 )
 
 from scanner.scanner_engine import ScannerEngine
@@ -31,7 +32,7 @@ class TradingBot:
         if LIVE_TRADING:
             raise RuntimeError(
                 "LIVE_TRADING must be False. "
-                "This main.py is for paper trading only."
+                "This bot is for paper trading only."
             )
 
         if not PAPER_TRADING:
@@ -59,12 +60,13 @@ class TradingBot:
 
         self.running = True
 
-        # Prevent processing exactly the same scanner signal
-        # repeatedly.
-
         self.processed_signals = set()
+
         self.daily_pnl = 0.0
+
         self.cooldown_until = None
+
+        self.square_off_done = False
 
     # ============================================================
     # CURRENT TIME
@@ -81,19 +83,31 @@ class TradingBot:
     def signal_key(self, signal):
 
         symbol = str(
-            signal.get("symbol", "")
+            signal.get(
+                "symbol",
+                ""
+            )
         ).strip().upper()
 
         side = str(
-            signal.get("signal", "")
+            signal.get(
+                "signal",
+                ""
+            )
         ).strip().upper()
 
         entry_time = str(
-            signal.get("entry_time", "")
+            signal.get(
+                "entry_time",
+                ""
+            )
         )
 
         breakout_level = str(
-            signal.get("breakout_level", "")
+            signal.get(
+                "breakout_level",
+                ""
+            )
         )
 
         return (
@@ -107,22 +121,28 @@ class TradingBot:
     # SAVE SIGNAL
     # ============================================================
 
-    def log_signal(self, signal, risk_result):
+    def log_signal(
+        self,
+        signal,
+        risk_result
+    ):
 
-        journal_signal = dict(signal)
-
-        journal_signal["timestamp"] = (
-            signal.get(
-                "entry_time",
-                datetime.now()
-            )
+        journal_signal = dict(
+            signal
         )
 
-        journal_signal["approved"] = (
-            risk_result.get(
-                "approved",
-                False
-            )
+        journal_signal[
+            "timestamp"
+        ] = signal.get(
+            "entry_time",
+            datetime.now()
+        )
+
+        journal_signal[
+            "approved"
+        ] = risk_result.get(
+            "approved",
+            False
         )
 
         reasons = risk_result.get(
@@ -130,7 +150,10 @@ class TradingBot:
             []
         )
 
-        if isinstance(reasons, list):
+        if isinstance(
+            reasons,
+            list
+        ):
 
             reason_text = "; ".join(
                 str(reason)
@@ -139,15 +162,66 @@ class TradingBot:
 
         else:
 
-            reason_text = str(reasons)
+            reason_text = str(
+                reasons
+            )
 
-        journal_signal["reason"] = (
-            reason_text
-        )
+        journal_signal[
+            "reason"
+        ] = reason_text
 
         self.journal.log_signal(
             journal_signal
         )
+
+    # ============================================================
+    # DAILY LIMIT
+    # ============================================================
+
+    def daily_limit_reached(self):
+
+        if (
+            self.daily_pnl
+            <= -DAILY_MAX_LOSS
+        ):
+
+            print(
+                "Daily max loss reached."
+            )
+
+            return True
+
+        if (
+            self.daily_pnl
+            >= DAILY_PROFIT_TARGET
+        ):
+
+            print(
+                "Daily profit target reached."
+            )
+
+            return True
+
+        return False
+
+    # ============================================================
+    # COOLDOWN
+    # ============================================================
+
+    def cooldown_active(self):
+
+        if self.cooldown_until is None:
+            return False
+
+        now = datetime.now()
+
+        if now >= self.cooldown_until:
+
+            self.cooldown_until = None
+
+            return False
+
+        return True
 
     # ============================================================
     # PROCESS ONE SCANNER SIGNAL
@@ -155,52 +229,78 @@ class TradingBot:
 
     def process_signal(self, signal):
 
-        if not isinstance(signal, dict):
+        if not isinstance(
+            signal,
+            dict
+        ):
+
             return
 
         symbol = str(
-            signal.get("symbol", "")
+            signal.get(
+                "symbol",
+                ""
+            )
         ).strip().upper()
 
         if not symbol:
             return
 
-        key = self.signal_key(signal)
+        key = self.signal_key(
+            signal
+        )
 
-        # Do not process exact same signal twice.
+        # --------------------------------------------------------
+        # DO NOT PROCESS SAME SIGNAL TWICE
+        # --------------------------------------------------------
 
         if key in self.processed_signals:
+
             return
 
-        self.processed_signals.add(key)
+        # --------------------------------------------------------
+        # DAILY LIMIT
+        # --------------------------------------------------------
 
-        print()
-        print("-" * 100)
-        print(
-            "PROCESSING SIGNAL :",
-            symbol,
-            signal.get("signal")
+        if self.daily_limit_reached():
+
+            return
+
+        # --------------------------------------------------------
+        # COOLDOWN
+        # --------------------------------------------------------
+
+        if self.cooldown_active():
+
+            print(
+                "Cooldown active until:",
+                self.cooldown_until
+            )
+
+            return
+
+        # --------------------------------------------------------
+        # MAX OPEN POSITIONS
+        # --------------------------------------------------------
+
+        open_count = len(
+            self.paper_engine.open_positions
         )
-        print("-" * 100)
 
-        # --------------------------------------------------------
-        # DAILY LIMIT CHECKS
-        # --------------------------------------------------------
+        if (
+            open_count
+            >= MAX_OPEN_POSITIONS
+        ):
 
-        if self.daily_pnl <= -DAILY_MAX_LOSS:
             print(
-                "Daily max loss reached. Skipping new trades."
+                "Maximum open positions reached:",
+                MAX_OPEN_POSITIONS
             )
-            return
 
-        if self.daily_pnl >= DAILY_PROFIT_TARGET:
-            print(
-                "Daily profit target reached. Skipping new trades."
-            )
             return
 
         # --------------------------------------------------------
-        # EXISTING POSITION CHECK
+        # EXISTING POSITION
         # --------------------------------------------------------
 
         if self.paper_engine.has_open_position(
@@ -215,6 +315,29 @@ class TradingBot:
             return
 
         # --------------------------------------------------------
+        # MARK SIGNAL AS PROCESSED
+        #
+        # Only after basic eligibility checks.
+        # --------------------------------------------------------
+
+        self.processed_signals.add(
+            key
+        )
+
+        print()
+        print("-" * 100)
+
+        print(
+            "PROCESSING SIGNAL :",
+            symbol,
+            signal.get(
+                "signal"
+            )
+        )
+
+        print("-" * 100)
+
+        # --------------------------------------------------------
         # RISK APPROVAL
         # --------------------------------------------------------
 
@@ -224,7 +347,9 @@ class TradingBot:
             )
         )
 
-        # Save approved and rejected signals.
+        # --------------------------------------------------------
+        # SAVE APPROVED / REJECTED SIGNAL
+        # --------------------------------------------------------
 
         self.log_signal(
             signal,
@@ -244,7 +369,7 @@ class TradingBot:
         if not approved:
 
             print(
-                "Risk Rejection   :",
+                "Risk Rejection    :",
                 risk_result.get(
                     "reasons",
                     []
@@ -254,16 +379,20 @@ class TradingBot:
             return
 
         # --------------------------------------------------------
-        # COMBINE SCANNER + RISK INFORMATION
+        # COMBINE SIGNAL + RISK
         # --------------------------------------------------------
 
-        approved_trade = dict(signal)
+        approved_trade = dict(
+            signal
+        )
 
         approved_trade.update(
             risk_result
         )
 
-        approved_trade["approved"] = True
+        approved_trade[
+            "approved"
+        ] = True
 
         # --------------------------------------------------------
         # OPEN PAPER POSITION
@@ -304,37 +433,58 @@ class TradingBot:
 
         print(
             "Trade ID          :",
-            position["trade_id"]
+            position[
+                "trade_id"
+            ]
         )
 
         print(
             "Symbol            :",
-            position["symbol"]
+            position[
+                "symbol"
+            ]
         )
 
         print(
             "Signal            :",
-            position["signal"]
+            position[
+                "signal"
+            ]
         )
 
         print(
             "Entry             :",
-            position["entry"]
+            position[
+                "entry"
+            ]
         )
 
         print(
             "Stop Loss         :",
-            position["stop_loss"]
+            position[
+                "stop_loss"
+            ]
         )
 
         print(
             "Target            :",
-            position["target"]
+            position[
+                "target"
+            ]
         )
 
         print(
             "Quantity          :",
-            position["quantity"]
+            position[
+                "quantity"
+            ]
+        )
+
+        print(
+            "Actual Risk       :",
+            position.get(
+                "actual_risk"
+            )
         )
 
     # ============================================================
@@ -345,6 +495,10 @@ class TradingBot:
 
         now = self.current_time()
 
+        # --------------------------------------------------------
+        # BEFORE 09:45
+        # --------------------------------------------------------
+
         if now < TRADING_START:
 
             print(
@@ -354,6 +508,10 @@ class TradingBot:
 
             return
 
+        # --------------------------------------------------------
+        # AFTER 13:30
+        # --------------------------------------------------------
+
         if now > LAST_ENTRY_TIME:
 
             print(
@@ -362,12 +520,58 @@ class TradingBot:
 
             return
 
+        # --------------------------------------------------------
+        # DAILY LIMIT
+        # --------------------------------------------------------
+
+        if self.daily_limit_reached():
+
+            return
+
+        # --------------------------------------------------------
+        # COOLDOWN
+        # --------------------------------------------------------
+
+        if self.cooldown_active():
+
+            print(
+                "Cooldown active until:",
+                self.cooldown_until
+            )
+
+            return
+
+        # --------------------------------------------------------
+        # MAX POSITIONS
+        # --------------------------------------------------------
+
+        if (
+            len(
+                self.paper_engine.open_positions
+            )
+            >= MAX_OPEN_POSITIONS
+        ):
+
+            print(
+                "Maximum open positions reached."
+            )
+
+            return
+
+        # --------------------------------------------------------
+        # SCANNER
+        # --------------------------------------------------------
+
         signals = self.scanner.scan()
 
         if signals is None:
+
             signals = []
 
-        if not isinstance(signals, list):
+        if not isinstance(
+            signals,
+            list
+        ):
 
             print(
                 "WARNING: Scanner returned "
@@ -378,13 +582,32 @@ class TradingBot:
 
         for signal in signals:
 
-            self.process_signal(signal)
+            if (
+                len(
+                    self.paper_engine
+                    .open_positions
+                )
+                >= MAX_OPEN_POSITIONS
+            ):
+
+                print(
+                    "Maximum open positions reached."
+                )
+
+                break
+
+            self.process_signal(
+                signal
+            )
 
     # ============================================================
     # GET LATEST 1-MINUTE CANDLE
     # ============================================================
 
-    def latest_1m_candle(self, symbol):
+    def latest_1m_candle(
+        self,
+        symbol
+    ):
 
         try:
 
@@ -402,10 +625,12 @@ class TradingBot:
 
             return None
 
-        if df is None or df.empty:
-            return None
+        if (
+            df is None
+            or df.empty
+        ):
 
-        # Use today's data if possible.
+            return None
 
         try:
 
@@ -417,8 +642,7 @@ class TradingBot:
 
             if (
                 today_df is not None
-                and
-                not today_df.empty
+                and not today_df.empty
             ):
 
                 df = today_df
@@ -427,26 +651,42 @@ class TradingBot:
             pass
 
         if df.empty:
+
             return None
 
-        row = df.iloc[-1]
+        # --------------------------------------------------------
+        # IMPORTANT
+        #
+        # Never use the currently forming candle.
+        #
+        # The latest row may still be forming.
+        # Therefore use the previous completed row.
+        # --------------------------------------------------------
+
+        if len(df) < 2:
+
+            return None
+
+        row = df.iloc[-2]
 
         try:
 
             candle = row.to_dict()
 
         except Exception:
-            return None
 
-        # PriceData normally has Datetime as a column.
-        # If not, use dataframe index.
+            return None
 
         if (
             "Datetime" not in candle
-            or candle.get("Datetime") is None
+            or candle.get(
+                "Datetime"
+            ) is None
         ):
 
-            candle["Datetime"] = row.name
+            candle[
+                "Datetime"
+            ] = row.name
 
         return candle
 
@@ -454,17 +694,22 @@ class TradingBot:
     # MONITOR ONE POSITION
     # ============================================================
 
-    def monitor_position(self, symbol):
+    def monitor_position(
+        self,
+        symbol
+    ):
 
-        candle = self.latest_1m_candle(
-            symbol
+        candle = (
+            self.latest_1m_candle(
+                symbol
+            )
         )
 
         if candle is None:
 
             print(
                 symbol,
-                ": no current 1-minute candle."
+                ": no completed 1-minute candle."
             )
 
             return
@@ -477,11 +722,16 @@ class TradingBot:
         )
 
         if closed_trade is None:
+
             return
 
         print()
         print("=" * 100)
-        print("PAPER TRADE CLOSED")
+
+        print(
+            "PAPER TRADE CLOSED"
+        )
+
         print("=" * 100)
 
         print(
@@ -519,9 +769,39 @@ class TradingBot:
             )
         )
 
-        self.daily_pnl += float(
-            closed_trade.get("pnl", 0)
+        pnl = float(
+            closed_trade.get(
+                "pnl",
+                0
+            )
         )
+
+        self.daily_pnl += pnl
+
+        # --------------------------------------------------------
+        # COOLDOWN ONLY AFTER STOP LOSS
+        # --------------------------------------------------------
+
+        exit_reason = str(
+            closed_trade.get(
+                "exit_reason",
+                ""
+            )
+        ).upper()
+
+        if exit_reason == "STOP_LOSS":
+
+            self.cooldown_until = (
+                datetime.now()
+                + timedelta(
+                    minutes=COOLDOWN_MINUTES
+                )
+            )
+
+            print(
+                "Cooldown Until   :",
+                self.cooldown_until
+            )
 
         # --------------------------------------------------------
         # SAVE CLOSED TRADE
@@ -556,10 +836,10 @@ class TradingBot:
         )
 
         if not symbols:
+
             return
 
         print()
-
         print(
             "Monitoring positions:",
             ", ".join(symbols)
@@ -570,6 +850,83 @@ class TradingBot:
             self.monitor_position(
                 symbol
             )
+
+    # ============================================================
+    # FORCE SQUARE OFF
+    # ============================================================
+
+    def force_square_off(self):
+
+        symbols = list(
+            self.paper_engine
+            .open_positions
+            .keys()
+        )
+
+        if not symbols:
+
+            return
+
+        print()
+        print("=" * 100)
+        print(
+            "MANDATORY 15:00 SQUARE-OFF"
+        )
+        print("=" * 100)
+
+        for symbol in symbols:
+
+            candle = (
+                self.latest_1m_candle(
+                    symbol
+                )
+            )
+
+            if candle is None:
+
+                print(
+                    symbol,
+                    ": unable to obtain "
+                    "completed 1-minute candle."
+                )
+
+                continue
+
+            closed_trade = (
+                self.paper_engine.process_candle(
+                    symbol,
+                    candle
+                )
+            )
+
+            if closed_trade is None:
+                continue
+
+            pnl = float(
+                closed_trade.get(
+                    "pnl",
+                    0
+                )
+            )
+
+            self.daily_pnl += pnl
+
+            self.journal.log_trade(
+                closed_trade
+            )
+
+            print(
+                symbol,
+                "SQUARE_OFF",
+                "Exit:",
+                closed_trade.get(
+                    "exit_price"
+                ),
+                "P&L:",
+                pnl
+            )
+
+        print("=" * 100)
 
     # ============================================================
     # STATUS
@@ -587,7 +944,9 @@ class TradingBot:
 
         print()
         print("-" * 100)
-        print("BOT STATUS")
+        print(
+            "BOT STATUS"
+        )
         print("-" * 100)
 
         print(
@@ -616,9 +975,27 @@ class TradingBot:
             ]
         )
 
-        print("Available Capital :", session["available_capital"])
-        print("Used Capital      :", session["used_capital"])
-        print("Daily P&L         :", round(self.daily_pnl, 2))
+        print(
+            "Available Capital :",
+            session[
+                "available_capital"
+            ]
+        )
+
+        print(
+            "Used Capital      :",
+            session[
+                "used_capital"
+            ]
+        )
+
+        print(
+            "Daily P&L          :",
+            round(
+                self.daily_pnl,
+                2
+            )
+        )
 
         print(
             "Journal Trades    :",
@@ -632,6 +1009,11 @@ class TradingBot:
             history[
                 "total_pnl"
             ]
+        )
+
+        print(
+            "Cooldown Until    :",
+            self.cooldown_until
         )
 
         print("-" * 100)
@@ -654,29 +1036,27 @@ class TradingBot:
 
         print("=" * 100)
 
-        # Always manage existing trades first.
-
-        self.monitor_open_positions()
-
         # --------------------------------------------------------
-        # 15:00 OR LATER
+        # 15:00 SQUARE-OFF
         # --------------------------------------------------------
 
         if now >= SQUARE_OFF_TIME:
 
-            print(
-                "Square-off time reached."
-            )
+            if not self.square_off_done:
 
-            # Run monitoring once more.
-            # PaperTradeEngine will square off using
-            # the latest 15:00-or-later candle.
+                self.force_square_off()
 
-            self.monitor_open_positions()
+                self.square_off_done = True
 
             self.display_status()
 
             return
+
+        # --------------------------------------------------------
+        # MANAGE EXISTING POSITIONS
+        # --------------------------------------------------------
+
+        self.monitor_open_positions()
 
         # --------------------------------------------------------
         # NEW ENTRIES
@@ -727,6 +1107,17 @@ class TradingBot:
         )
 
         print(
+            "Max Positions     :",
+            MAX_OPEN_POSITIONS
+        )
+
+        print(
+            "Cooldown           :",
+            COOLDOWN_MINUTES,
+            "minutes"
+        )
+
+        print(
             "Scan Interval     :",
             SCAN_INTERVAL_SECONDS,
             "seconds"
@@ -742,13 +1133,14 @@ class TradingBot:
 
                 now = self.current_time()
 
-                # Stop the program after square-off
-                # when no paper positions remain.
+                # ------------------------------------------------
+                # Stop after square-off once all positions closed.
+                # ------------------------------------------------
 
                 if (
                     now >= SQUARE_OFF_TIME
-                    and
-                    not self.paper_engine
+                    and not
+                    self.paper_engine
                     .open_positions
                 ):
 
@@ -789,7 +1181,11 @@ class TradingBot:
 
             print()
             print("=" * 100)
-            print("FINAL JOURNAL SUMMARY")
+
+            print(
+                "FINAL JOURNAL SUMMARY"
+            )
+
             print("=" * 100)
 
             print(

@@ -2,8 +2,8 @@
 NIFTY LARGEMIDCAP 250 SCANNER ENGINE
 ====================================
 
-Flow
-----
+FLOW
+
 250 Stocks
     ↓
 NIFTY Direction
@@ -20,25 +20,39 @@ Alignment
     ↓
 Trade Candidate
 
+
 BUY
 ---
+
 NIFTY    = BULLISH
 Industry = BULLISH
 Stock    = BULLISH
 
 Then:
+
 Valid 5-minute BUY pullback
-1-minute CLOSE above frozen high
+        ↓
+Completed 1-minute candle CLOSE
+above frozen high
+        ↓
+BUY
+
 
 SELL
 ----
+
 NIFTY    = BEARISH
 Industry = BEARISH
 Stock    = BEARISH
 
 Then:
+
 Valid 5-minute SELL pullback
-1-minute CLOSE below frozen low
+        ↓
+Completed 1-minute candle CLOSE
+below frozen low
+        ↓
+SELL
 """
 
 from data.stock_universe import StockUniverse
@@ -66,6 +80,39 @@ class ScannerEngine:
         self.setup_engine = SetupEngine()
 
         self.entry_engine = EntryEngine()
+
+    # ============================================================
+    # COMPLETED CANDLES ONLY
+    # ============================================================
+
+    def completed_candles(self, df):
+
+        """
+        Remove the newest candle.
+
+        The newest intraday candle can still be forming.
+
+        Therefore:
+
+            df.iloc[-1] = potentially live candle
+
+            df.iloc[-2] = latest completed candle
+
+        The strategy must never use the currently forming candle
+        for setup or breakout confirmation.
+        """
+
+        if df is None or df.empty:
+            return None
+
+        if len(df) < 2:
+            return None
+
+        return (
+            df.iloc[:-1]
+            .copy()
+            .reset_index(drop=True)
+        )
 
     # ============================================================
     # LOAD SYMBOLS
@@ -122,7 +169,9 @@ class ScannerEngine:
             stock_direction
         ).strip().upper()
 
+        # --------------------------------------------------------
         # BUY ALIGNMENT
+        # --------------------------------------------------------
 
         if (
             market_direction == "BULLISH"
@@ -134,7 +183,9 @@ class ScannerEngine:
 
             return "BULLISH"
 
+        # --------------------------------------------------------
         # SELL ALIGNMENT
+        # --------------------------------------------------------
 
         if (
             market_direction == "BEARISH"
@@ -174,9 +225,6 @@ class ScannerEngine:
 
         # --------------------------------------------------------
         # FIND STOCK INDUSTRY
-        #
-        # IndustryDirection already contains stock_results
-        # generated during analyze().
         # --------------------------------------------------------
 
         stock_results = (
@@ -256,13 +304,22 @@ class ScannerEngine:
             return None
 
         # --------------------------------------------------------
+        # IMPORTANT:
+        # Remove currently forming 5-minute candle.
+        # --------------------------------------------------------
+
+        df_5m = self.completed_candles(
+            df_5m
+        )
+
+        if (
+            df_5m is None
+            or df_5m.empty
+        ):
+            return None
+
+        # --------------------------------------------------------
         # FIND 5-MINUTE PULLBACK
-        #
-        # SetupEngine expects:
-        #
-        # BULLISH
-        # or
-        # BEARISH
         # --------------------------------------------------------
 
         setup = self.setup_engine.analyze(
@@ -281,9 +338,6 @@ class ScannerEngine:
 
         # --------------------------------------------------------
         # GET 1-MINUTE DATA
-        #
-        # We download 1-minute data only if a valid
-        # 5-minute setup exists.
         # --------------------------------------------------------
 
         df_1m = self.price_data.get_1m(
@@ -297,6 +351,21 @@ class ScannerEngine:
             return None
 
         df_1m = self.price_data.today_only(
+            df_1m
+        )
+
+        if (
+            df_1m is None
+            or df_1m.empty
+        ):
+            return None
+
+        # --------------------------------------------------------
+        # IMPORTANT:
+        # Remove currently forming 1-minute candle.
+        # --------------------------------------------------------
+
+        df_1m = self.completed_candles(
             df_1m
         )
 
@@ -467,10 +536,6 @@ class ScannerEngine:
 
         # --------------------------------------------------------
         # FIND ALIGNED STOCKS FIRST
-        #
-        # Important:
-        # Do NOT download 5m/1m data for all 250 again.
-        # First filter using the breadth results.
         # --------------------------------------------------------
 
         aligned = []
@@ -604,9 +669,9 @@ class ScannerEngine:
 
             try:
 
-                # ----------------------------------------------
+                # ------------------------------------------------
                 # GET 5-MINUTE DATA
-                # ----------------------------------------------
+                # ------------------------------------------------
 
                 df_5m = (
                     self.price_data.get_5m(
@@ -632,9 +697,23 @@ class ScannerEngine:
                 ):
                     continue
 
-                # ----------------------------------------------
+                # ------------------------------------------------
+                # REMOVE CURRENT FORMING 5m CANDLE
+                # ------------------------------------------------
+
+                df_5m = self.completed_candles(
+                    df_5m
+                )
+
+                if (
+                    df_5m is None
+                    or df_5m.empty
+                ):
+                    continue
+
+                # ------------------------------------------------
                 # SETUP
-                # ----------------------------------------------
+                # ------------------------------------------------
 
                 setup = (
                     self.setup_engine.analyze(
@@ -659,9 +738,9 @@ class ScannerEngine:
                     f"{setup['setup']} SETUP"
                 )
 
-                # ----------------------------------------------
+                # ------------------------------------------------
                 # ONLY NOW GET 1-MINUTE DATA
-                # ----------------------------------------------
+                # ------------------------------------------------
 
                 df_1m = (
                     self.price_data.get_1m(
@@ -687,9 +766,23 @@ class ScannerEngine:
                 ):
                     continue
 
-                # ----------------------------------------------
+                # ------------------------------------------------
+                # REMOVE CURRENT FORMING 1m CANDLE
+                # ------------------------------------------------
+
+                df_1m = self.completed_candles(
+                    df_1m
+                )
+
+                if (
+                    df_1m is None
+                    or df_1m.empty
+                ):
+                    continue
+
+                # ------------------------------------------------
                 # ENTRY
-                # ----------------------------------------------
+                # ------------------------------------------------
 
                 trade = (
                     self.entry_engine.find_entry(
@@ -707,9 +800,9 @@ class ScannerEngine:
 
                     continue
 
-                # ----------------------------------------------
+                # ------------------------------------------------
                 # COMPLETE SIGNAL
-                # ----------------------------------------------
+                # ------------------------------------------------
 
                 trade["symbol"] = symbol
 

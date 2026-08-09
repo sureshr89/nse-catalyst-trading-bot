@@ -2,7 +2,7 @@
 RISK ENGINE
 ===========
 
-Final safety gate between a scanner signal and a trade.
+Final safety gate between a scanner signal and a paper trade.
 
 Checks
 ------
@@ -10,13 +10,16 @@ Checks
 2. Entry must be valid
 3. Stop loss must be valid
 4. Target must be valid
-5. Quantity must be positive
+5. Quantity must be positive integer
 6. BUY stop loss must be below entry
 7. SELL stop loss must be above entry
-8. Risk per share must be positive
-9. Actual trade risk must not exceed MAX_RISK_PER_TRADE
-10. Position value must not exceed TOTAL_CAPITAL
-11. Same stock cannot exceed MAX_TRADES_PER_STOCK
+8. BUY target must be above entry
+9. SELL target must be below entry
+10. Risk per share must be positive
+11. Actual trade risk must be >= MIN_REQUIRED_RISK
+12. Actual trade risk must not exceed MAX_RISK_PER_TRADE
+13. Position value must not exceed TOTAL_CAPITAL
+14. Same stock cannot exceed MAX_TRADES_PER_STOCK
 
 This engine does NOT place orders.
 """
@@ -24,6 +27,7 @@ This engine does NOT place orders.
 from config.settings import (
     TOTAL_CAPITAL,
     MAX_RISK_PER_TRADE,
+    MIN_REQUIRED_RISK,
     RISK_PERCENT,
     MAX_TRADES_PER_STOCK,
 )
@@ -41,6 +45,10 @@ class RiskEngine:
             MAX_RISK_PER_TRADE
         )
 
+        self.min_required_risk = float(
+            MIN_REQUIRED_RISK
+        )
+
         self.risk_percent = float(
             RISK_PERCENT
         )
@@ -49,14 +57,9 @@ class RiskEngine:
             MAX_TRADES_PER_STOCK
         )
 
-        # Keeps track of trades accepted during
-        # the current program session.
-        #
-        # Example:
-        # {
-        #     "RELIANCE": 1,
-        #     "INFY": 1
-        # }
+        # --------------------------------------------------------
+        # Trades accepted during this program session.
+        # --------------------------------------------------------
 
         self.trade_counts = {}
 
@@ -64,14 +67,14 @@ class RiskEngine:
     # SAFE NUMBER CONVERSION
     # ============================================================
 
-    def _number(
-        self,
-        value
-    ):
+    def _number(self, value):
 
         try:
 
             number = float(value)
+
+            if not number == number:
+                return None
 
             return number
 
@@ -86,10 +89,7 @@ class RiskEngine:
     # TRADE COUNT
     # ============================================================
 
-    def get_trade_count(
-        self,
-        symbol
-    ):
+    def get_trade_count(self, symbol):
 
         symbol = (
             str(symbol)
@@ -106,29 +106,22 @@ class RiskEngine:
     # CAN STOCK TRADE?
     # ============================================================
 
-    def stock_trade_allowed(
-        self,
-        symbol
-    ):
+    def stock_trade_allowed(self, symbol):
 
         count = self.get_trade_count(
             symbol
         )
 
         return (
-            count
-            <
+            count <
             self.max_trades_per_stock
         )
 
     # ============================================================
-    # REGISTER APPROVED/OPENED TRADE
+    # REGISTER APPROVED TRADE
     # ============================================================
 
-    def register_trade(
-        self,
-        symbol
-    ):
+    def register_trade(self, symbol):
 
         symbol = (
             str(symbol)
@@ -157,7 +150,7 @@ class RiskEngine:
         self.trade_counts = {}
 
     # ============================================================
-    # CALCULATE EXPECTED VALUES
+    # CALCULATE RISK
     # ============================================================
 
     def calculate_risk(
@@ -191,6 +184,10 @@ class RiskEngine:
             or stop_loss is None
             or quantity is None
         ):
+
+            return None
+
+        if quantity <= 0:
 
             return None
 
@@ -390,6 +387,17 @@ class RiskEngine:
                 "Invalid quantity"
             )
 
+        # Quantity must be a whole number.
+        if (
+            quantity is not None
+            and quantity > 0
+            and quantity != int(quantity)
+        ):
+
+            reasons.append(
+                "Quantity must be a whole number"
+            )
+
         # --------------------------------------------------------
         # STOP LOSS / TARGET DIRECTION
         # --------------------------------------------------------
@@ -456,8 +464,7 @@ class RiskEngine:
         # --------------------------------------------------------
         # RECALCULATE RISK
         #
-        # Never blindly trust risk values supplied
-        # by another module.
+        # Never trust risk values supplied by another module.
         # --------------------------------------------------------
 
         risk = self.calculate_risk(
@@ -493,6 +500,23 @@ class RiskEngine:
         position_value = risk[
             "position_value"
         ]
+
+        # --------------------------------------------------------
+        # MINIMUM RISK
+        # --------------------------------------------------------
+
+        if (
+            actual_risk
+            <
+            self.min_required_risk
+        ):
+
+            reasons.append(
+
+                f"Actual risk Rs {actual_risk:.2f} "
+                f"is below minimum required "
+                f"Rs {self.min_required_risk:.2f}"
+            )
 
         # --------------------------------------------------------
         # MAXIMUM RISK
@@ -596,6 +620,9 @@ class RiskEngine:
             "position_value":
                 position_value,
 
+            "min_required_risk":
+                self.min_required_risk,
+
             "max_risk":
                 self.max_risk_per_trade,
 
@@ -610,10 +637,7 @@ class RiskEngine:
     # APPROVE AND REGISTER
     # ============================================================
 
-    def approve_trade(
-        self,
-        trade
-    ):
+    def approve_trade(self, trade):
 
         result = self.validate(
             trade,
@@ -648,11 +672,7 @@ class RiskEngine:
 if __name__ == "__main__":
 
     print("=" * 90)
-
-    print(
-        "RISK ENGINE"
-    )
-
+    print("RISK ENGINE")
     print("=" * 90)
 
     engine = RiskEngine()
@@ -660,6 +680,11 @@ if __name__ == "__main__":
     print(
         "Total Capital        :",
         f"Rs {engine.total_capital:.2f}"
+    )
+
+    print(
+        "Minimum Risk / Trade :",
+        f"Rs {engine.min_required_risk:.2f}"
     )
 
     print(
@@ -703,11 +728,9 @@ if __name__ == "__main__":
     }
 
     print()
-
     print(
         "TEST 1 - VALID BUY"
     )
-
     print("-" * 90)
 
     result = engine.approve_trade(
@@ -721,11 +744,9 @@ if __name__ == "__main__":
     # ------------------------------------------------------------
 
     print()
-
     print(
         "TEST 2 - SECOND RELIANCE TRADE"
     )
-
     print("-" * 90)
 
     result = engine.approve_trade(
@@ -735,13 +756,50 @@ if __name__ == "__main__":
     print(result)
 
     # ------------------------------------------------------------
-    # TEST 3 - EXCESS RISK
+    # TEST 3 - BELOW MINIMUM RISK
+    # ------------------------------------------------------------
+
+    low_risk_trade = {
+
+        "symbol":
+            "INFY",
+
+        "signal":
+            "BUY",
+
+        "entry":
+            100.00,
+
+        "stop_loss":
+            99.00,
+
+        "target":
+            101.00,
+
+        "quantity":
+            500
+    }
+
+    print()
+    print(
+        "TEST 3 - BELOW MINIMUM RISK"
+    )
+    print("-" * 90)
+
+    result = engine.approve_trade(
+        low_risk_trade
+    )
+
+    print(result)
+
+    # ------------------------------------------------------------
+    # TEST 4 - EXCESS RISK
     # ------------------------------------------------------------
 
     high_risk_trade = {
 
         "symbol":
-            "INFY",
+            "HDFCBANK",
 
         "signal":
             "BUY",
@@ -760,11 +818,9 @@ if __name__ == "__main__":
     }
 
     print()
-
     print(
-        "TEST 3 - EXCESS RISK"
+        "TEST 4 - EXCESS RISK"
     )
-
     print("-" * 90)
 
     result = engine.approve_trade(
@@ -774,7 +830,7 @@ if __name__ == "__main__":
     print(result)
 
     # ------------------------------------------------------------
-    # TEST 4 - VALID SELL
+    # TEST 5 - VALID SELL
     # ------------------------------------------------------------
 
     sell_trade = {
@@ -799,11 +855,9 @@ if __name__ == "__main__":
     }
 
     print()
-
     print(
-        "TEST 4 - VALID SELL"
+        "TEST 5 - VALID SELL"
     )
-
     print("-" * 90)
 
     result = engine.approve_trade(
@@ -813,11 +867,8 @@ if __name__ == "__main__":
     print(result)
 
     print()
-
     print("=" * 90)
-
     print(
         "RISK ENGINE TEST COMPLETE"
     )
-
     print("=" * 90)
