@@ -26,6 +26,7 @@ STATUS_FILE = Path("outputs/bot_status.json")
 
 _lock = threading.Lock()
 _thread = None
+_finished = False
 _state = {
     "status": "STOPPED",
     "message": "Bot has not been started.",
@@ -116,8 +117,6 @@ def _patch_bot_for_ist(bot):
     bot.current_time = MethodType(_ist_current_time, bot)
     bot.cooldown_active = MethodType(_ist_cooldown_active, bot)
 
-    # main.py creates cooldown_until using datetime.now(). Correct it to IST
-    # after a stop-loss closes a position.
     original_monitor = bot.monitor_position
 
     def monitor_position_ist(self, symbol):
@@ -139,7 +138,7 @@ def _patch_bot_for_ist(bot):
 
 
 def _run_bot():
-    global _state
+    global _state, _finished
 
     bot = None
 
@@ -156,8 +155,8 @@ def _run_bot():
         )
 
         # Record a scanner run only when ScannerEngine.scan() is actually
-        # called. This prevents the dashboard from falsely showing a scanner
-        # timestamp every 5 seconds when the bot is outside the entry window.
+        # called. This prevents false scanner timestamps outside the entry
+        # window.
         original_scan = bot.scanner.scan
 
         def monitored_scan():
@@ -197,9 +196,12 @@ def _run_bot():
         _write_status(
             bot,
             status="STOPPED",
-            message="Trading day complete or bot stopped.",
+            message="Trading day complete. Bot will not restart until the Streamlit app is restarted.",
             scanner_status="IDLE",
         )
+
+        with _lock:
+            _finished = True
 
     except Exception as error:
         _write_status(
@@ -210,22 +212,31 @@ def _run_bot():
             error=f"{type(error).__name__}: {error}",
         )
 
+        with _lock:
+            _finished = True
+
 
 def start_bot():
-    """Start the paper bot once and return current runtime status."""
+    """Start the paper bot once for the current Streamlit process."""
 
     global _thread
 
     with _lock:
+        # Already running.
         if _thread is not None and _thread.is_alive():
-            pass
-        else:
-            _thread = threading.Thread(
-                target=_run_bot,
-                name="paper-trading-bot",
-                daemon=True,
-            )
-            _thread.start()
+            return get_status()
+
+        # The trading day has already completed. Do not restart the bot on
+        # every Streamlit rerun after 15:00.
+        if _finished:
+            return get_status()
+
+        _thread = threading.Thread(
+            target=_run_bot,
+            name="paper-trading-bot",
+            daemon=True,
+        )
+        _thread.start()
 
     return get_status()
 
