@@ -2,23 +2,28 @@
 STREAMLIT PAPER BOT RUNNER
 ==========================
 
-Starts exactly one paper-trading TradingBot in a background thread for the
-Streamlit process. The worker never calls Streamlit APIs. It writes a small
-runtime status file so the dashboard can show the bot's real state.
+Long-running PAPER trading worker for Streamlit.
 
-This is PAPER TRADING ONLY. LIVE_TRADING must remain False.
+The worker waits outside the Indian market session, starts one TradingBot
+for each trading day, and waits again after the 15:00 square-off. It never
+calls Streamlit APIs directly.
 """
 
 import json
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MethodType
 from zoneinfo import ZoneInfo
 
 from main import TradingBot
-from config.settings import COOLDOWN_MINUTES
+from config.settings import (
+    COOLDOWN_MINUTES,
+    TRADING_START,
+    SQUARE_OFF_TIME,
+)
 
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
@@ -26,10 +31,9 @@ STATUS_FILE = Path("outputs/bot_status.json")
 
 _lock = threading.Lock()
 _thread = None
-_finished = False
 _state = {
-    "status": "STOPPED",
-    "message": "Bot has not been started.",
+    "status": "WAITING",
+    "message": "Waiting for the Indian market session.",
     "last_cycle": None,
     "last_scan": None,
     "scanner_status": "IDLE",
@@ -84,8 +88,10 @@ def _write_status(bot=None, **updates):
 
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
         temporary = STATUS_FILE.with_suffix(".tmp")
+
         with open(temporary, "w", encoding="utf-8") as file:
             json.dump(payload, file, indent=2, default=str)
+
         os.replace(temporary, STATUS_FILE)
 
 
@@ -98,6 +104,7 @@ def _ist_cooldown_active(self):
         return False
 
     now = _now().replace(tzinfo=None)
+
     if now >= self.cooldown_until:
         self.cooldown_until = None
         return False
@@ -126,106 +133,143 @@ def _patch_bot_for_ist(bot):
     bot.monitor_position = MethodType(monitor_position_ist, bot)
 
 
-def _run_bot():
-    global _state, _finished
-    bot = None
+def _run_one_trading_day():
+    """Run one TradingBot instance for the current trading day."""
 
-    try:
-        bot = TradingBot()
-        _patch_bot_for_ist(bot)
+    bot = TradingBot()
+    _patch_bot_for_ist(bot)
 
-        # Clear any old scanner timestamp from a previous Streamlit process.
+    # Clear stale timestamps from a previous day/session.
+    _write_status(
+        bot,
+        status="RUNNING",
+        message="Paper trading bot is running.",
+        last_cycle=None,
+        last_scan=None,
+        scanner_status="IDLE",
+        error=None,
+    )
+
+    original_scan = bot.scanner.scan
+
+    def monitored_scan():
+        _write_status(
+            bot,
+            scanner_status="SCANNING",
+            last_scan=_iso_now(),
+            error=None,
+        )
+        try:
+            return original_scan()
+        finally:
+            _write_status(bot, scanner_status="IDLE")
+
+    bot.scanner.scan = monitored_scan
+
+    original_cycle = bot.run_cycle
+
+    def monitored_cycle():
         _write_status(
             bot,
             status="RUNNING",
             message="Paper trading bot is running.",
-            last_cycle=None,
-            last_scan=None,
-            scanner_status="IDLE",
+            last_cycle=_iso_now(),
             error=None,
         )
+        return original_cycle()
 
-        original_scan = bot.scanner.scan
+    bot.run_cycle = monitored_cycle
+    bot.run()
 
-        def monitored_scan():
+    _write_status(
+        bot,
+        status="WAITING",
+        message="Trading day complete. Waiting for the next Indian market session.",
+        scanner_status="IDLE",
+    )
+
+
+def _run_bot():
+    while True:
+        try:
+            now = _now()
+
+            # Saturday/Sunday: no market session.
+            if now.weekday() >= 5:
+                _write_status(
+                    status="WAITING",
+                    message="Weekend. Waiting for the next Indian market session.",
+                    scanner_status="IDLE",
+                    last_scan=None,
+                )
+                time.sleep(30)
+                continue
+
+            current = now.strftime("%H:%M")
+
+            # Before the configured trading start, keep the worker alive so
+            # it can automatically begin scanning when the session opens.
+            if current < TRADING_START:
+                _write_status(
+                    status="WAITING",
+                    message=f"Waiting for trading start at {TRADING_START} IST.",
+                    scanner_status="IDLE",
+                    last_scan=None,
+                )
+                time.sleep(15)
+                continue
+
+            # After square-off, wait for the next day instead of repeatedly
+            # restarting TradingBot on every Streamlit refresh.
+            if current >= SQUARE_OFF_TIME:
+                _write_status(
+                    status="WAITING",
+                    message="Market session finished. Waiting for the next Indian market session.",
+                    scanner_status="IDLE",
+                    last_scan=None,
+                )
+                time.sleep(30)
+                continue
+
+            _run_one_trading_day()
+
+            # Avoid immediately creating another bot after a normal 15:00
+            # completion.
+            time.sleep(30)
+
+        except Exception as error:
             _write_status(
-                bot,
-                scanner_status="SCANNING",
-                last_scan=_iso_now(),
-                error=None,
+                status="ERROR",
+                message="Trading bot stopped because of an error.",
+                scanner_status="ERROR",
+                error=f"{type(error).__name__}: {error}",
             )
-            try:
-                return original_scan()
-            finally:
-                _write_status(bot, scanner_status="IDLE")
-
-        bot.scanner.scan = monitored_scan
-
-        original_cycle = bot.run_cycle
-
-        def monitored_cycle():
-            _write_status(
-                bot,
-                status="RUNNING",
-                message="Paper trading bot is running.",
-                last_cycle=_iso_now(),
-                error=None,
-            )
-            return original_cycle()
-
-        bot.run_cycle = monitored_cycle
-        bot.run()
-
-        _write_status(
-            bot,
-            status="STOPPED",
-            message="Trading day complete. Bot will not restart until the app process restarts.",
-            scanner_status="IDLE",
-        )
-
-        with _lock:
-            _finished = True
-
-    except Exception as error:
-        _write_status(
-            bot,
-            status="ERROR",
-            message="Trading bot stopped because of an error.",
-            scanner_status="ERROR",
-            error=f"{type(error).__name__}: {error}",
-        )
-        with _lock:
-            _finished = True
+            time.sleep(30)
 
 
 def start_bot():
-    """Start the paper bot once for the current Streamlit process."""
+    """Start exactly one long-running paper bot worker."""
     global _thread
 
     with _lock:
-        if _thread is not None and _thread.is_alive():
-            return get_status()
-
-        if _finished:
-            return get_status()
-
-        _thread = threading.Thread(
-            target=_run_bot,
-            name="paper-trading-bot",
-            daemon=True,
-        )
-        _thread.start()
+        if _thread is None or not _thread.is_alive():
+            _thread = threading.Thread(
+                target=_run_bot,
+                name="paper-trading-bot",
+                daemon=True,
+            )
+            _thread.start()
 
     return get_status()
 
 
 def get_status():
-    """Read the latest runtime status without touching the bot thread."""
+    """Read the latest runtime status."""
     try:
         with open(STATUS_FILE, "r", encoding="utf-8") as file:
             disk_state = json.load(file)
     except Exception:
-        disk_state = dict(_state)
+        disk_state = {}
 
     with _lock:
         current = dict(_state)
@@ -233,6 +277,9 @@ def get_status():
     current.update(disk_state)
 
     if _thread is not None and _thread.is_alive():
-        current["status"] = "RUNNING"
+        # Preserve WAITING/ERROR state from the worker; RUNNING means an
+        # actual TradingBot session is active.
+        if current.get("status") not in {"ERROR", "WAITING"}:
+            current["status"] = "RUNNING"
 
     return current
