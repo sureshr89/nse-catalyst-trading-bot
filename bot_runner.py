@@ -203,14 +203,14 @@ def start_bot():
 
     with _lock:
         if _thread is not None and _thread.is_alive():
-            return get_status()
-
-        _thread = threading.Thread(
-            target=_run_bot,
-            name="paper-trading-bot",
-            daemon=True,
-        )
-        _thread.start()
+            pass
+        else:
+            _thread = threading.Thread(
+                target=_run_bot,
+                name="paper-trading-bot",
+                daemon=True,
+            )
+            _thread.start()
 
     return get_status()
 
