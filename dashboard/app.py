@@ -8,7 +8,6 @@ refreshes every 5 seconds, and displays the bot's real runtime status.
 
 from datetime import datetime
 from pathlib import Path
-import json
 import sys
 from zoneinfo import ZoneInfo
 
@@ -73,15 +72,11 @@ st_autorefresh(
 # ----------------------------------------------------------
 
 try:
-    bot_status = start_bot()
+    start_bot()
 except Exception as error:
-    bot_status = {
-        "status": "ERROR",
-        "message": "Unable to start paper bot.",
-        "error": f"{type(error).__name__}: {error}",
-    }
+    # The runner also records the error in bot_status.json.
+    pass
 
-# Read latest status after start.
 bot_status = get_status()
 
 # ----------------------------------------------------------
@@ -141,10 +136,10 @@ if error_text:
 with st.expander("Bot / Strategy Status", expanded=True):
     a, b, c, d = st.columns(4)
 
-    a.write("**Paper Trading:**", PAPER_TRADING)
-    b.write("**Live Trading:**", LIVE_TRADING)
-    c.write("**Scanner:**", bot_status.get("scanner_status", "UNKNOWN"))
-    d.write("**Scan Interval:**", f"{SCAN_INTERVAL_SECONDS}s")
+    a.write(f"**Paper Trading:** {PAPER_TRADING}")
+    b.write(f"**Live Trading:** {LIVE_TRADING}")
+    c.write(f"**Scanner:** {bot_status.get('scanner_status', 'UNKNOWN')}")
+    d.write(f"**Scan Interval:** {SCAN_INTERVAL_SECONDS}s")
 
     st.write(
         f"**Entry window:** {TRADING_START} → {LAST_ENTRY_TIME} IST  |  "
@@ -308,16 +303,16 @@ with tab5:
 
 st.sidebar.title("Trading Summary")
 
-st.sidebar.write("**Bot:**", status)
-st.sidebar.write("**India Time:**", now.strftime("%H:%M:%S IST"))
-st.sidebar.write("**Last Cycle:**", bot_status.get("last_cycle") or "Not yet")
-st.sidebar.write("**Last Scanner:**", bot_status.get("last_scan") or "Not yet")
-st.sidebar.write("**Scanner:**", bot_status.get("scanner_status", "UNKNOWN"))
-st.sidebar.write("**Total Trades:**", metrics["total_trades"])
-st.sidebar.write("**Winning Trades:**", metrics["winning_trades"])
-st.sidebar.write("**Losing Trades:**", metrics["losing_trades"])
-st.sidebar.write("**Open Positions:**", metrics["open_positions"])
-st.sidebar.write("**Profit Factor:**", metrics["profit_factor"])
-st.sidebar.write("**Max Drawdown:**", format_money(metrics["max_drawdown"]))
-st.sidebar.write("**Daily P&L:**", format_money(bot_status.get("daily_pnl", 0.0)))
-st.sidebar.write("**Dashboard Refresh:**", now.strftime("%H:%M:%S IST"))
+st.sidebar.write(f"**Bot:** {status}")
+st.sidebar.write(f"**India Time:** {now.strftime('%H:%M:%S IST')}")
+st.sidebar.write(f"**Last Cycle:** {bot_status.get('last_cycle') or 'Not yet'}")
+st.sidebar.write(f"**Last Scanner:** {bot_status.get('last_scan') or 'Not yet'}")
+st.sidebar.write(f"**Scanner:** {bot_status.get('scanner_status', 'UNKNOWN')}")
+st.sidebar.write(f"**Total Trades:** {metrics['total_trades']}")
+st.sidebar.write(f"**Winning Trades:** {metrics['winning_trades']}")
+st.sidebar.write(f"**Losing Trades:** {metrics['losing_trades']}")
+st.sidebar.write(f"**Open Positions:** {metrics['open_positions']}")
+st.sidebar.write(f"**Profit Factor:** {metrics['profit_factor']}")
+st.sidebar.write(f"**Max Drawdown:** {format_money(metrics['max_drawdown'])}")
+st.sidebar.write(f"**Daily P&L:** {format_money(bot_status.get('daily_pnl', 0.0))}")
+st.sidebar.write(f"**Dashboard Refresh:** {now.strftime('%H:%M:%S IST')}")
