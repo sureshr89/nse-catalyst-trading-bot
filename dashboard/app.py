@@ -1,10 +1,16 @@
 """
-Trading Dashboard
+NSE Catalyst Trading Bot Dashboard
+==================================
+
+The dashboard starts exactly one PAPER TradingBot through bot_runner.py,
+refreshes every 5 seconds, and displays the bot's real runtime status.
 """
 
 from datetime import datetime
 from pathlib import Path
+import json
 import sys
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -13,7 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-# LOCAL IMPORTS (No "dashboard.")
+from bot_runner import start_bot, get_status
+
 from dashboard_utils import (
     load_csv,
     format_money,
@@ -36,29 +43,117 @@ from config.settings import (
     MARKET_OPEN,
     MARKET_CLOSE,
     TOTAL_CAPITAL,
+    PAPER_TRADING,
+    LIVE_TRADING,
+    TRADING_START,
+    LAST_ENTRY_TIME,
+    SQUARE_OFF_TIME,
+    SCAN_INTERVAL_SECONDS,
 )
 
-# ----------------------------------------------------------
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 st.set_page_config(
     page_title="NSE Catalyst Trading Bot",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
 )
 
-# 1. Auto Refresh (Every 5 seconds)
+# ----------------------------------------------------------
+# REFRESH DASHBOARD EVERY 5 SECONDS
+# ----------------------------------------------------------
+
 st_autorefresh(
     interval=5000,
-    key="dashboard_refresh"
+    key="dashboard_refresh",
 )
+
+# ----------------------------------------------------------
+# START PAPER BOT ONCE
+# ----------------------------------------------------------
+
+try:
+    bot_status = start_bot()
+except Exception as error:
+    bot_status = {
+        "status": "ERROR",
+        "message": "Unable to start paper bot.",
+        "error": f"{type(error).__name__}: {error}",
+    }
+
+# Read latest status after start.
+bot_status = get_status()
+
+# ----------------------------------------------------------
+# INDIA TIME
+# ----------------------------------------------------------
+
+now = datetime.now(INDIA_TZ)
+current_time = now.time()
+market_open_time = datetime.strptime(
+    MARKET_OPEN, "%H:%M"
+).time()
+market_close_time = datetime.strptime(
+    MARKET_CLOSE, "%H:%M"
+).time()
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
 
-# 2. Detailed Market Status Card based on current time and weekday
-now = datetime.now()
-current_time = now.time()
-market_open_time = datetime.strptime(MARKET_OPEN, "%H:%M").time()
-market_close_time = datetime.strptime(MARKET_CLOSE, "%H:%M").time()
+# ----------------------------------------------------------
+# TOP STATUS
+# ----------------------------------------------------------
+
+status = bot_status.get("status", "UNKNOWN")
+error_text = bot_status.get("error")
+
+if status == "RUNNING":
+    st.success("🟢 PAPER BOT RUNNING")
+elif status == "ERROR":
+    st.error("🔴 BOT ERROR")
+else:
+    st.warning("🟡 BOT STOPPED")
+
+s1, s2, s3, s4 = st.columns(4)
+
+s1.metric(
+    "India Time",
+    now.strftime("%H:%M:%S"),
+)
+
+s2.metric(
+    "Bot Status",
+    status,
+)
+
+s3.metric(
+    "Last Bot Cycle",
+    str(bot_status.get("last_cycle") or "Not yet"),
+)
+
+s4.metric(
+    "Last Scanner Run",
+    str(bot_status.get("last_scan") or "Not yet"),
+)
+
+if error_text:
+    st.error(f"Bot error: {error_text}")
+
+with st.expander("Bot / Strategy Status", expanded=True):
+    a, b, c, d = st.columns(4)
+
+    a.write("**Paper Trading:**", PAPER_TRADING)
+    b.write("**Live Trading:**", LIVE_TRADING)
+    c.write("**Scanner:**", bot_status.get("scanner_status", "UNKNOWN"))
+    d.write("**Scan Interval:**", f"{SCAN_INTERVAL_SECONDS}s")
+
+    st.write(
+        f"**Entry window:** {TRADING_START} → {LAST_ENTRY_TIME} IST  |  "
+        f"**Square-off:** {SQUARE_OFF_TIME} IST"
+    )
+
+# ----------------------------------------------------------
+# MARKET STATUS
+# ----------------------------------------------------------
 
 if now.weekday() >= 5:
     st.warning("🟡 Weekend - Market Closed")
@@ -67,10 +162,10 @@ elif current_time < market_open_time:
 elif current_time > market_close_time:
     st.error("🔴 Market Closed")
 else:
-    st.success("🟢 Paper Trading Running")
+    st.success("🟢 Indian market session")
 
 # ----------------------------------------------------------
-# Load trades safely with a friendly message if missing
+# LOAD TRADES
 # ----------------------------------------------------------
 
 try:
@@ -79,81 +174,74 @@ except Exception:
     trades = None
 
 if trades is None or trades.empty:
-    st.info("No trades available yet.")
+    if status == "RUNNING":
+        st.info("No completed trades yet. The bot is running and waiting for valid setups.")
+    else:
+        st.info("No trades available yet.")
+
     metrics = {
         "total_trades": 0,
         "win_rate": 0.0,
         "total_pnl": 0.0,
         "profit_factor": 0.0,
-        "available_capital": TOTAL_CAPITAL,
-        "used_capital": 0.0,
-        "current_equity": TOTAL_CAPITAL,
+        "available_capital": bot_status.get("available_capital", TOTAL_CAPITAL),
+        "used_capital": bot_status.get("used_capital", 0.0),
+        "current_equity": bot_status.get("available_capital", TOTAL_CAPITAL),
         "winning_trades": 0,
         "losing_trades": 0,
-        "open_positions": 0,
+        "open_positions": bot_status.get("open_positions", 0),
         "max_drawdown": 0.0,
     }
 else:
     metrics = calculate_metrics(trades)
 
+# Runtime values override stale dashboard values for capital/positions.
+if status == "RUNNING":
+    metrics["open_positions"] = bot_status.get(
+        "open_positions",
+        metrics.get("open_positions", 0),
+    )
+    metrics["available_capital"] = bot_status.get(
+        "available_capital",
+        metrics.get("available_capital", TOTAL_CAPITAL),
+    )
+    metrics["used_capital"] = bot_status.get(
+        "used_capital",
+        metrics.get("used_capital", 0.0),
+    )
+
+# ----------------------------------------------------------
+# MAIN METRICS
 # ----------------------------------------------------------
 
 c1, c2, c3, c4 = st.columns(4)
 
-c1.metric(
-    "Total Trades",
-    metrics["total_trades"]
-)
-
-c2.metric(
-    "Win Rate",
-    format_percent(metrics["win_rate"])
-)
-
-c3.metric(
-    "Total P&L",
-    format_money(metrics["total_pnl"])
-)
-
-c4.metric(
-    "Profit Factor",
-    metrics["profit_factor"]
-)
-
-# ----------------------------------------------------------
+c1.metric("Total Trades", metrics["total_trades"])
+c2.metric("Win Rate", format_percent(metrics["win_rate"]))
+c3.metric("Total P&L", format_money(metrics["total_pnl"]))
+c4.metric("Profit Factor", metrics["profit_factor"])
 
 c1, c2, c3 = st.columns(3)
 
-c1.metric(
-    "Available Capital",
-    format_money(metrics["available_capital"])
-)
-
-c2.metric(
-    "Used Capital",
-    format_money(metrics["used_capital"])
-)
-
-c3.metric(
-    "Current Equity",
-    format_money(metrics["current_equity"])
-)
+c1.metric("Available Capital", format_money(metrics["available_capital"]))
+c2.metric("Used Capital", format_money(metrics["used_capital"]))
+c3.metric("Current Equity", format_money(metrics["current_equity"]))
 
 # ----------------------------------------------------------
+# TABS
+# ----------------------------------------------------------
 
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "Trades",
+        "Signals",
         "Charts",
         "Capital",
         "Performance",
     ]
 )
 
-# ----------------------------------------------------------
-
 with tab1:
-
     st.subheader("Latest Trades")
 
     if trades is not None and not trades.empty:
@@ -162,105 +250,74 @@ with tab1:
             use_container_width=True,
         )
     else:
-        st.info("No trades to display.")
-
-# ----------------------------------------------------------
+        st.info("No completed trades to display.")
 
 with tab2:
+    st.subheader("Latest Scanner Signals")
 
+    try:
+        signals = load_csv("outputs/signals.csv")
+    except Exception:
+        signals = None
+
+    if signals is not None and not signals.empty:
+        st.dataframe(
+            signals.tail(30).iloc[::-1],
+            use_container_width=True,
+        )
+    else:
+        st.info("No scanner signals recorded yet.")
+
+with tab3:
     if trades is not None and not trades.empty:
         fig = equity_curve(trades)
         if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            st.plotly_chart(fig, use_container_width=True)
 
         fig = pnl_chart(trades)
         if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No chart data available yet.")
 
-# ----------------------------------------------------------
-
-with tab3:
-
+with tab4:
     fig = capital_chart(metrics)
 
     if fig is not None:
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# ----------------------------------------------------------
-
-with tab4:
-
+with tab5:
     if trades is not None and not trades.empty:
         fig = win_loss_chart(trades)
         if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            st.plotly_chart(fig, use_container_width=True)
 
         fig = industry_chart(trades)
         if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            st.plotly_chart(fig, use_container_width=True)
 
         fig = monthly_pnl_chart(trades)
         if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No performance metrics available yet.")
 
 # ----------------------------------------------------------
+# SIDEBAR
+# ----------------------------------------------------------
 
 st.sidebar.title("Trading Summary")
 
-st.sidebar.write(
-    "Total Trades:",
-    metrics["total_trades"]
-)
-
-st.sidebar.write(
-    "Winning Trades:",
-    metrics["winning_trades"]
-)
-
-st.sidebar.write(
-    "Losing Trades:",
-    metrics["losing_trades"]
-)
-
-st.sidebar.write(
-    "Open Positions:",
-    metrics["open_positions"]
-)
-
-st.sidebar.write(
-    "Profit Factor:",
-    metrics["profit_factor"]
-)
-
-st.sidebar.write(
-    "Max Drawdown:",
-    format_money(metrics["max_drawdown"])
-)
-
-# 3. Last Scan Time in Sidebar
-st.sidebar.write(
-    "Last Refresh:",
-    datetime.now().strftime("%H:%M:%S")
-)
+st.sidebar.write("**Bot:**", status)
+st.sidebar.write("**India Time:**", now.strftime("%H:%M:%S IST"))
+st.sidebar.write("**Last Cycle:**", bot_status.get("last_cycle") or "Not yet")
+st.sidebar.write("**Last Scanner:**", bot_status.get("last_scan") or "Not yet")
+st.sidebar.write("**Scanner:**", bot_status.get("scanner_status", "UNKNOWN"))
+st.sidebar.write("**Total Trades:**", metrics["total_trades"])
+st.sidebar.write("**Winning Trades:**", metrics["winning_trades"])
+st.sidebar.write("**Losing Trades:**", metrics["losing_trades"])
+st.sidebar.write("**Open Positions:**", metrics["open_positions"])
+st.sidebar.write("**Profit Factor:**", metrics["profit_factor"])
+st.sidebar.write("**Max Drawdown:**", format_money(metrics["max_drawdown"]))
+st.sidebar.write("**Daily P&L:**", format_money(bot_status.get("daily_pnl", 0.0)))
+st.sidebar.write("**Dashboard Refresh:**", now.strftime("%H:%M:%S IST"))
