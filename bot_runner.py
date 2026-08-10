@@ -4,7 +4,7 @@ STREAMLIT PAPER BOT RUNNER
 
 Starts exactly one paper-trading TradingBot in a background thread for the
 Streamlit process. The worker never calls Streamlit APIs. It writes a small
-runtime status file so the dashboard can show the real bot state.
+runtime status file so the dashboard can show the bot's real state.
 
 This is PAPER TRADING ONLY. LIVE_TRADING must remain False.
 """
@@ -155,6 +155,29 @@ def _run_bot():
             scanner_status="IDLE",
         )
 
+        # Record a scanner run only when ScannerEngine.scan() is actually
+        # called. This prevents the dashboard from falsely showing a scanner
+        # timestamp every 5 seconds when the bot is outside the entry window.
+        original_scan = bot.scanner.scan
+
+        def monitored_scan():
+            _write_status(
+                bot,
+                scanner_status="SCANNING",
+                last_scan=_iso_now(),
+                error=None,
+            )
+
+            try:
+                return original_scan()
+            finally:
+                _write_status(
+                    bot,
+                    scanner_status="IDLE",
+                )
+
+        bot.scanner.scan = monitored_scan
+
         original_cycle = bot.run_cycle
 
         def monitored_cycle():
@@ -163,18 +186,10 @@ def _run_bot():
                 status="RUNNING",
                 message="Paper trading bot is running.",
                 last_cycle=_iso_now(),
-                last_scan=_iso_now(),
-                scanner_status="SCANNING",
                 error=None,
             )
 
-            try:
-                return original_cycle()
-            finally:
-                _write_status(
-                    bot,
-                    scanner_status="IDLE",
-                )
+            return original_cycle()
 
         bot.run_cycle = monitored_cycle
         bot.run()
