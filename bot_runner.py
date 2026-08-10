@@ -50,7 +50,6 @@ def _write_status(bot=None, **updates):
 
     with _lock:
         _state.update(updates)
-
         payload = dict(_state)
         payload["server_time_ist"] = _iso_now()
 
@@ -85,10 +84,8 @@ def _write_status(bot=None, **updates):
 
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
         temporary = STATUS_FILE.with_suffix(".tmp")
-
         with open(temporary, "w", encoding="utf-8") as file:
             json.dump(payload, file, indent=2, default=str)
-
         os.replace(temporary, STATUS_FILE)
 
 
@@ -100,10 +97,7 @@ def _ist_cooldown_active(self):
     if self.cooldown_until is None:
         return False
 
-    # main.py stores cooldown_until as a naive datetime. Compare it with
-    # the current IST time made naive so there is no aware/naive mismatch.
     now = _now().replace(tzinfo=None)
-
     if now >= self.cooldown_until:
         self.cooldown_until = None
         return False
@@ -112,8 +106,6 @@ def _ist_cooldown_active(self):
 
 
 def _patch_bot_for_ist(bot):
-    """Keep the existing strategy but make bot clock decisions use IST."""
-
     bot.current_time = MethodType(_ist_current_time, bot)
     bot.cooldown_active = MethodType(_ist_cooldown_active, bot)
 
@@ -131,32 +123,28 @@ def _patch_bot_for_ist(bot):
 
         return result
 
-    bot.monitor_position = MethodType(
-        monitor_position_ist,
-        bot,
-    )
+    bot.monitor_position = MethodType(monitor_position_ist, bot)
 
 
 def _run_bot():
     global _state, _finished
-
     bot = None
 
     try:
         bot = TradingBot()
         _patch_bot_for_ist(bot)
 
+        # Clear any old scanner timestamp from a previous Streamlit process.
         _write_status(
             bot,
             status="RUNNING",
             message="Paper trading bot is running.",
-            error=None,
+            last_cycle=None,
+            last_scan=None,
             scanner_status="IDLE",
+            error=None,
         )
 
-        # Record a scanner run only when ScannerEngine.scan() is actually
-        # called. This prevents false scanner timestamps outside the entry
-        # window.
         original_scan = bot.scanner.scan
 
         def monitored_scan():
@@ -166,14 +154,10 @@ def _run_bot():
                 last_scan=_iso_now(),
                 error=None,
             )
-
             try:
                 return original_scan()
             finally:
-                _write_status(
-                    bot,
-                    scanner_status="IDLE",
-                )
+                _write_status(bot, scanner_status="IDLE")
 
         bot.scanner.scan = monitored_scan
 
@@ -187,7 +171,6 @@ def _run_bot():
                 last_cycle=_iso_now(),
                 error=None,
             )
-
             return original_cycle()
 
         bot.run_cycle = monitored_cycle
@@ -196,7 +179,7 @@ def _run_bot():
         _write_status(
             bot,
             status="STOPPED",
-            message="Trading day complete. Bot will not restart until the Streamlit app is restarted.",
+            message="Trading day complete. Bot will not restart until the app process restarts.",
             scanner_status="IDLE",
         )
 
@@ -211,23 +194,18 @@ def _run_bot():
             scanner_status="ERROR",
             error=f"{type(error).__name__}: {error}",
         )
-
         with _lock:
             _finished = True
 
 
 def start_bot():
     """Start the paper bot once for the current Streamlit process."""
-
     global _thread
 
     with _lock:
-        # Already running.
         if _thread is not None and _thread.is_alive():
             return get_status()
 
-        # The trading day has already completed. Do not restart the bot on
-        # every Streamlit rerun after 15:00.
         if _finished:
             return get_status()
 
@@ -243,7 +221,6 @@ def start_bot():
 
 def get_status():
     """Read the latest runtime status without touching the bot thread."""
-
     try:
         with open(STATUS_FILE, "r", encoding="utf-8") as file:
             disk_state = json.load(file)
