@@ -23,9 +23,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# ---------------------------------------------------------------------------
-# SAFE SETTINGS
-# ---------------------------------------------------------------------------
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
 LIVE_TRADING = False
@@ -61,6 +58,8 @@ def read_status():
             "last_scan": None,
             "last_scan_completed": None,
             "scan_duration_seconds": None,
+            "last_signal_count": 0,
+            "last_scan_error": None,
             "heartbeat": None,
             "worker_alive": False,
             "error": None,
@@ -84,9 +83,6 @@ def number(data, key, default=0.0):
         return float(default)
 
 
-# ---------------------------------------------------------------------------
-# Start/watch the worker. This call does NOT use Streamlit APIs.
-# ---------------------------------------------------------------------------
 try:
     from bot_runner import ensure_bot_running
     ensure_bot_running()
@@ -96,7 +92,7 @@ except Exception as exc:
 
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 watchdog-v6")
+st.caption("Dashboard build: 2026-08-11 watchdog-v7")
 
 
 @st.fragment(run_every="5s")
@@ -163,28 +159,30 @@ def live_dashboard():
     x3.metric("Losing Trades", int(number(bot_status, "losing_trades")))
     x4.metric("Journal P&L", f"₹{number(bot_status, 'journal_pnl'):,.2f}")
 
+    st.subheader("Scanner Diagnostics")
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Scan Count", int(number(bot_status, "scan_count")))
+    q2.metric("Last Signals", int(number(bot_status, "last_signal_count")))
+    q3.metric("Last Scan Seconds", number(bot_status, "scan_duration_seconds"))
+    q4.metric("Worker Alive", "YES" if worker_alive else "NO")
+
+    scan_error = bot_status.get("last_scan_error")
+    if scan_error:
+        st.error(f"Last scanner error: {scan_error}")
+
     st.subheader("Worker Diagnostics")
     d1, d2, d3, d4 = st.columns(4)
-    d1.write(f"Worker Alive: {worker_alive}")
-    d2.write(f"Heartbeat: {bot_status.get('heartbeat') or '—'}")
-    d3.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
-    d4.write(f"Scans: {int(number(bot_status, 'scan_count'))}")
-
-    scan_duration = bot_status.get("scan_duration_seconds")
-    if scan_duration is not None:
-        st.write(f"Last completed scanner duration: {scan_duration} seconds")
+    d1.write(f"Heartbeat: {bot_status.get('heartbeat') or '—'}")
+    d2.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
+    d3.write(f"Last Scan: {bot_status.get('last_scan_completed') or '—'}")
+    d4.write(f"Worker: {'ALIVE' if worker_alive else 'STOPPED'}")
 
     if scanner_status == "SCANNING":
-        st.info("Scanner is actively checking the market. No trade is taken until every strategy condition is satisfied.")
-
-    if bot_status.get("last_scan_completed"):
-        st.caption(f"Last scanner completed: {bot_status['last_scan_completed']}")
+        st.info("Scanner is actively checking the market. No trade is taken until all strategy conditions are satisfied.")
 
 
 live_dashboard()
 
-# Sidebar is intentionally static. The main dashboard fragment updates every
-# 5 seconds without a browser/page reload.
 st.sidebar.title("Trading Summary")
 initial = read_status()
 st.sidebar.write(f"Bot: {initial.get('status', 'STARTING')}")
