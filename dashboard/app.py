@@ -1,11 +1,10 @@
 """
 NSE Catalyst Trading Bot - SAFE Streamlit dashboard
 
-The dashboard must always render first. The paper worker is started
-asynchronously after the visible dashboard has been rendered so a worker
-startup/import problem can never prevent the page from opening.
+The dashboard is independent from the paper worker. The worker is started
+before reading live status so the page never displays stale RUNNING data when
+the worker thread has actually stopped.
 """
-
 from datetime import datetime
 from pathlib import Path
 import json
@@ -17,11 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATUS_FILE = PROJECT_ROOT / "outputs" / "bot_status.json"
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
-st.set_page_config(
-    page_title="NSE Catalyst Trading Bot",
-    page_icon="📈",
-    layout="wide",
-)
+st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layout="wide")
 
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
@@ -33,48 +28,12 @@ SCAN_INTERVAL_SECONDS = 30
 
 try:
     from config.settings import (
-        TOTAL_CAPITAL,
-        PAPER_TRADING,
-        LIVE_TRADING,
-        TRADING_START,
-        LAST_ENTRY_TIME,
-        SQUARE_OFF_TIME,
+        TOTAL_CAPITAL, PAPER_TRADING, LIVE_TRADING,
+        TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME,
         SCAN_INTERVAL_SECONDS,
     )
 except Exception:
-    # Keep the dashboard usable even if config has a deployment problem.
     pass
-
-
-def read_status():
-    try:
-        with open(STATUS_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except Exception:
-        return {
-            "status": "STARTING",
-            "message": "Dashboard is online. Paper bot is starting...",
-            "scanner_status": "IDLE",
-            "last_cycle": None,
-            "last_scan": None,
-            "last_scan_completed": None,
-            "scan_duration_seconds": None,
-            "last_signal_count": 0,
-            "last_scan_error": None,
-            "heartbeat": None,
-            "worker_alive": False,
-            "error": None,
-            "open_positions": 0,
-            "available_capital": TOTAL_CAPITAL,
-            "used_capital": 0,
-            "daily_pnl": 0,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "journal_pnl": 0,
-            "cycle_count": 0,
-            "scan_count": 0,
-        }
 
 
 def number(data, key, default=0.0):
@@ -84,54 +43,82 @@ def number(data, key, default=0.0):
         return float(default)
 
 
+def read_status():
+    try:
+        with open(STATUS_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception:
+        return {
+            "status": "STARTING", "message": "Dashboard is online. Paper bot is starting...",
+            "scanner_status": "IDLE", "last_cycle": None, "last_scan": None,
+            "last_scan_completed": None, "scan_duration_seconds": None,
+            "last_signal_count": 0, "last_scan_error": None, "heartbeat": None,
+            "worker_alive": False, "error": None, "open_positions": 0,
+            "available_capital": TOTAL_CAPITAL, "used_capital": 0, "daily_pnl": 0,
+            "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+            "journal_pnl": 0, "cycle_count": 0, "scan_count": 0,
+        }
+
+
 def ensure_worker():
-    """Start/watch the paper worker with backward compatibility."""
+    """Start/watch the worker and return its actual in-process status."""
     try:
         import bot_runner
     except Exception as exc:
-        raise RuntimeError(
-            f"Cannot import bot_runner: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot import bot_runner: {type(exc).__name__}: {exc}") from exc
 
     watchdog = getattr(bot_runner, "ensure_bot_running", None)
     if callable(watchdog):
-        return watchdog()
+        watchdog()
+    else:
+        starter = getattr(bot_runner, "start_bot", None)
+        if callable(starter):
+            starter()
+        else:
+            raise RuntimeError("bot_runner.py has neither ensure_bot_running() nor start_bot().")
 
-    starter = getattr(bot_runner, "start_bot", None)
-    if callable(starter):
-        return starter()
-
-    raise RuntimeError(
-        "bot_runner.py has neither ensure_bot_running() nor start_bot()."
-    )
+    return bot_runner.get_status()
 
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v10")
+st.caption("Dashboard build: 2026-08-11 stable-v11")
 
 
 @st.fragment(run_every="5s")
 def live_dashboard():
-    """Refresh only dashboard data; do not reload the browser page."""
-
     now = datetime.now(INDIA_TZ)
-    bot_status = read_status()
+
+    # Start/restart FIRST. Do not display stale JSON status before watchdog runs.
+    watchdog_error = None
+    try:
+        bot_status = ensure_worker()
+    except Exception as exc:
+        watchdog_error = f"{type(exc).__name__}: {exc}"
+        bot_status = read_status()
+        bot_status["worker_alive"] = False
+        bot_status["status"] = "ERROR"
+        bot_status["error"] = watchdog_error
+
     status = str(bot_status.get("status", "STARTING"))
     error_text = bot_status.get("error")
     worker_alive = bool(bot_status.get("worker_alive", False))
     scanner_status = str(bot_status.get("scanner_status", "IDLE"))
 
-    if error_text and status not in {"STOPPED", "ERROR"}:
+    if watchdog_error:
+        st.error(f"Worker watchdog error: {watchdog_error}")
+    elif error_text and status == "ERROR":
+        st.error(f"Worker error: {error_text}")
+    elif error_text:
         st.warning(f"Last worker message: {error_text}")
 
     if status == "RUNNING" and worker_alive:
         st.success("🟢 PAPER BOT RUNNING")
-    elif status == "SCANNING" or scanner_status == "SCANNING":
+    elif (status == "SCANNING" or scanner_status == "SCANNING") and worker_alive:
         st.success("🟢 PAPER BOT RUNNING — SCANNING")
     elif status == "WAITING" and worker_alive:
         st.warning("🟡 WAITING FOR MARKET SESSION")
-    elif status in {"STOPPED", "ERROR"}:
-        st.error("🔴 PAPER BOT WORKER NEEDS RESTART — WATCHDOG ACTIVE")
+    elif not worker_alive:
+        st.error("🔴 PAPER BOT WORKER STOPPED — WATCHDOG WILL RETRY")
     else:
         st.info("🔵 DASHBOARD ONLINE — STARTING PAPER BOT")
 
@@ -147,11 +134,7 @@ def live_dashboard():
         b.write(f"Live Trading: {LIVE_TRADING}")
         c.write(f"Scanner: {scanner_status}")
         d.write(f"Scan Interval: {SCAN_INTERVAL_SECONDS}s")
-        st.write(
-            f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | "
-            f"Square-off: {SQUARE_OFF_TIME} IST | "
-            f"Capital: ₹{TOTAL_CAPITAL:,.0f}"
-        )
+        st.write(f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | Square-off: {SQUARE_OFF_TIME} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Available Capital", f"₹{number(bot_status, 'available_capital', TOTAL_CAPITAL):,.2f}")
@@ -175,9 +158,8 @@ def live_dashboard():
     q3.metric("Last Scan Seconds", number(bot_status, "scan_duration_seconds"))
     q4.metric("Worker Alive", "YES" if worker_alive else "NO")
 
-    scan_error = bot_status.get("last_scan_error")
-    if scan_error:
-        st.error(f"Last scanner error: {scan_error}")
+    if bot_status.get("last_scan_error"):
+        st.error(f"Last scanner error: {bot_status['last_scan_error']}")
 
     st.subheader("Worker Diagnostics")
     d1, d2, d3, d4 = st.columns(4)
@@ -189,13 +171,6 @@ def live_dashboard():
     if scanner_status == "SCANNING":
         st.info("Scanner is actively checking the market. No trade is taken until all strategy conditions are satisfied.")
 
-    # IMPORTANT: start/watch the worker only AFTER the dashboard has rendered.
-    # A bot import/start failure therefore cannot blank the Streamlit page.
-    try:
-        ensure_worker()
-    except Exception as exc:
-        st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
-
 
 live_dashboard()
 
@@ -206,5 +181,4 @@ st.sidebar.write(f"India Time: {datetime.now(INDIA_TZ).strftime('%H:%M:%S IST')}
 st.sidebar.write(f"Scanner: {initial.get('scanner_status', 'IDLE')}")
 st.sidebar.write(f"Open Positions: {int(number(initial, 'open_positions'))}")
 st.sidebar.write(f"Daily P&L: ₹{number(initial, 'daily_pnl'):,.2f}")
-
 st.caption("Live status refreshes inside the page; the browser itself is not meta-refreshed.")
