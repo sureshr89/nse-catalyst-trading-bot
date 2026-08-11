@@ -9,7 +9,7 @@ MAX_STOCKS = 250
 MARKET_OPEN = "09:15"
 OBSERVATION_START = "09:15"
 TRADING_START = "09:45"
-LAST_ENTRY_TIME = "13:30"
+LAST_ENTRY_TIME = "14:00"
 SQUARE_OFF_TIME = "15:00"
 MARKET_CLOSE = "15:30"
 
@@ -55,10 +55,9 @@ POSITION_SIZE_METHOD = "RISK_AND_CAPITAL"
 PAPER_TRADING = True
 LIVE_TRADING = False
 
-# A complete 250-stock scan is network-heavy. Five seconds caused repeated
-# Yahoo requests and could make the worker appear late or get rate-limited.
-# Thirty seconds is fast enough for a 1-minute confirmation strategy while
-# giving the data provider and scanner time to finish cleanly.
+# A complete 250-stock scan is network-heavy. Thirty seconds is fast enough
+# for a 1-minute confirmation strategy while giving the data provider and
+# scanner time to finish cleanly.
 SCAN_INTERVAL_SECONDS = 30
 
 TRADE_LOG_FILE = "outputs/trades.csv"
