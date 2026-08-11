@@ -63,18 +63,16 @@ def read_status():
             "open_positions": 0, "available_capital": TOTAL_CAPITAL,
             "used_capital": 0, "daily_pnl": 0, "total_trades": 0,
             "winning_trades": 0, "losing_trades": 0, "journal_pnl": 0,
-            "cycle_count": 0, "scan_count": 0,
+            "cycle_count": 0, "scan_count": 0, "worker_id": None,
+            "trading_start": TRADING_START, "last_entry_time": LAST_ENTRY_TIME,
+            "square_off_time": SQUARE_OFF_TIME,
+            "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
         }
 
 
 @st.cache_resource(show_spinner=False)
 def get_persistent_worker():
-    """Load bot_runner once per Streamlit server process.
-
-    Streamlit reruns the script every few seconds. Keeping the runner in a
-    cache_resource prevents each rerun from creating a brand-new bot module
-    and worker thread.
-    """
+    """Load bot_runner once per Streamlit server process."""
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
 
@@ -98,12 +96,11 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v20")
+st.caption("Dashboard build: 2026-08-11 stable-v21 — single-worker + atomic status")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
 
-# Keep exactly one persistent worker module across Streamlit reruns.
 try:
     worker_module = get_persistent_worker()
     try:
@@ -126,6 +123,10 @@ if worker_module is not None:
 status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
+effective_start = str(bot_status.get("trading_start", TRADING_START))
+effective_entry = str(bot_status.get("last_entry_time", LAST_ENTRY_TIME))
+effective_square = str(bot_status.get("square_off_time", SQUARE_OFF_TIME))
+effective_scan = int(number(bot_status, "scan_interval_seconds", SCAN_INTERVAL_SECONDS))
 
 if bot_status.get("error") and status == "ERROR":
     st.error(f"Worker error: {bot_status['error']}")
@@ -149,8 +150,12 @@ with st.expander("Bot / Strategy Status", expanded=True):
     a.write(f"Paper Trading: {PAPER_TRADING}")
     b.write(f"Live Trading: {LIVE_TRADING}")
     c.write(f"Scanner: {scanner_status}")
-    d.write(f"Scan Interval: {SCAN_INTERVAL_SECONDS}s")
-    st.write(f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | Square-off: {SQUARE_OFF_TIME} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}")
+    d.write(f"Scan Interval: {effective_scan}s")
+    st.write(
+        f"Effective config: Entry {effective_start} → {effective_entry} IST | "
+        f"Square-off: {effective_square} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}"
+    )
+    st.write(f"Worker ID: {bot_status.get('worker_id') or '—'}")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Available Capital", f"₹{number(bot_status, 'available_capital', TOTAL_CAPITAL):,.2f}")
