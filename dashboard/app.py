@@ -12,11 +12,12 @@ from streamlit_autorefresh import st_autorefresh
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATUS_FILE = PROJECT_ROOT / "outputs" / "bot_status.json"
 BOT_RUNNER_FILE = PROJECT_ROOT / "bot_runner.py"
+SETTINGS_FILE = PROJECT_ROOT / "config" / "settings.py"
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layout="wide")
 
-# Safe defaults. These are overwritten by config.settings below.
+# Safe defaults; replaced by the exact repository settings file below.
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
 LIVE_TRADING = False
@@ -24,15 +25,23 @@ TRADING_START = "09:45"
 LAST_ENTRY_TIME = "14:00"
 SQUARE_OFF_TIME = "15:00"
 SCAN_INTERVAL_SECONDS = 30
+SETTINGS_LOAD_ERROR = None
 
 try:
-    from config.settings import (
-        TOTAL_CAPITAL, PAPER_TRADING, LIVE_TRADING,
-        TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME,
-        SCAN_INTERVAL_SECONDS,
-    )
-except Exception:
-    pass
+    spec = importlib.util.spec_from_file_location("nse_current_settings", SETTINGS_FILE)
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load config/settings.py")
+    settings = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(settings)
+    TOTAL_CAPITAL = int(settings.TOTAL_CAPITAL)
+    PAPER_TRADING = bool(settings.PAPER_TRADING)
+    LIVE_TRADING = bool(settings.LIVE_TRADING)
+    TRADING_START = str(settings.TRADING_START)
+    LAST_ENTRY_TIME = str(settings.LAST_ENTRY_TIME)
+    SQUARE_OFF_TIME = str(settings.SQUARE_OFF_TIME)
+    SCAN_INTERVAL_SECONDS = int(settings.SCAN_INTERVAL_SECONDS)
+except Exception as exc:
+    SETTINGS_LOAD_ERROR = f"{type(exc).__name__}: {exc}"
 
 _watchdog_lock = threading.Lock()
 _watchdog_thread = None
@@ -63,18 +72,7 @@ def read_status():
         }
 
 
-def write_dashboard_status(**updates):
-    payload = read_status()
-    payload.update(updates)
-    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = STATUS_FILE.with_suffix(".dashboard.tmp")
-    with open(temporary, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, default=str)
-    temporary.replace(STATUS_FILE)
-
-
 def load_fresh_bot_runner():
-    """Load the current worker without relying on a cached Streamlit import."""
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
     module_name = "nse_paper_bot_runner_fresh"
@@ -94,26 +92,27 @@ def _launch_worker():
 
         def target():
             try:
-                write_dashboard_status(
-                    status="STARTING",
-                    message="Fresh paper worker is starting...",
-                    worker_alive=False,
-                    error=None,
-                    scanner_status="IDLE",
-                )
                 bot_runner = load_fresh_bot_runner()
                 starter = getattr(bot_runner, "start_bot", None)
                 if not callable(starter):
                     raise RuntimeError("Current bot_runner.py does not provide start_bot().")
                 starter()
             except Exception as exc:
-                write_dashboard_status(
-                    status="ERROR",
-                    message="Dashboard is online, but the paper worker could not start.",
-                    worker_alive=False,
-                    error=f"{type(exc).__name__}: {exc}",
-                    scanner_status="IDLE",
-                )
+                try:
+                    payload = read_status()
+                    if not payload.get("worker_alive"):
+                        payload.update({
+                            "status": "ERROR",
+                            "message": "Dashboard is online, but the paper worker could not start.",
+                            "worker_alive": False,
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "scanner_status": "IDLE",
+                        })
+                        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                        with open(STATUS_FILE, "w", encoding="utf-8") as f:
+                            json.dump(payload, f, indent=2, default=str)
+                except Exception:
+                    pass
 
         _watchdog_thread = threading.Thread(
             target=target, name="paper-bot-watchdog", daemon=True
@@ -125,7 +124,10 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v18")
+st.caption("Dashboard build: 2026-08-11 stable-v19")
+
+if SETTINGS_LOAD_ERROR:
+    st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
 
 _launch_worker()
 bot_status = read_status()
@@ -135,10 +137,8 @@ scanner_status = str(bot_status.get("scanner_status", "IDLE"))
 
 if bot_status.get("error") and status == "ERROR":
     st.error(f"Worker error: {bot_status['error']}")
-elif status == "RUNNING" and worker_alive:
+elif status in {"RUNNING", "SCANNING"} and worker_alive:
     st.success("🟢 PAPER BOT RUNNING")
-elif status == "SCANNING" and worker_alive:
-    st.success("🟢 PAPER BOT RUNNING — SCANNING")
 elif status == "WAITING" and worker_alive:
     st.warning("🟡 WAITING FOR MARKET SESSION")
 elif not worker_alive:
