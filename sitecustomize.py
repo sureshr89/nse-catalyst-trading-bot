@@ -6,9 +6,12 @@ It keeps large Yahoo Finance requests from blocking the trading worker.
 Single-ticker requests are left untouched except for a safe timeout.
 Large multi-ticker requests are split into small batches and downloaded
 concurrently; failed batches are skipped instead of freezing the scanner.
+Industry breadth is also cached briefly so every 30-second scan does not
+redownload the full 250-stock universe.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 import pandas as pd
 import yfinance as yf
@@ -18,6 +21,7 @@ _ORIGINAL_DOWNLOAD = yf.download
 _DEFAULT_TIMEOUT = 10
 _BATCH_SIZE = 25
 _MAX_WORKERS = 4
+_INDUSTRY_CACHE_SECONDS = 45
 
 
 def _as_ticker_list(tickers):
@@ -33,7 +37,6 @@ def _download_batch(batch, kwargs):
     local_kwargs = dict(kwargs)
     local_kwargs["tickers"] = batch
     local_kwargs["timeout"] = _DEFAULT_TIMEOUT
-    # Let this outer batch layer control concurrency.
     local_kwargs["threads"] = False
     try:
         return _ORIGINAL_DOWNLOAD(**local_kwargs)
@@ -43,13 +46,11 @@ def _download_batch(batch, kwargs):
 
 
 def _safe_download(*args, **kwargs):
-    # Preserve positional yfinance usage.
     if args:
         if "tickers" not in kwargs:
             kwargs["tickers"] = args[0]
         args = args[1:]
     if args:
-        # Unusual positional arguments: fall back to the original function.
         return _ORIGINAL_DOWNLOAD(*args, **kwargs)
 
     tickers = _as_ticker_list(kwargs.get("tickers", ""))
@@ -59,7 +60,6 @@ def _safe_download(*args, **kwargs):
 
     kwargs.setdefault("timeout", _DEFAULT_TIMEOUT)
 
-    # Small/single requests do not need batching.
     if len(tickers) <= _BATCH_SIZE:
         return _ORIGINAL_DOWNLOAD(**kwargs)
 
@@ -93,9 +93,6 @@ def _safe_download(*args, **kwargs):
         return pd.DataFrame()
 
     try:
-        # yfinance returns a common Datetime index and MultiIndex columns
-        # for multi-ticker requests. Concatenating columns preserves the
-        # format expected by IndustryDirection._extract_stock_data().
         result = pd.concat(frames, axis=1)
         result = result.loc[:, ~result.columns.duplicated()]
         return result.sort_index()
@@ -104,7 +101,33 @@ def _safe_download(*args, **kwargs):
         return pd.DataFrame()
 
 
-# Install once; avoid wrapping the wrapper if Streamlit reloads modules.
 if getattr(yf.download, "_nse_catalyst_patched", False) is False:
     _safe_download._nse_catalyst_patched = True
     yf.download = _safe_download
+
+
+# Cache the expensive 250-stock breadth calculation. The strategy still
+# reevaluates stock setups every scan; only the expensive market-wide breadth
+# snapshot is reused for a short window.
+try:
+    from market.industry_direction import IndustryDirection
+
+    _ORIGINAL_INDUSTRY_ANALYZE = IndustryDirection.analyze
+
+    def _cached_industry_analyze(self):
+        now = time.monotonic()
+        cached_at = getattr(self, "_nse_cache_time", 0.0)
+        cached_value = getattr(self, "_nse_cache_value", None)
+
+        if cached_value is not None and now - cached_at < _INDUSTRY_CACHE_SECONDS:
+            return cached_value
+
+        value = _ORIGINAL_INDUSTRY_ANALYZE(self)
+        if value is not None:
+            self._nse_cache_time = now
+            self._nse_cache_value = value
+        return value
+
+    IndustryDirection.analyze = _cached_industry_analyze
+except Exception as exc:
+    print(f"Industry cache patch unavailable: {exc}")
