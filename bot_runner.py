@@ -10,6 +10,7 @@ calls Streamlit APIs directly.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -22,7 +23,11 @@ from main import TradingBot
 from config.settings import (
     COOLDOWN_MINUTES,
     TRADING_START,
+    LAST_ENTRY_TIME,
     SQUARE_OFF_TIME,
+    MAX_RISK_PER_TRADE,
+    MIN_REQUIRED_RISK,
+    TOTAL_CAPITAL,
 )
 
 
@@ -112,6 +117,52 @@ def _ist_cooldown_active(self):
     return True
 
 
+def _normalise_risk_quantity(signal, available_capital):
+    """
+    Make the scanner quantity satisfy the configured risk band when a
+    valid whole-number quantity exists.
+
+    The scanner already sizes near MAX_RISK_PER_TRADE, but flooring can
+    leave actual risk below MIN_REQUIRED_RISK. We therefore use the
+    smallest quantity that reaches the minimum risk, provided it does not
+    exceed the maximum-risk quantity or available capital.
+    """
+    if not isinstance(signal, dict):
+        return signal
+
+    try:
+        entry = float(signal.get("entry"))
+        stop_loss = float(signal.get("stop_loss"))
+        risk_per_share = abs(entry - stop_loss)
+    except (TypeError, ValueError):
+        return signal
+
+    if risk_per_share <= 0:
+        return signal
+
+    max_qty = math.floor(MAX_RISK_PER_TRADE / risk_per_share)
+    min_qty = math.ceil(MIN_REQUIRED_RISK / risk_per_share)
+
+    if max_qty <= 0 or min_qty > max_qty:
+        return signal
+
+    try:
+        capital_qty = math.floor(float(available_capital) / entry)
+    except (TypeError, ValueError, ZeroDivisionError):
+        capital_qty = 0
+
+    quantity = min_qty
+    if quantity > capital_qty:
+        return signal
+
+    adjusted = dict(signal)
+    adjusted["quantity"] = int(quantity)
+    adjusted["risk_per_share"] = round(risk_per_share, 4)
+    adjusted["actual_risk"] = round(risk_per_share * quantity, 2)
+    adjusted["maximum_risk"] = round(MAX_RISK_PER_TRADE, 2)
+    return adjusted
+
+
 def _patch_bot_for_ist(bot):
     bot.current_time = MethodType(_ist_current_time, bot)
     bot.cooldown_active = MethodType(_ist_cooldown_active, bot)
@@ -131,6 +182,50 @@ def _patch_bot_for_ist(bot):
         return result
 
     bot.monitor_position = MethodType(monitor_position_ist, bot)
+
+    # ------------------------------------------------------------
+    # Risk sizing + rollback safety for the Streamlit worker.
+    # RiskEngine currently registers an approved trade before the paper
+    # engine opens it. If opening fails, undo that registration.
+    # ------------------------------------------------------------
+    original_approve = bot.risk_engine.approve_trade
+
+    def approve_trade_safe(self, signal):
+        available = getattr(
+            bot.paper_engine,
+            "available_capital",
+            TOTAL_CAPITAL,
+        )
+        adjusted = _normalise_risk_quantity(
+            signal,
+            available,
+        )
+        return original_approve(adjusted)
+
+    bot.risk_engine.approve_trade = MethodType(
+        approve_trade_safe,
+        bot.risk_engine,
+    )
+
+    original_open = bot.paper_engine.open_trade
+
+    def open_trade_safe(self, trade):
+        symbol = str(trade.get("symbol", "")).strip().upper()
+        before_count = bot.risk_engine.get_trade_count(symbol)
+
+        result = original_open(trade)
+
+        if not result.get("opened", False):
+            after_count = bot.risk_engine.get_trade_count(symbol)
+            if after_count > before_count:
+                bot.risk_engine.trade_counts[symbol] = before_count
+
+        return result
+
+    bot.paper_engine.open_trade = MethodType(
+        open_trade_safe,
+        bot.paper_engine,
+    )
 
 
 def _run_one_trading_day():
@@ -153,6 +248,7 @@ def _run_one_trading_day():
     original_scan = bot.scanner.scan
 
     def monitored_scan():
+        # Timestamp is written immediately before the REAL scanner call.
         _write_status(
             bot,
             scanner_status="SCANNING",
@@ -186,6 +282,8 @@ def _run_one_trading_day():
         status="WAITING",
         message="Trading day complete. Waiting for the next Indian market session.",
         scanner_status="IDLE",
+        last_scan=None,
+        last_cycle=None,
     )
 
 
@@ -201,20 +299,21 @@ def _run_bot():
                     message="Weekend. Waiting for the next Indian market session.",
                     scanner_status="IDLE",
                     last_scan=None,
+                    last_cycle=None,
                 )
                 time.sleep(30)
                 continue
 
             current = now.strftime("%H:%M")
 
-            # Before the configured trading start, keep the worker alive so
-            # it can automatically begin scanning when the session opens.
+            # Before the configured trading start, keep the worker alive.
             if current < TRADING_START:
                 _write_status(
                     status="WAITING",
                     message=f"Waiting for trading start at {TRADING_START} IST.",
                     scanner_status="IDLE",
                     last_scan=None,
+                    last_cycle=None,
                 )
                 time.sleep(15)
                 continue
@@ -227,14 +326,12 @@ def _run_bot():
                     message="Market session finished. Waiting for the next Indian market session.",
                     scanner_status="IDLE",
                     last_scan=None,
+                    last_cycle=None,
                 )
                 time.sleep(30)
                 continue
 
             _run_one_trading_day()
-
-            # Avoid immediately creating another bot after a normal 15:00
-            # completion.
             time.sleep(30)
 
         except Exception as error:
@@ -277,8 +374,6 @@ def get_status():
     current.update(disk_state)
 
     if _thread is not None and _thread.is_alive():
-        # Preserve WAITING/ERROR state from the worker; RUNNING means an
-        # actual TradingBot session is active.
         if current.get("status") not in {"ERROR", "WAITING"}:
             current["status"] = "RUNNING"
 
