@@ -1,14 +1,15 @@
 """
-NSE Catalyst Trading Bot - stable Streamlit dashboard.
+NSE Catalyst Trading Bot - non-blocking Streamlit dashboard.
 
-The dashboard must never block on trading work. The paper worker is started
-synchronously only long enough to create its background thread, then the
-actual live worker status is read from bot_runner. This prevents the UI from
-showing stale WORKER=NO while the watchdog is still starting the worker.
+The dashboard MUST render independently of the paper-trading worker.
+The worker/watchdog is launched in a daemon background thread so a slow
+Yahoo download, bot import, scanner, or trading dependency can never block
+this Streamlit page from rendering.
 """
 from datetime import datetime
 from pathlib import Path
 import json
+import threading
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -36,6 +37,46 @@ try:
     )
 except Exception:
     pass
+
+
+# IMPORTANT: these objects live in the Streamlit Python process and are used
+# only to launch the watchdog. We never wait for the worker on the UI thread.
+_watchdog_lock = threading.Lock()
+_watchdog_thread = None
+
+
+def _launch_watchdog():
+    global _watchdog_thread
+    with _watchdog_lock:
+        if _watchdog_thread is not None and _watchdog_thread.is_alive():
+            return
+
+        def target():
+            global _watchdog_thread
+            try:
+                import bot_runner
+                bot_runner.ensure_bot_running()
+            except Exception as exc:
+                try:
+                    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    payload = read_status()
+                    payload.update({
+                        "status": "ERROR",
+                        "message": "Dashboard is online, but the paper worker could not start.",
+                        "worker_alive": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    with open(STATUS_FILE, "w", encoding="utf-8") as file:
+                        json.dump(payload, file, indent=2, default=str)
+                except Exception:
+                    pass
+
+        _watchdog_thread = threading.Thread(
+            target=target,
+            name="streamlit-paper-bot-watchdog",
+            daemon=True,
+        )
+        _watchdog_thread.start()
 
 
 def number(data, key, default=0.0):
@@ -76,70 +117,35 @@ def read_status():
         }
 
 
-def ensure_worker():
-    """Start/restart the worker and return its actual in-process status."""
-    try:
-        import bot_runner
-    except Exception as exc:
-        raise RuntimeError(
-            f"Cannot import bot_runner: {type(exc).__name__}: {exc}"
-        ) from exc
-
-    watchdog = getattr(bot_runner, "ensure_bot_running", None)
-    if callable(watchdog):
-        watchdog()
-    else:
-        starter = getattr(bot_runner, "start_bot", None)
-        if callable(starter):
-            starter()
-        else:
-            raise RuntimeError(
-                "bot_runner.py has neither ensure_bot_running() nor start_bot()."
-            )
-
-    return bot_runner.get_status()
-
-
-# In-app Streamlit rerun every 5 seconds; this is NOT a browser/meta refresh.
+# Refresh the UI every 5 seconds. This does NOT run the trading work.
 st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 
+# Render the page FIRST. Nothing below is allowed to block the Streamlit UI.
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v13")
+st.caption("Dashboard build: 2026-08-11 stable-v14")
 
 now = datetime.now(INDIA_TZ)
-watchdog_error = None
 
-# IMPORTANT: start/watch FIRST, then read live status.
-# The old dashboard read the JSON before starting the worker, which could
-# display WORKER=NO and Scan Count=0 even though the worker was just starting.
-try:
-    bot_status = ensure_worker()
-except Exception as exc:
-    watchdog_error = f"{type(exc).__name__}: {exc}"
-    bot_status = read_status()
-    bot_status["worker_alive"] = False
-    bot_status["status"] = "ERROR"
-    bot_status["error"] = watchdog_error
+# Start the watchdog asynchronously. The UI never waits for it.
+_launch_watchdog()
 
+bot_status = read_status()
+
+# If the worker has not written a status yet, show a clean starting state.
 status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
 
-if watchdog_error:
-    st.error(f"Worker watchdog error: {watchdog_error}")
-elif bot_status.get("error") and status == "ERROR":
+if bot_status.get("error") and status == "ERROR":
     st.error(f"Worker error: {bot_status['error']}")
-elif bot_status.get("error"):
-    st.warning(f"Last worker message: {bot_status['error']}")
-
-if status == "RUNNING" and worker_alive:
+elif status == "RUNNING" and worker_alive:
     st.success("🟢 PAPER BOT RUNNING")
-elif (status == "SCANNING" or scanner_status == "SCANNING") and worker_alive:
+elif status == "SCANNING" and worker_alive:
     st.success("🟢 PAPER BOT RUNNING — SCANNING")
 elif status == "WAITING" and worker_alive:
     st.warning("🟡 WAITING FOR MARKET SESSION")
 elif not worker_alive:
-    st.error("🔴 PAPER BOT WORKER STOPPED — WATCHDOG WILL RETRY")
+    st.warning("🟡 PAPER BOT WORKER STARTING/RETRYING — DASHBOARD IS ONLINE")
 else:
     st.info("🔵 DASHBOARD ONLINE — STARTING PAPER BOT")
 
@@ -190,7 +196,7 @@ d1, d2, d3, d4 = st.columns(4)
 d1.write(f"Heartbeat: {bot_status.get('heartbeat') or '—'}")
 d2.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
 d3.write(f"Last Scan: {bot_status.get('last_scan_completed') or '—'}")
-d4.write(f"Worker: {'ALIVE' if worker_alive else 'STOPPED'}")
+d4.write(f"Worker: {'ALIVE' if worker_alive else 'STOPPED/STARTING'}")
 
 if scanner_status == "SCANNING":
     st.info("Scanner is actively checking the market. No trade is taken until all strategy conditions are satisfied.")
