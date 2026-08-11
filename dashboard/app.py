@@ -1,6 +1,7 @@
 """NSE Catalyst Trading Bot - stable Streamlit dashboard."""
 from datetime import datetime
 from pathlib import Path
+import importlib.util
 import json
 import threading
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATUS_FILE = PROJECT_ROOT / "outputs" / "bot_status.json"
+BOT_RUNNER_FILE = PROJECT_ROOT / "bot_runner.py"
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layout="wide")
@@ -60,8 +62,31 @@ def read_status():
         }
 
 
+def write_dashboard_status(**updates):
+    payload = read_status()
+    payload.update(updates)
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = STATUS_FILE.with_suffix(".dashboard.tmp")
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+    temporary.replace(STATUS_FILE)
+
+
+def load_fresh_bot_runner():
+    """Load bot_runner.py under a fresh module name to avoid stale Streamlit imports."""
+    if not BOT_RUNNER_FILE.exists():
+        raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
+    module_name = "nse_paper_bot_runner_fresh"
+    spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not create a loader for bot_runner.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _launch_worker():
-    """Start the paper worker using the stable public start_bot() API only."""
+    """Start the paper worker from the current bot_runner.py without cached modules."""
     global _watchdog_thread
     with _watchdog_lock:
         if _watchdog_thread is not None and _watchdog_thread.is_alive():
@@ -69,25 +94,26 @@ def _launch_worker():
 
         def target():
             try:
-                import bot_runner
+                write_dashboard_status(
+                    status="STARTING",
+                    message="Fresh paper worker is starting...",
+                    worker_alive=False,
+                    error=None,
+                    scanner_status="IDLE",
+                )
+                bot_runner = load_fresh_bot_runner()
                 starter = getattr(bot_runner, "start_bot", None)
                 if not callable(starter):
-                    raise RuntimeError("bot_runner.py does not provide start_bot()")
+                    raise RuntimeError("Current bot_runner.py does not provide start_bot().")
                 starter()
             except Exception as exc:
-                try:
-                    payload = read_status()
-                    payload.update({
-                        "status": "ERROR",
-                        "message": "Dashboard is online, but the paper worker could not start.",
-                        "worker_alive": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
-                    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                    with open(STATUS_FILE, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=2, default=str)
-                except Exception:
-                    pass
+                write_dashboard_status(
+                    status="ERROR",
+                    message="Dashboard is online, but the paper worker could not start.",
+                    worker_alive=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                    scanner_status="IDLE",
+                )
 
         _watchdog_thread = threading.Thread(
             target=target, name="paper-bot-watchdog", daemon=True
@@ -99,7 +125,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v16")
+st.caption("Dashboard build: 2026-08-11 stable-v17")
 
 _launch_worker()
 bot_status = read_status()
@@ -165,9 +191,6 @@ d1.write(f"Heartbeat: {bot_status.get('heartbeat') or '—'}")
 d2.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
 d3.write(f"Last Scan: {bot_status.get('last_scan_completed') or '—'}")
 d4.write(f"Worker: {'ALIVE' if worker_alive else 'STOPPED/STARTING'}")
-
-if scanner_status == "SCANNING":
-    st.info("Scanner is actively checking the market. No trade is taken until all strategy conditions are satisfied.")
 
 st.sidebar.title("Trading Summary")
 st.sidebar.write(f"Bot: {status}")
