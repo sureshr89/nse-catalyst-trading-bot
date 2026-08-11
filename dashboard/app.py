@@ -78,7 +78,6 @@ def read_status():
 
 # ---------------------------------------------------------------------------
 # Start bot only after Streamlit has rendered the page.
-# This is the key deployment fix.
 # ---------------------------------------------------------------------------
 def _start_bot_later():
     try:
@@ -118,7 +117,7 @@ status = str(bot_status.get("status", "STARTING"))
 error_text = bot_status.get("error")
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 runtime-fix-v4")
+st.caption("Dashboard build: 2026-08-11 runtime-fix-v5")
 
 if error_text:
     st.error(f"Bot/runtime error: {error_text}")
@@ -178,9 +177,7 @@ st.sidebar.write(f"Scanner: {bot_status.get('scanner_status', 'IDLE')}")
 st.sidebar.write(f"Open Positions: {int(number('open_positions'))}")
 st.sidebar.write(f"Daily P&L: ₹{number('daily_pnl'):,.2f}")
 
-# Browser refresh keeps the status clock current without requiring the
-# streamlit-autorefresh package.
-st.markdown(
-    "<meta http-equiv='refresh' content='5'>",
-    unsafe_allow_html=True,
-)
+# IMPORTANT: Do NOT use a browser meta-refresh here.
+# The previous 5-second meta-refresh caused the whole browser page to reload
+# repeatedly. The paper bot continues running independently in its background
+# worker, so the dashboard remains stable until the user manually refreshes it.
