@@ -18,6 +18,8 @@ class PriceData:
 
     def __init__(self):
         self.valid_intervals = {"1m", "5m"}
+        # Keep individual Yahoo requests from hanging the paper worker.
+        self.download_timeout = 10
 
     def yahoo_symbol(self, symbol):
         symbol = str(symbol).strip().upper()
@@ -106,6 +108,7 @@ class PriceData:
                 progress=False,
                 threads=False,
                 prepost=False,
+                timeout=self.download_timeout,
             )
             return self._clean_data(df)
         except Exception as error:
@@ -124,9 +127,7 @@ class PriceData:
 
         On a normal trading day this is today's session.
         On weekends/holidays it is the most recent session returned
-        by the data provider. This keeps paper/back-testing checks
-        from becoming empty simply because the calendar date has no
-        NSE candles.
+        by the data provider.
         """
         if df is None or df.empty:
             return pd.DataFrame()
