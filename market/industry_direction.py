@@ -1,11 +1,7 @@
-"""Industry and stock breadth engine for the Yahoo paper-trading bot.
-
-Uses bounded Yahoo requests so one large 250-symbol request cannot block the
-scanner indefinitely. Partial data is allowed; unavailable symbols are marked
-NO_DATA and do not crash the scan.
-"""
+"""Industry and stock breadth engine for the Yahoo paper-trading bot."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import time
 import pandas as pd
 import yfinance as yf
 
@@ -18,6 +14,9 @@ class IndustryDirection:
         self.download_timeout = 10
         self.batch_size = 25
         self.max_workers = 8
+        self.cache_seconds = 45
+        self._cache_data = None
+        self._cache_time = 0.0
         self.universe = pd.DataFrame()
         self.stock_results = pd.DataFrame()
         self.industry_results = pd.DataFrame()
@@ -72,6 +71,10 @@ class IndustryDirection:
             return symbol, pd.DataFrame()
 
     def download_market_data(self):
+        now = time.monotonic()
+        if self._cache_data is not None and now - self._cache_time < self.cache_seconds:
+            print("Using cached Yahoo industry breadth data.")
+            return self._cache_data
         symbols = self.universe["Symbol"].tolist()
         results = {}
         print(f"Downloading 5-minute breadth data for {len(symbols)} stocks in batches of {self.batch_size}...")
@@ -83,6 +86,9 @@ class IndustryDirection:
                 for future in as_completed(futures):
                     symbol, data = future.result()
                     results[symbol] = data
+        if results:
+            self._cache_data = results
+            self._cache_time = time.monotonic()
         return results
 
     def _extract_stock_data(self, data, symbol):
