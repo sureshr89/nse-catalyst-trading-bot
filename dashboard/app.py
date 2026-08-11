@@ -2,8 +2,8 @@
 NSE Catalyst Trading Bot - SAFE Streamlit dashboard
 
 The page stays open while only the live status area updates.
-A Streamlit fragment refreshes the dashboard without reloading the browser
-page, and also acts as a watchdog for the paper-bot worker.
+The dashboard supports both the new bot_runner watchdog API and older
+bot_runner deployments that expose start_bot() only.
 """
 
 from datetime import datetime
@@ -83,25 +83,46 @@ def number(data, key, default=0.0):
         return float(default)
 
 
+def ensure_worker():
+    """Start/watch the paper worker with backward compatibility."""
+    try:
+        import bot_runner
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot import bot_runner: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    watchdog = getattr(bot_runner, "ensure_bot_running", None)
+    if callable(watchdog):
+        return watchdog()
+
+    # Older deployed bot_runner versions may only have start_bot().
+    starter = getattr(bot_runner, "start_bot", None)
+    if callable(starter):
+        return starter()
+
+    raise RuntimeError(
+        "bot_runner.py has neither ensure_bot_running() nor start_bot()."
+    )
+
+
 try:
-    from bot_runner import ensure_bot_running
-    ensure_bot_running()
+    ensure_worker()
     bot_start_error = None
 except Exception as exc:
     bot_start_error = f"{type(exc).__name__}: {exc}"
 
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 watchdog-v7")
+st.caption("Dashboard build: 2026-08-11 watchdog-v8")
 
 
 @st.fragment(run_every="5s")
 def live_dashboard():
-    """Refresh only the dashboard data; do not reload the browser page."""
+    """Refresh only dashboard data; do not reload the browser page."""
 
     try:
-        from bot_runner import ensure_bot_running
-        ensure_bot_running()
+        ensure_worker()
     except Exception as exc:
         st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
 
