@@ -4,7 +4,7 @@ STREAMLIT PAPER BOT RUNNER
 
 Long-running PAPER trading worker for Streamlit.
 
-The worker never calls Streamlit APIs.  The dashboard only reads the
+The worker never calls Streamlit APIs. The dashboard only reads the
 status file, so Streamlit reruns cannot directly stop the trading logic.
 """
 
@@ -45,6 +45,8 @@ _state = {
     "last_scan_completed": None,
     "scan_started_at": None,
     "scan_duration_seconds": None,
+    "last_signal_count": 0,
+    "last_scan_error": None,
     "scanner_status": "IDLE",
     "error": None,
     "worker_alive": False,
@@ -237,6 +239,8 @@ def _run_one_trading_day():
         last_scan_completed=None,
         scan_started_at=None,
         scan_duration_seconds=None,
+        last_signal_count=0,
+        last_scan_error=None,
         scanner_status="IDLE",
         error=None,
         cycle_count=0,
@@ -253,11 +257,29 @@ def _run_one_trading_day():
             scanner_status="SCANNING",
             last_scan=scan_started_at,
             scan_started_at=scan_started_at,
+            last_scan_error=None,
             error=None,
             scan_count=int(_state.get("scan_count", 0)) + 1,
         )
+
         try:
-            return original_scan()
+            result = original_scan()
+            signal_count = len(result) if isinstance(result, list) else 0
+            _write_status(
+                bot,
+                last_signal_count=signal_count,
+                message=(
+                    f"Scanner completed. Final trade signals: {signal_count}."
+                ),
+            )
+            return result
+        except Exception as error:
+            _write_status(
+                bot,
+                last_scan_error=f"{type(error).__name__}: {error}",
+                error=f"Scanner error: {type(error).__name__}: {error}",
+            )
+            raise
         finally:
             duration = round(time.monotonic() - started, 2)
             _write_status(
@@ -401,7 +423,7 @@ def ensure_bot_running():
 
 
 def get_status():
-    """Read the latest runtime status and never report a dead worker as RUNNING."""
+    """Read runtime status and never report a dead worker as RUNNING."""
     try:
         with open(STATUS_FILE, "r", encoding="utf-8") as file:
             disk_state = json.load(file)
