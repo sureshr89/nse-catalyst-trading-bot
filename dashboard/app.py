@@ -77,14 +77,29 @@ def read_status():
         }
 
 
+def heartbeat_is_fresh(heartbeat, max_age_seconds=90):
+    """Treat a recent heartbeat as evidence of a worker in another process."""
+    if not heartbeat:
+        return False
+    try:
+        value = datetime.fromisoformat(str(heartbeat))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=INDIA_TZ)
+        age = (datetime.now(INDIA_TZ) - value).total_seconds()
+        return 0 <= age <= max_age_seconds
+    except Exception:
+        return False
+
+
 @st.cache_resource(show_spinner=False)
 def get_persistent_worker():
     """Load bot_runner once per Streamlit server process."""
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
 
-    # v28 forces a fresh cached worker module after the dashboard display cleanup.
-    module_name = "nse_paper_bot_runner_persistent_v28"
+    # v29 forces a fresh cached worker module after the cross-process
+    # heartbeat/status fix.
+    module_name = "nse_paper_bot_runner_persistent_v29"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
@@ -104,7 +119,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v28 — LAST ENTRY 14:00 IST")
+st.caption("Dashboard build: 2026-08-11 stable-v29 — LAST ENTRY 14:00 IST")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
@@ -124,7 +139,17 @@ if worker_module is not None:
     try:
         live_status = worker_module.get_status()
         if isinstance(live_status, dict):
+            # Preserve the disk heartbeat/worker identity when the real worker
+            # is running in a different Streamlit server process.
+            local_alive = bool(live_status.get("worker_alive", False))
             bot_status.update(live_status)
+            if not local_alive:
+                disk_status = read_status()
+                if heartbeat_is_fresh(disk_status.get("heartbeat")):
+                    bot_status["worker_alive"] = True
+                    bot_status["worker_id"] = disk_status.get("worker_id") or bot_status.get("worker_id")
+                    bot_status["heartbeat"] = disk_status.get("heartbeat")
+                    bot_status["status"] = disk_status.get("status", bot_status.get("status", "WAITING"))
     except Exception as exc:
         st.warning(f"Could not read live worker status: {type(exc).__name__}: {exc}")
 
