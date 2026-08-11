@@ -48,33 +48,20 @@ def read_status():
             return json.load(f)
     except Exception:
         return {
-            "status": "STARTING",
-            "message": "Dashboard is online. Paper bot is starting...",
-            "scanner_status": "IDLE",
-            "worker_alive": False,
-            "last_cycle": None,
-            "last_scan": None,
-            "last_scan_completed": None,
-            "scan_duration_seconds": None,
-            "last_signal_count": 0,
-            "last_scan_error": None,
-            "heartbeat": None,
-            "error": None,
-            "open_positions": 0,
-            "available_capital": TOTAL_CAPITAL,
-            "used_capital": 0,
-            "daily_pnl": 0,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "journal_pnl": 0,
-            "cycle_count": 0,
-            "scan_count": 0,
+            "status": "STARTING", "message": "Dashboard is online. Paper bot is starting...",
+            "scanner_status": "IDLE", "worker_alive": False,
+            "last_cycle": None, "last_scan": None, "last_scan_completed": None,
+            "scan_duration_seconds": None, "last_signal_count": 0,
+            "last_scan_error": None, "heartbeat": None, "error": None,
+            "open_positions": 0, "available_capital": TOTAL_CAPITAL,
+            "used_capital": 0, "daily_pnl": 0, "total_trades": 0,
+            "winning_trades": 0, "losing_trades": 0, "journal_pnl": 0,
+            "cycle_count": 0, "scan_count": 0,
         }
 
 
 def _launch_worker():
-    """Launch the worker without assuming a specific bot_runner API."""
+    """Start the paper worker using the stable public start_bot() API only."""
     global _watchdog_thread
     with _watchdog_lock:
         if _watchdog_thread is not None and _watchdog_thread.is_alive():
@@ -83,14 +70,10 @@ def _launch_worker():
         def target():
             try:
                 import bot_runner
-                ensure = getattr(bot_runner, "ensure_bot_running", None)
-                start = getattr(bot_runner, "start_bot", None)
-                if callable(ensure):
-                    ensure()
-                elif callable(start):
-                    start()
-                else:
-                    raise RuntimeError("bot_runner.py has no start_bot() function")
+                starter = getattr(bot_runner, "start_bot", None)
+                if not callable(starter):
+                    raise RuntimeError("bot_runner.py does not provide start_bot()")
+                starter()
             except Exception as exc:
                 try:
                     payload = read_status()
@@ -107,24 +90,19 @@ def _launch_worker():
                     pass
 
         _watchdog_thread = threading.Thread(
-            target=target,
-            name="paper-bot-watchdog",
-            daemon=True,
+            target=target, name="paper-bot-watchdog", daemon=True
         )
         _watchdog_thread.start()
 
 
 st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
-
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v15")
+st.caption("Dashboard build: 2026-08-11 stable-v16")
 
-# Start the paper worker in the background. The UI never waits for it.
 _launch_worker()
 bot_status = read_status()
-
 status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
