@@ -1,16 +1,14 @@
 """
 NSE Catalyst Trading Bot - SAFE Streamlit dashboard
 
-The dashboard must always open even if the trading worker has an import,
-market-data, or runtime problem. The paper bot is started AFTER the first
-page render in a background timer, so a bot startup problem cannot prevent
-the Streamlit page from loading.
+The page stays open while only the live status area updates.
+A Streamlit fragment refreshes the dashboard without reloading the browser
+page, and also acts as a watchdog for the paper-bot worker.
 """
 
 from datetime import datetime
 from pathlib import Path
 import json
-import threading
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -26,7 +24,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# SETTINGS: use safe defaults so settings/import failures never kill the page.
+# SAFE SETTINGS
 # ---------------------------------------------------------------------------
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
@@ -50,9 +48,6 @@ except Exception:
     pass
 
 
-# ---------------------------------------------------------------------------
-# Read status without importing the trading bot.
-# ---------------------------------------------------------------------------
 def read_status():
     try:
         with open(STATUS_FILE, "r", encoding="utf-8") as file:
@@ -64,6 +59,10 @@ def read_status():
             "scanner_status": "IDLE",
             "last_cycle": None,
             "last_scan": None,
+            "last_scan_completed": None,
+            "scan_duration_seconds": None,
+            "heartbeat": None,
+            "worker_alive": False,
             "error": None,
             "open_positions": 0,
             "available_capital": TOTAL_CAPITAL,
@@ -73,111 +72,128 @@ def read_status():
             "winning_trades": 0,
             "losing_trades": 0,
             "journal_pnl": 0,
+            "cycle_count": 0,
+            "scan_count": 0,
         }
 
 
-# ---------------------------------------------------------------------------
-# Start bot only after Streamlit has rendered the page.
-# ---------------------------------------------------------------------------
-def _start_bot_later():
+def number(data, key, default=0.0):
     try:
-        from bot_runner import start_bot
-        start_bot()
-    except Exception as exc:
-        try:
-            STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(STATUS_FILE, "w", encoding="utf-8") as file:
-                json.dump(
-                    {
-                        "status": "ERROR",
-                        "message": "Dashboard is online, but paper bot failed to start.",
-                        "scanner_status": "ERROR",
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "last_cycle": None,
-                        "last_scan": None,
-                    },
-                    file,
-                    indent=2,
-                )
-        except Exception:
-            pass
-
-
-if "bot_start_scheduled" not in st.session_state:
-    st.session_state.bot_start_scheduled = True
-    threading.Timer(2.0, _start_bot_later).start()
-
-
-# ---------------------------------------------------------------------------
-# Dashboard
-# ---------------------------------------------------------------------------
-now = datetime.now(INDIA_TZ)
-bot_status = read_status()
-status = str(bot_status.get("status", "STARTING"))
-error_text = bot_status.get("error")
-
-st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 runtime-fix-v5")
-
-if error_text:
-    st.error(f"Bot/runtime error: {error_text}")
-elif status == "RUNNING":
-    st.success("🟢 PAPER BOT RUNNING")
-elif status == "WAITING":
-    st.warning("🟡 WAITING FOR MARKET SESSION")
-else:
-    st.info("🔵 DASHBOARD ONLINE — STARTING PAPER BOT")
-
-s1, s2, s3, s4 = st.columns(4)
-s1.metric("India Time", now.strftime("%H:%M:%S"))
-s2.metric("Bot Status", status)
-s3.metric("Last Bot Cycle", str(bot_status.get("last_cycle") or "—"))
-s4.metric("Last Scanner Run", str(bot_status.get("last_scan") or "—"))
-
-with st.expander("Bot / Strategy Status", expanded=True):
-    a, b, c, d = st.columns(4)
-    a.write(f"Paper Trading: {PAPER_TRADING}")
-    b.write(f"Live Trading: {LIVE_TRADING}")
-    c.write(f"Scanner: {bot_status.get('scanner_status', 'IDLE')}")
-    d.write(f"Scan Interval: {SCAN_INTERVAL_SECONDS}s")
-    st.write(
-        f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | "
-        f"Square-off: {SQUARE_OFF_TIME} IST | "
-        f"Capital: ₹{TOTAL_CAPITAL:,.0f}"
-    )
-
-
-def number(key, default=0.0):
-    try:
-        return float(bot_status.get(key, default) or default)
+        return float(data.get(key, default) or default)
     except Exception:
         return float(default)
 
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Available Capital", f"₹{number('available_capital', TOTAL_CAPITAL):,.2f}")
-m2.metric("Used Capital", f"₹{number('used_capital'):,.2f}")
-m3.metric("Open Positions", int(number("open_positions")))
-m4.metric("Daily P&L", f"₹{number('daily_pnl'):,.2f}")
+# ---------------------------------------------------------------------------
+# Start/watch the worker. This call does NOT use Streamlit APIs.
+# ---------------------------------------------------------------------------
+try:
+    from bot_runner import ensure_bot_running
+    ensure_bot_running()
+    bot_start_error = None
+except Exception as exc:
+    bot_start_error = f"{type(exc).__name__}: {exc}"
 
-st.subheader("Trading Status")
-st.write(f"Message: {bot_status.get('message', 'Dashboard is online.')}")
-st.write(f"Total Trades: {int(number('total_trades'))}")
-st.write(f"Winning Trades: {int(number('winning_trades'))}")
-st.write(f"Losing Trades: {int(number('losing_trades'))}")
-st.write(f"Journal P&L: ₹{number('journal_pnl'):,.2f}")
 
-if error_text:
-    st.warning("The web dashboard is working. Only the paper-bot worker needs attention.")
+st.title("📈 NSE Catalyst Trading Bot Dashboard")
+st.caption("Dashboard build: 2026-08-11 watchdog-v6")
 
+
+@st.fragment(run_every="5s")
+def live_dashboard():
+    """Refresh only the dashboard data; do not reload the browser page."""
+
+    try:
+        from bot_runner import ensure_bot_running
+        ensure_bot_running()
+    except Exception as exc:
+        st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
+
+    now = datetime.now(INDIA_TZ)
+    bot_status = read_status()
+    status = str(bot_status.get("status", "STARTING"))
+    error_text = bot_status.get("error")
+    worker_alive = bool(bot_status.get("worker_alive", False))
+    scanner_status = str(bot_status.get("scanner_status", "IDLE"))
+
+    if error_text and status not in {"STOPPED", "ERROR"}:
+        st.warning(f"Last worker message: {error_text}")
+
+    if status == "RUNNING" and worker_alive:
+        st.success("🟢 PAPER BOT RUNNING")
+    elif status == "SCANNING" or scanner_status == "SCANNING":
+        st.success("🟢 PAPER BOT RUNNING — SCANNING")
+    elif status == "WAITING" and worker_alive:
+        st.warning("🟡 WAITING FOR MARKET SESSION")
+    elif status in {"STOPPED", "ERROR"}:
+        st.error("🔴 PAPER BOT WORKER NEEDS RESTART — WATCHDOG ACTIVE")
+    else:
+        st.info("🔵 DASHBOARD ONLINE — STARTING PAPER BOT")
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("India Time", now.strftime("%H:%M:%S"))
+    s2.metric("Bot Status", status)
+    s3.metric("Last Bot Cycle", str(bot_status.get("last_cycle") or "—"))
+    s4.metric("Last Scanner Run", str(bot_status.get("last_scan") or "—"))
+
+    with st.expander("Bot / Strategy Status", expanded=True):
+        a, b, c, d = st.columns(4)
+        a.write(f"Paper Trading: {PAPER_TRADING}")
+        b.write(f"Live Trading: {LIVE_TRADING}")
+        c.write(f"Scanner: {scanner_status}")
+        d.write(f"Scan Interval: {SCAN_INTERVAL_SECONDS}s")
+        st.write(
+            f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | "
+            f"Square-off: {SQUARE_OFF_TIME} IST | "
+            f"Capital: ₹{TOTAL_CAPITAL:,.0f}"
+        )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Available Capital", f"₹{number(bot_status, 'available_capital', TOTAL_CAPITAL):,.2f}")
+    m2.metric("Used Capital", f"₹{number(bot_status, 'used_capital'):,.2f}")
+    m3.metric("Open Positions", int(number(bot_status, "open_positions")))
+    m4.metric("Daily P&L", f"₹{number(bot_status, 'daily_pnl'):,.2f}")
+
+    st.subheader("Trading Status")
+    st.write(f"Message: {bot_status.get('message', 'Dashboard is online.')}")
+
+    x1, x2, x3, x4 = st.columns(4)
+    x1.metric("Total Trades", int(number(bot_status, "total_trades")))
+    x2.metric("Winning Trades", int(number(bot_status, "winning_trades")))
+    x3.metric("Losing Trades", int(number(bot_status, "losing_trades")))
+    x4.metric("Journal P&L", f"₹{number(bot_status, 'journal_pnl'):,.2f}")
+
+    st.subheader("Worker Diagnostics")
+    d1, d2, d3, d4 = st.columns(4)
+    d1.write(f"Worker Alive: {worker_alive}")
+    d2.write(f"Heartbeat: {bot_status.get('heartbeat') or '—'}")
+    d3.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
+    d4.write(f"Scans: {int(number(bot_status, 'scan_count'))}")
+
+    scan_duration = bot_status.get("scan_duration_seconds")
+    if scan_duration is not None:
+        st.write(f"Last completed scanner duration: {scan_duration} seconds")
+
+    if scanner_status == "SCANNING":
+        st.info("Scanner is actively checking the market. No trade is taken until every strategy condition is satisfied.")
+
+    if bot_status.get("last_scan_completed"):
+        st.caption(f"Last scanner completed: {bot_status['last_scan_completed']}")
+
+
+live_dashboard()
+
+# Sidebar is intentionally static. The main dashboard fragment updates every
+# 5 seconds without a browser/page reload.
 st.sidebar.title("Trading Summary")
-st.sidebar.write(f"Bot: {status}")
-st.sidebar.write(f"India Time: {now.strftime('%H:%M:%S IST')}")
-st.sidebar.write(f"Scanner: {bot_status.get('scanner_status', 'IDLE')}")
-st.sidebar.write(f"Open Positions: {int(number('open_positions'))}")
-st.sidebar.write(f"Daily P&L: ₹{number('daily_pnl'):,.2f}")
+initial = read_status()
+st.sidebar.write(f"Bot: {initial.get('status', 'STARTING')}")
+st.sidebar.write(f"India Time: {datetime.now(INDIA_TZ).strftime('%H:%M:%S IST')}")
+st.sidebar.write(f"Scanner: {initial.get('scanner_status', 'IDLE')}")
+st.sidebar.write(f"Open Positions: {int(number(initial, 'open_positions'))}")
+st.sidebar.write(f"Daily P&L: ₹{number(initial, 'daily_pnl'):,.2f}")
 
-# IMPORTANT: Do NOT use a browser meta-refresh here.
-# The previous 5-second meta-refresh caused the whole browser page to reload
-# repeatedly. The paper bot continues running independently in its background
-# worker, so the dashboard remains stable until the user manually refreshes it.
+if bot_start_error:
+    st.sidebar.error(f"Worker start error: {bot_start_error}")
+
+st.caption("Live status refreshes inside the page; the browser itself is not meta-refreshed.")
