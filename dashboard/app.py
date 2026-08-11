@@ -83,8 +83,8 @@ def get_persistent_worker():
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
 
-    # v26 forces a fresh cached worker module after the import-path fix.
-    module_name = "nse_paper_bot_runner_persistent_v26"
+    # v27 forces a fresh cached worker module after the dashboard cleanup.
+    module_name = "nse_paper_bot_runner_persistent_v27"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
@@ -104,7 +104,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v26 — LAST ENTRY 14:00 IST + worker import-path fix")
+st.caption("Dashboard build: 2026-08-11 stable-v27 — LAST ENTRY 14:00 IST")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
@@ -132,7 +132,6 @@ status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
 
-# config/settings.py is authoritative. Never let stale bot_status.json overwrite it.
 effective_start = TRADING_START
 effective_entry = LAST_ENTRY_TIME
 # Explicit safety guard: this dashboard must never display the old 13:30 cutoff.
@@ -168,7 +167,6 @@ with st.expander("Bot / Strategy Status", expanded=True):
         f"Entry: {effective_start} → {effective_entry} IST | "
         f"Square-off: {effective_square} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}"
     )
-    st.write("Configuration source: config/settings.py")
     st.write(f"Worker ID: {bot_status.get('worker_id') or '—'}")
 
 m1, m2, m3, m4 = st.columns(4)
