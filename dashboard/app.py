@@ -1,11 +1,4 @@
-"""
-NSE Catalyst Trading Bot - non-blocking Streamlit dashboard.
-
-The dashboard MUST render independently of the paper-trading worker.
-The worker/watchdog is launched in a daemon background thread so a slow
-Yahoo download, bot import, scanner, or trading dependency can never block
-this Streamlit page from rendering.
-"""
+"""NSE Catalyst Trading Bot - stable Streamlit dashboard."""
 from datetime import datetime
 from pathlib import Path
 import json
@@ -27,7 +20,7 @@ LIVE_TRADING = False
 TRADING_START = "09:45"
 LAST_ENTRY_TIME = "13:30"
 SQUARE_OFF_TIME = "15:00"
-SCAN_INTERVAL_SECONDS = 30
+SCAN_INTERVAL_SECONDS = 5
 
 try:
     from config.settings import (
@@ -38,45 +31,8 @@ try:
 except Exception:
     pass
 
-
-# IMPORTANT: these objects live in the Streamlit Python process and are used
-# only to launch the watchdog. We never wait for the worker on the UI thread.
 _watchdog_lock = threading.Lock()
 _watchdog_thread = None
-
-
-def _launch_watchdog():
-    global _watchdog_thread
-    with _watchdog_lock:
-        if _watchdog_thread is not None and _watchdog_thread.is_alive():
-            return
-
-        def target():
-            global _watchdog_thread
-            try:
-                import bot_runner
-                bot_runner.ensure_bot_running()
-            except Exception as exc:
-                try:
-                    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                    payload = read_status()
-                    payload.update({
-                        "status": "ERROR",
-                        "message": "Dashboard is online, but the paper worker could not start.",
-                        "worker_alive": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
-                    with open(STATUS_FILE, "w", encoding="utf-8") as file:
-                        json.dump(payload, file, indent=2, default=str)
-                except Exception:
-                    pass
-
-        _watchdog_thread = threading.Thread(
-            target=target,
-            name="streamlit-paper-bot-watchdog",
-            daemon=True,
-        )
-        _watchdog_thread.start()
 
 
 def number(data, key, default=0.0):
@@ -88,13 +44,14 @@ def number(data, key, default=0.0):
 
 def read_status():
     try:
-        with open(STATUS_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return {
             "status": "STARTING",
             "message": "Dashboard is online. Paper bot is starting...",
             "scanner_status": "IDLE",
+            "worker_alive": False,
             "last_cycle": None,
             "last_scan": None,
             "last_scan_completed": None,
@@ -102,7 +59,6 @@ def read_status():
             "last_signal_count": 0,
             "last_scan_error": None,
             "heartbeat": None,
-            "worker_alive": False,
             "error": None,
             "open_positions": 0,
             "available_capital": TOTAL_CAPITAL,
@@ -117,21 +73,58 @@ def read_status():
         }
 
 
-# Refresh the UI every 5 seconds. This does NOT run the trading work.
-st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
+def _launch_worker():
+    """Launch the worker without assuming a specific bot_runner API."""
+    global _watchdog_thread
+    with _watchdog_lock:
+        if _watchdog_thread is not None and _watchdog_thread.is_alive():
+            return
 
-# Render the page FIRST. Nothing below is allowed to block the Streamlit UI.
-st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v14")
+        def target():
+            try:
+                import bot_runner
+                ensure = getattr(bot_runner, "ensure_bot_running", None)
+                start = getattr(bot_runner, "start_bot", None)
+                if callable(ensure):
+                    ensure()
+                elif callable(start):
+                    start()
+                else:
+                    raise RuntimeError("bot_runner.py has no start_bot() function")
+            except Exception as exc:
+                try:
+                    payload = read_status()
+                    payload.update({
+                        "status": "ERROR",
+                        "message": "Dashboard is online, but the paper worker could not start.",
+                        "worker_alive": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=2, default=str)
+                except Exception:
+                    pass
+
+        _watchdog_thread = threading.Thread(
+            target=target,
+            name="paper-bot-watchdog",
+            daemon=True,
+        )
+        _watchdog_thread.start()
+
+
+st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 
 now = datetime.now(INDIA_TZ)
 
-# Start the watchdog asynchronously. The UI never waits for it.
-_launch_watchdog()
+st.title("📈 NSE Catalyst Trading Bot Dashboard")
+st.caption("Dashboard build: 2026-08-11 stable-v15")
 
+# Start the paper worker in the background. The UI never waits for it.
+_launch_worker()
 bot_status = read_status()
 
-# If the worker has not written a status yet, show a clean starting state.
 status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
@@ -161,10 +154,7 @@ with st.expander("Bot / Strategy Status", expanded=True):
     b.write(f"Live Trading: {LIVE_TRADING}")
     c.write(f"Scanner: {scanner_status}")
     d.write(f"Scan Interval: {SCAN_INTERVAL_SECONDS}s")
-    st.write(
-        f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | "
-        f"Square-off: {SQUARE_OFF_TIME} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}"
-    )
+    st.write(f"Entry: {TRADING_START} → {LAST_ENTRY_TIME} IST | Square-off: {SQUARE_OFF_TIME} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Available Capital", f"₹{number(bot_status, 'available_capital', TOTAL_CAPITAL):,.2f}")
@@ -208,4 +198,4 @@ st.sidebar.write(f"Scanner: {scanner_status}")
 st.sidebar.write(f"Open Positions: {int(number(bot_status, 'open_positions'))}")
 st.sidebar.write(f"Daily P&L: ₹{number(bot_status, 'daily_pnl'):,.2f}")
 st.sidebar.write(f"Worker: {'ALIVE' if worker_alive else 'STARTING/STOPPED'}")
-st.caption("Dashboard updates every 5 seconds without a browser/meta refresh.")
+st.sidebar.write(f"Dashboard Refresh: {now.strftime('%H:%M:%S IST')}")
