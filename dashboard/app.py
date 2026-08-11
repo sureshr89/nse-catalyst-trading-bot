@@ -178,7 +178,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["Trades", "Signals", "Charts", "Capital"
 with tab1:
     st.subheader("Latest Trades")
     if trades is not None and not trades.empty:
-        st.dataframe(last_trades(trades, 20), use_container_width=True)
+        st.dataframe(last_trades(trades, 20), width="stretch")
     else:
         st.info("No completed trades to display.")
 
@@ -189,7 +189,7 @@ with tab2:
     except Exception:
         signals = None
     if signals is not None and not signals.empty:
-        st.dataframe(signals.tail(30).iloc[::-1], use_container_width=True)
+        st.dataframe(signals.tail(30).iloc[::-1], width="stretch")
     else:
         st.info("No scanner signals recorded yet.")
 
@@ -197,29 +197,29 @@ with tab3:
     if trades is not None and not trades.empty:
         fig = equity_curve(trades)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         fig = pnl_chart(trades)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
     else:
         st.info("No chart data available yet.")
 
 with tab4:
     fig = capital_chart(metrics)
     if fig is not None:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with tab5:
     if trades is not None and not trades.empty:
         fig = win_loss_chart(trades)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         fig = industry_chart(trades)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         fig = monthly_pnl_chart(trades)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
     else:
         st.info("No performance metrics available yet.")
 
