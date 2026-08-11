@@ -236,4 +236,4 @@ st.sidebar.write(f"**Daily P&L:** {format_money(bot_status.get('daily_pnl', 0.0)
 st.sidebar.write(f"**Dashboard Refresh:** {now.strftime('%H:%M:%S IST')}")
 
 # Deployment marker: confirms Streamlit is serving this dashboard revision.
-st.caption("Dashboard build: 2026-08-11 runtime-fix")
+st.caption("Dashboard build: 2026-08-11 runtime-fix-v2")
