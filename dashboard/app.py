@@ -1,9 +1,9 @@
 """
 NSE Catalyst Trading Bot - SAFE Streamlit dashboard
 
-The page stays open while only the live status area updates.
-The dashboard supports both the new bot_runner watchdog API and older
-bot_runner deployments that expose start_bot() only.
+The dashboard must always render first. The paper worker is started
+asynchronously after the visible dashboard has been rendered so a worker
+startup/import problem can never prevent the page from opening.
 """
 
 from datetime import datetime
@@ -29,7 +29,7 @@ LIVE_TRADING = False
 TRADING_START = "09:45"
 LAST_ENTRY_TIME = "13:30"
 SQUARE_OFF_TIME = "15:00"
-SCAN_INTERVAL_SECONDS = 5
+SCAN_INTERVAL_SECONDS = 30
 
 try:
     from config.settings import (
@@ -42,6 +42,7 @@ try:
         SCAN_INTERVAL_SECONDS,
     )
 except Exception:
+    # Keep the dashboard usable even if config has a deployment problem.
     pass
 
 
@@ -105,25 +106,13 @@ def ensure_worker():
     )
 
 
-try:
-    ensure_worker()
-    bot_start_error = None
-except Exception as exc:
-    bot_start_error = f"{type(exc).__name__}: {exc}"
-
-
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 watchdog-v9")
+st.caption("Dashboard build: 2026-08-11 stable-v10")
 
 
 @st.fragment(run_every="5s")
 def live_dashboard():
     """Refresh only dashboard data; do not reload the browser page."""
-
-    try:
-        ensure_worker()
-    except Exception as exc:
-        st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
 
     now = datetime.now(INDIA_TZ)
     bot_status = read_status()
@@ -200,6 +189,13 @@ def live_dashboard():
     if scanner_status == "SCANNING":
         st.info("Scanner is actively checking the market. No trade is taken until all strategy conditions are satisfied.")
 
+    # IMPORTANT: start/watch the worker only AFTER the dashboard has rendered.
+    # A bot import/start failure therefore cannot blank the Streamlit page.
+    try:
+        ensure_worker()
+    except Exception as exc:
+        st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
+
 
 live_dashboard()
 
@@ -210,8 +206,5 @@ st.sidebar.write(f"India Time: {datetime.now(INDIA_TZ).strftime('%H:%M:%S IST')}
 st.sidebar.write(f"Scanner: {initial.get('scanner_status', 'IDLE')}")
 st.sidebar.write(f"Open Positions: {int(number(initial, 'open_positions'))}")
 st.sidebar.write(f"Daily P&L: ₹{number(initial, 'daily_pnl'):,.2f}")
-
-if bot_start_error:
-    st.sidebar.error(f"Worker start error: {bot_start_error}")
 
 st.caption("Live status refreshes inside the page; the browser itself is not meta-refreshed.")
