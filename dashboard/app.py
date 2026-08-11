@@ -16,13 +16,14 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layout="wide")
 
+# Safe defaults. These are overwritten by config.settings below.
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
 LIVE_TRADING = False
 TRADING_START = "09:45"
-LAST_ENTRY_TIME = "13:30"
+LAST_ENTRY_TIME = "14:00"
 SQUARE_OFF_TIME = "15:00"
-SCAN_INTERVAL_SECONDS = 5
+SCAN_INTERVAL_SECONDS = 30
 
 try:
     from config.settings import (
@@ -73,7 +74,7 @@ def write_dashboard_status(**updates):
 
 
 def load_fresh_bot_runner():
-    """Load bot_runner.py under a fresh module name to avoid stale Streamlit imports."""
+    """Load the current worker without relying on a cached Streamlit import."""
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
     module_name = "nse_paper_bot_runner_fresh"
@@ -86,7 +87,6 @@ def load_fresh_bot_runner():
 
 
 def _launch_worker():
-    """Start the paper worker from the current bot_runner.py without cached modules."""
     global _watchdog_thread
     with _watchdog_lock:
         if _watchdog_thread is not None and _watchdog_thread.is_alive():
@@ -125,7 +125,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v17")
+st.caption("Dashboard build: 2026-08-11 stable-v18")
 
 _launch_worker()
 bot_status = read_status()
