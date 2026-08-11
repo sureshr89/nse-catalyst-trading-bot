@@ -3,12 +3,19 @@ from datetime import datetime
 from pathlib import Path
 import importlib.util
 import json
+import sys
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Streamlit runs dashboard/app.py directly, so explicitly add the repository
+# root to sys.path before loading bot_runner.py. This lets bot_runner import
+# config.settings and main.py from the project root.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 STATUS_FILE = PROJECT_ROOT / "outputs" / "bot_status.json"
 BOT_RUNNER_FILE = PROJECT_ROOT / "bot_runner.py"
 SETTINGS_FILE = PROJECT_ROOT / "config" / "settings.py"
@@ -76,8 +83,8 @@ def get_persistent_worker():
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
 
-    # v25 forces a fresh cached worker module after the 2:00 PM entry-time fix.
-    module_name = "nse_paper_bot_runner_persistent_v25"
+    # v26 forces a fresh cached worker module after the import-path fix.
+    module_name = "nse_paper_bot_runner_persistent_v26"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
@@ -97,7 +104,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v25 — LAST ENTRY 14:00 IST")
+st.caption("Dashboard build: 2026-08-11 stable-v26 — LAST ENTRY 14:00 IST + worker import-path fix")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
