@@ -83,8 +83,8 @@ def get_persistent_worker():
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
 
-    # v27 forces a fresh cached worker module after the dashboard cleanup.
-    module_name = "nse_paper_bot_runner_persistent_v27"
+    # v28 forces a fresh cached worker module after the dashboard display cleanup.
+    module_name = "nse_paper_bot_runner_persistent_v28"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
@@ -104,7 +104,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v27 — LAST ENTRY 14:00 IST")
+st.caption("Dashboard build: 2026-08-11 stable-v28 — LAST ENTRY 14:00 IST")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
