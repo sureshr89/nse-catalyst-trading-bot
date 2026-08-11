@@ -96,7 +96,6 @@ def ensure_worker():
     if callable(watchdog):
         return watchdog()
 
-    # Older deployed bot_runner versions may only have start_bot().
     starter = getattr(bot_runner, "start_bot", None)
     if callable(starter):
         return starter()
@@ -114,7 +113,7 @@ except Exception as exc:
 
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 watchdog-v8")
+st.caption("Dashboard build: 2026-08-11 watchdog-v9")
 
 
 @st.fragment(run_every="5s")
