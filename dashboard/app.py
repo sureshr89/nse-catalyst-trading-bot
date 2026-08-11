@@ -1,39 +1,15 @@
-"""NSE Catalyst Trading Bot Dashboard."""
+"""NSE Catalyst Trading Bot - robust Streamlit dashboard."""
 
 from datetime import datetime
 from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo
 
+import streamlit as st
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-import streamlit as st
-from streamlit_autorefresh import st_autorefresh
-
-from bot_runner import start_bot, get_status
-from dashboard_utils import load_csv, format_money, format_percent, last_trades
-from metrics import calculate_metrics
-from charts import (
-    equity_curve,
-    pnl_chart,
-    win_loss_chart,
-    industry_chart,
-    capital_chart,
-    monthly_pnl_chart,
-)
-from config.settings import (
-    MARKET_OPEN,
-    MARKET_CLOSE,
-    TOTAL_CAPITAL,
-    PAPER_TRADING,
-    LIVE_TRADING,
-    TRADING_START,
-    LAST_ENTRY_TIME,
-    SQUARE_OFF_TIME,
-    SCAN_INTERVAL_SECONDS,
-)
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -43,51 +19,65 @@ st.set_page_config(
     layout="wide",
 )
 
-st_autorefresh(interval=5000, key="dashboard_refresh")
+# Keep the dashboard itself independent from optional bot/chart imports.
+# A bot-side import/runtime problem must never prevent the web page from opening.
+bot_error = None
+start_bot = None
+get_status = None
 
 try:
-    start_bot()
-except Exception:
-    pass
+    from bot_runner import start_bot as _start_bot, get_status as _get_status
+    start_bot = _start_bot
+    get_status = _get_status
+except Exception as exc:
+    bot_error = f"{type(exc).__name__}: {exc}"
 
-bot_status = get_status()
+if start_bot is not None:
+    try:
+        start_bot()
+    except Exception as exc:
+        bot_error = f"{type(exc).__name__}: {exc}"
+
+if get_status is not None:
+    try:
+        bot_status = get_status() or {}
+    except Exception as exc:
+        bot_status = {}
+        bot_error = f"{type(exc).__name__}: {exc}"
+else:
+    bot_status = {}
 
 now = datetime.now(INDIA_TZ)
-current_time = now.time()
-market_open_time = datetime.strptime(MARKET_OPEN, "%H:%M").time()
-market_close_time = datetime.strptime(MARKET_CLOSE, "%H:%M").time()
-trading_start_time = datetime.strptime(TRADING_START, "%H:%M").time()
-last_entry_time = datetime.strptime(LAST_ENTRY_TIME, "%H:%M").time()
-square_off_time = datetime.strptime(SQUARE_OFF_TIME, "%H:%M").time()
 
-market_session_active = (
-    now.weekday() < 5
-    and current_time >= trading_start_time
-    and current_time < square_off_time
-)
-scanner_window_active = (
-    now.weekday() < 5
-    and current_time >= trading_start_time
-    and current_time <= last_entry_time
-)
+# Read settings only after the page has loaded successfully.
+try:
+    from config.settings import (
+        TOTAL_CAPITAL,
+        PAPER_TRADING,
+        LIVE_TRADING,
+        TRADING_START,
+        LAST_ENTRY_TIME,
+        SQUARE_OFF_TIME,
+        SCAN_INTERVAL_SECONDS,
+    )
+except Exception:
+    TOTAL_CAPITAL = 250000
+    PAPER_TRADING = True
+    LIVE_TRADING = False
+    TRADING_START = "09:45"
+    LAST_ENTRY_TIME = "13:30"
+    SQUARE_OFF_TIME = "15:00"
+    SCAN_INTERVAL_SECONDS = 5
 
-raw_status = bot_status.get("status", "UNKNOWN")
-error_text = bot_status.get("error")
-
-if error_text:
-    status = "ERROR"
-elif market_session_active:
-    status = "RUNNING" if raw_status != "ERROR" else "ERROR"
-else:
-    status = "WAITING"
-
-scanner_status = bot_status.get("scanner_status", "IDLE") if scanner_window_active else "IDLE"
-last_scan = bot_status.get("last_scan") if scanner_window_active else None
-last_cycle = bot_status.get("last_cycle") if market_session_active else None
+status = str(bot_status.get("status", "WAITING"))
+error_text = bot_status.get("error") or bot_error
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
+st.caption("Dashboard build: 2026-08-11 runtime-fix-v3")
 
-if status == "RUNNING":
+if error_text:
+    st.error(f"Bot/runtime error: {error_text}")
+elif status == "RUNNING":
     st.success("🟢 PAPER BOT RUNNING")
 elif status == "ERROR":
     st.error("🔴 BOT ERROR")
@@ -97,143 +87,79 @@ else:
 s1, s2, s3, s4 = st.columns(4)
 s1.metric("India Time", now.strftime("%H:%M:%S"))
 s2.metric("Bot Status", status)
-s3.metric("Last Bot Cycle", str(last_cycle or "Not during session"))
-s4.metric("Last Scanner Run", str(last_scan or "Not during scanner window"))
-
-if error_text:
-    st.error(f"Bot error: {error_text}")
+s3.metric("Last Bot Cycle", str(bot_status.get("last_cycle") or "—"))
+s4.metric("Last Scanner Run", str(bot_status.get("last_scan") or "—"))
 
 with st.expander("Bot / Strategy Status", expanded=True):
     a, b, c, d = st.columns(4)
     a.write(f"**Paper Trading:** {PAPER_TRADING}")
     b.write(f"**Live Trading:** {LIVE_TRADING}")
-    c.write(f"**Scanner:** {scanner_status}")
+    c.write(f"**Scanner:** {bot_status.get('scanner_status', 'IDLE')}")
     d.write(f"**Scan Interval:** {SCAN_INTERVAL_SECONDS}s")
     st.write(
-        f"**Entry window:** {TRADING_START} → {LAST_ENTRY_TIME} IST  |  "
-        f"**Square-off:** {SQUARE_OFF_TIME} IST"
+        f"**Entry:** {TRADING_START} → {LAST_ENTRY_TIME} IST | "
+        f"**Square-off:** {SQUARE_OFF_TIME} IST | "
+        f"**Capital:** ₹{TOTAL_CAPITAL:,.0f}"
     )
 
-if now.weekday() >= 5:
-    st.warning("🟡 Weekend - Market Closed")
-elif current_time < market_open_time:
-    st.info("🟡 Waiting for Market Open")
-elif current_time >= market_close_time:
-    st.error("🔴 Market Closed")
-elif current_time > last_entry_time:
-    st.info("🟡 Entry window closed - existing positions only")
-else:
-    st.success("🟢 Indian market session")
-
-try:
-    trades = load_csv("outputs/trades.csv")
-except Exception:
-    trades = None
-
-if trades is None or trades.empty:
-    if market_session_active:
-        st.info("No completed trades yet. The bot is running and waiting for valid setups.")
-    elif status == "WAITING":
-        st.info("No completed trades yet. Bot is waiting for the next Indian market session.")
-    else:
-        st.info("No trades available yet.")
-
-    metrics = {
-        "total_trades": 0,
-        "win_rate": 0.0,
-        "total_pnl": 0.0,
-        "profit_factor": 0.0,
-        "available_capital": bot_status.get("available_capital", TOTAL_CAPITAL),
-        "used_capital": bot_status.get("used_capital", 0.0),
-        "current_equity": bot_status.get("available_capital", TOTAL_CAPITAL),
-        "winning_trades": 0,
-        "losing_trades": 0,
-        "open_positions": bot_status.get("open_positions", 0),
-        "max_drawdown": 0.0,
-    }
-else:
-    metrics = calculate_metrics(trades)
-
-if market_session_active:
-    metrics["open_positions"] = bot_status.get("open_positions", metrics.get("open_positions", 0))
-    metrics["available_capital"] = bot_status.get("available_capital", metrics.get("available_capital", TOTAL_CAPITAL))
-    metrics["used_capital"] = bot_status.get("used_capital", metrics.get("used_capital", 0.0))
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Trades", metrics["total_trades"])
-c2.metric("Win Rate", format_percent(metrics["win_rate"]))
-c3.metric("Total P&L", format_money(metrics["total_pnl"]))
-c4.metric("Profit Factor", metrics["profit_factor"])
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Available Capital", format_money(metrics["available_capital"]))
-c2.metric("Used Capital", format_money(metrics["used_capital"]))
-c3.metric("Current Equity", format_money(metrics["current_equity"]))
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Trades", "Signals", "Charts", "Capital", "Performance"])
-
-with tab1:
-    st.subheader("Latest Trades")
-    if trades is not None and not trades.empty:
-        st.dataframe(last_trades(trades, 20), width="stretch")
-    else:
-        st.info("No completed trades to display.")
-
-with tab2:
-    st.subheader("Latest Scanner Signals")
+# Runtime metrics are deliberately read defensively.
+def num(key, default=0.0):
     try:
-        signals = load_csv("outputs/signals.csv")
+        return float(bot_status.get(key, default) or default)
     except Exception:
-        signals = None
-    if signals is not None and not signals.empty:
-        st.dataframe(signals.tail(30).iloc[::-1], width="stretch")
-    else:
-        st.info("No scanner signals recorded yet.")
+        return float(default)
 
-with tab3:
-    if trades is not None and not trades.empty:
-        fig = equity_curve(trades)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-        fig = pnl_chart(trades)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("No chart data available yet.")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Available Capital", f"₹{num('available_capital', TOTAL_CAPITAL):,.2f}")
+m2.metric("Used Capital", f"₹{num('used_capital'):,.2f}")
+m3.metric("Open Positions", int(num("open_positions")))
+m4.metric("Daily P&L", f"₹{num('daily_pnl'):,.2f}")
 
-with tab4:
-    fig = capital_chart(metrics)
-    if fig is not None:
-        st.plotly_chart(fig, width="stretch")
+st.subheader("Trading Status")
+st.write(f"**Message:** {bot_status.get('message', 'Dashboard is online.')}")
+st.write(f"**Total Trades:** {int(num('total_trades'))}")
+st.write(f"**Winning Trades:** {int(num('winning_trades'))}")
+st.write(f"**Losing Trades:** {int(num('losing_trades'))}")
+st.write(f"**Journal P&L:** ₹{num('journal_pnl'):,.2f}")
 
-with tab5:
-    if trades is not None and not trades.empty:
-        fig = win_loss_chart(trades)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-        fig = industry_chart(trades)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-        fig = monthly_pnl_chart(trades)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("No performance metrics available yet.")
+# Load CSVs only after the basic page is rendered; failures cannot break the app.
+try:
+    import pandas as pd
+except Exception as exc:
+    pd = None
+    st.warning(f"Pandas unavailable: {type(exc).__name__}: {exc}")
+
+if pd is not None:
+    tab1, tab2 = st.tabs(["Trades", "Signals"])
+
+    with tab1:
+        try:
+            trades_path = PROJECT_ROOT / "outputs" / "trades.csv"
+            if trades_path.exists():
+                trades = pd.read_csv(trades_path)
+                st.dataframe(trades.tail(30).iloc[::-1], width="stretch")
+            else:
+                st.info("No completed trades yet.")
+        except Exception as exc:
+            st.warning(f"Could not load trades: {type(exc).__name__}: {exc}")
+
+    with tab2:
+        try:
+            signals_path = PROJECT_ROOT / "outputs" / "signals.csv"
+            if signals_path.exists():
+                signals = pd.read_csv(signals_path)
+                st.dataframe(signals.tail(50).iloc[::-1], width="stretch")
+            else:
+                st.info("No scanner signals recorded yet.")
+        except Exception as exc:
+            st.warning(f"Could not load signals: {type(exc).__name__}: {exc}")
 
 st.sidebar.title("Trading Summary")
 st.sidebar.write(f"**Bot:** {status}")
 st.sidebar.write(f"**India Time:** {now.strftime('%H:%M:%S IST')}")
-st.sidebar.write(f"**Last Cycle:** {last_cycle or 'Not during session'}")
-st.sidebar.write(f"**Last Scanner:** {last_scan or 'Not during scanner window'}")
-st.sidebar.write(f"**Scanner:** {scanner_status}")
-st.sidebar.write(f"**Total Trades:** {metrics['total_trades']}")
-st.sidebar.write(f"**Winning Trades:** {metrics['winning_trades']}")
-st.sidebar.write(f"**Losing Trades:** {metrics['losing_trades']}")
-st.sidebar.write(f"**Open Positions:** {metrics['open_positions']}")
-st.sidebar.write(f"**Profit Factor:** {metrics['profit_factor']}")
-st.sidebar.write(f"**Max Drawdown:** {format_money(metrics['max_drawdown'])}")
-st.sidebar.write(f"**Daily P&L:** {format_money(bot_status.get('daily_pnl', 0.0))}")
-st.sidebar.write(f"**Dashboard Refresh:** {now.strftime('%H:%M:%S IST')}")
+st.sidebar.write(f"**Scanner:** {bot_status.get('scanner_status', 'IDLE')}")
+st.sidebar.write(f"**Open Positions:** {int(num('open_positions'))}")
+st.sidebar.write(f"**Daily P&L:** ₹{num('daily_pnl'):,.2f}")
 
-# Deployment marker: confirms Streamlit is serving this dashboard revision.
-st.caption("Dashboard build: 2026-08-11 runtime-fix-v2")
+# Auto-refresh without depending on streamlit-autorefresh.
+st.markdown("<meta http-equiv='refresh' content='5'>", unsafe_allow_html=True)
