@@ -60,9 +60,6 @@ trading_start_time = datetime.strptime(TRADING_START, "%H:%M").time()
 last_entry_time = datetime.strptime(LAST_ENTRY_TIME, "%H:%M").time()
 square_off_time = datetime.strptime(SQUARE_OFF_TIME, "%H:%M").time()
 
-# The dashboard must derive the session state from the real IST clock.
-# This prevents a stale bot_status.json from making a closed-market session
-# appear to be RUNNING or from showing a fake scanner timestamp.
 market_session_active = (
     now.weekday() < 5
     and current_time >= trading_start_time
@@ -237,3 +234,6 @@ st.sidebar.write(f"**Profit Factor:** {metrics['profit_factor']}")
 st.sidebar.write(f"**Max Drawdown:** {format_money(metrics['max_drawdown'])}")
 st.sidebar.write(f"**Daily P&L:** {format_money(bot_status.get('daily_pnl', 0.0))}")
 st.sidebar.write(f"**Dashboard Refresh:** {now.strftime('%H:%M:%S IST')}")
+
+# Deployment marker: confirms Streamlit is serving this dashboard revision.
+st.caption("Dashboard build: 2026-08-11 runtime-fix")
