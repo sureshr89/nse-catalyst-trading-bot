@@ -3,7 +3,6 @@ from datetime import datetime
 from pathlib import Path
 import importlib.util
 import json
-import threading
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -17,7 +16,6 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layout="wide")
 
-# Safe defaults; replaced by the exact repository settings file below.
 TOTAL_CAPITAL = 250000
 PAPER_TRADING = True
 LIVE_TRADING = False
@@ -42,9 +40,6 @@ try:
     SCAN_INTERVAL_SECONDS = int(settings.SCAN_INTERVAL_SECONDS)
 except Exception as exc:
     SETTINGS_LOAD_ERROR = f"{type(exc).__name__}: {exc}"
-
-_watchdog_lock = threading.Lock()
-_watchdog_thread = None
 
 
 def number(data, key, default=0.0):
@@ -72,65 +67,62 @@ def read_status():
         }
 
 
-def load_fresh_bot_runner():
+@st.cache_resource(show_spinner=False)
+def get_persistent_worker():
+    """Load bot_runner once per Streamlit server process.
+
+    Streamlit reruns the script every few seconds. Keeping the runner in a
+    cache_resource prevents each rerun from creating a brand-new bot module
+    and worker thread.
+    """
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
-    module_name = "nse_paper_bot_runner_fresh"
+
+    module_name = "nse_paper_bot_runner_persistent"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
+
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+
+    starter = getattr(module, "ensure_bot_running", None)
+    if not callable(starter):
+        raise RuntimeError("Current bot_runner.py does not provide ensure_bot_running().")
+
+    starter()
     return module
-
-
-def _launch_worker():
-    global _watchdog_thread
-    with _watchdog_lock:
-        if _watchdog_thread is not None and _watchdog_thread.is_alive():
-            return
-
-        def target():
-            try:
-                bot_runner = load_fresh_bot_runner()
-                starter = getattr(bot_runner, "start_bot", None)
-                if not callable(starter):
-                    raise RuntimeError("Current bot_runner.py does not provide start_bot().")
-                starter()
-            except Exception as exc:
-                try:
-                    payload = read_status()
-                    if not payload.get("worker_alive"):
-                        payload.update({
-                            "status": "ERROR",
-                            "message": "Dashboard is online, but the paper worker could not start.",
-                            "worker_alive": False,
-                            "error": f"{type(exc).__name__}: {exc}",
-                            "scanner_status": "IDLE",
-                        })
-                        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                        with open(STATUS_FILE, "w", encoding="utf-8") as f:
-                            json.dump(payload, f, indent=2, default=str)
-                except Exception:
-                    pass
-
-        _watchdog_thread = threading.Thread(
-            target=target, name="paper-bot-watchdog", daemon=True
-        )
-        _watchdog_thread.start()
 
 
 st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption("Dashboard build: 2026-08-11 stable-v19")
+st.caption("Dashboard build: 2026-08-11 stable-v20")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
 
-_launch_worker()
+# Keep exactly one persistent worker module across Streamlit reruns.
+try:
+    worker_module = get_persistent_worker()
+    try:
+        worker_module.ensure_bot_running()
+    except Exception as exc:
+        st.error(f"Worker watchdog error: {type(exc).__name__}: {exc}")
+except Exception as exc:
+    worker_module = None
+    st.error(f"Paper worker could not start: {type(exc).__name__}: {exc}")
+
 bot_status = read_status()
+if worker_module is not None:
+    try:
+        live_status = worker_module.get_status()
+        if isinstance(live_status, dict):
+            bot_status.update(live_status)
+    except Exception as exc:
+        st.warning(f"Could not read live worker status: {type(exc).__name__}: {exc}")
+
 status = str(bot_status.get("status", "STARTING"))
 worker_alive = bool(bot_status.get("worker_alive", False))
 scanner_status = str(bot_status.get("scanner_status", "IDLE"))
