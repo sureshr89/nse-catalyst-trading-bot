@@ -886,68 +886,75 @@ class TradingBot:
         )
 
         if not symbols:
-
             return
 
         print()
         print("=" * 100)
-        print(
-            "MANDATORY 15:00 SQUARE-OFF"
-        )
+        print("MANDATORY 15:00 SQUARE-OFF")
         print("=" * 100)
 
         for symbol in symbols:
 
-            candle = (
-                self.latest_1m_candle(
-                    symbol
-                )
-            )
-
-            if candle is None:
-
-                print(
-                    symbol,
-                    ": unable to obtain "
-                    "completed 1-minute candle."
-                )
-
+            position = self.paper_engine.open_positions.get(symbol)
+            if position is None:
                 continue
 
-            closed_trade = (
-                self.paper_engine.process_candle(
-                    symbol,
-                    candle
-                )
+            # Mandatory square-off must NOT depend on a completed candle.
+            # First try the latest completed candle; if unavailable, use the
+            # latest available 1-minute close. This guarantees the position
+            # is closed at/after 15:00 instead of being left open.
+            candle = self.latest_1m_candle(symbol)
+            exit_price = None
+            exit_time = datetime.now()
+
+            if candle is not None:
+                exit_price = candle.get("Close", candle.get("close"))
+                exit_time = candle.get("Datetime", candle.get("datetime")) or exit_time
+
+            if exit_price is None:
+                try:
+                    df = self.price_data.get_1m(symbol)
+                    if df is not None and not df.empty:
+                        row = df.iloc[-1]
+                        exit_price = row.get("Close", row.get("close"))
+                        exit_time = row.get("Datetime", row.get("datetime")) or row.name or exit_time
+                except Exception as error:
+                    print(symbol, "latest price fallback error:", error)
+
+            if exit_price is None:
+                print(symbol, ": NO EXIT PRICE AVAILABLE; position remains protected for retry.")
+                continue
+
+            try:
+                exit_price = float(exit_price)
+            except (TypeError, ValueError):
+                print(symbol, ": invalid square-off price:", exit_price)
+                continue
+
+            closed_trade = self.paper_engine.close_position(
+                symbol,
+                exit_price,
+                exit_time,
+                "SQUARE_OFF"
             )
 
             if closed_trade is None:
                 continue
 
-            pnl = float(
-                closed_trade.get(
-                    "pnl",
-                    0
-                )
-            )
-
+            pnl = float(closed_trade.get("pnl", 0) or 0)
             self.daily_pnl += pnl
 
-            self.journal.log_trade(
-                closed_trade
-            )
+            save_result = self.journal.log_trade(closed_trade)
 
             print(
                 symbol,
                 "SQUARE_OFF",
-                "Exit:",
-                closed_trade.get(
-                    "exit_price"
-                ),
-                "P&L:",
-                pnl
+                "Exit:", closed_trade.get("exit_price"),
+                "P&L:", pnl,
+                "Journal Saved:", save_result.get("saved", False)
             )
 
+        print("Remaining Open Positions:", len(self.paper_engine.open_positions))
         print("=" * 100)
 
     # ============================================================
