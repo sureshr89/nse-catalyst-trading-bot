@@ -27,15 +27,22 @@ class SectorStore:
         except Exception:
             return None
 
+    @staticmethod
+    def _today_key():
+        return datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
+
     def prepare(self, force=False):
         if self.universe.empty or "Symbol" not in self.universe.columns:
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
 
+        today = self._today_key()
         if not force and self.path.exists():
             try:
                 cached = pd.read_csv(self.path)
-                required = {"Symbol", "Sector"}
-                if required.issubset(cached.columns) and len(cached) >= max(1, int(len(self.universe) * 0.8)):
+                required = {"Symbol", "Sector", "PreparedAtIST"}
+                prepared_dates = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce") if "PreparedAtIST" in cached.columns else pd.Series(dtype="datetime64[ns]")
+                cache_is_today = bool(not prepared_dates.empty and prepared_dates.dt.strftime("%Y-%m-%d").eq(today).any())
+                if required.issubset(cached.columns) and cache_is_today and len(cached) >= max(1, int(len(self.universe) * 0.8)):
                     return cached
             except Exception:
                 pass
@@ -70,14 +77,4 @@ class SectorStore:
         return result
 
     def load(self):
-        if not self.path.exists():
-            return self.prepare()
-        try:
-            df = pd.read_csv(self.path)
-            if "Symbol" not in df.columns or "Sector" not in df.columns:
-                return self.prepare(force=True)
-            if "SectorSource" not in df.columns:
-                df["SectorSource"] = "UNKNOWN"
-            return df
-        except Exception:
-            return self.prepare(force=True)
+        return self.prepare()
