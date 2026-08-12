@@ -33,7 +33,9 @@ MIN_RR_RATIO = 1.5
 
 TOTAL_CAPITAL = 250000
 MAX_RISK_PER_TRADE = 1500
-MIN_REQUIRED_RISK = 1
+# Do not accept a tiny fraction of the risk budget. The actual risk must be
+# at least 90% of ₹1,500 (₹1,350) and must never exceed ₹1,500.
+MIN_REQUIRED_RISK = 1350
 RISK_PERCENT = 0.6
 
 MAX_TRADES_PER_STOCK = 1
