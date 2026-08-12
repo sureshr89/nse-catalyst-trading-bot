@@ -260,6 +260,70 @@ def _patch_bot_for_ist(bot):
 
     bot.paper_engine.open_trade = MethodType(open_trade_safe, bot.paper_engine)
 
+    original_force_square_off = bot.force_square_off
+
+    def force_square_off_ist(self):
+        symbols = list(self.paper_engine.open_positions.keys())
+        if not symbols:
+            return
+
+        print()
+        print("=" * 100)
+        print("MANDATORY 15:00 SQUARE-OFF")
+        print("=" * 100)
+
+        exit_time = _now()
+
+        for symbol in symbols:
+            candle = None
+            try:
+                candle = self.price_data.latest_candle(symbol, "1m")
+            except Exception as error:
+                print(symbol, "1-minute square-off data error:", error)
+
+            if candle is None:
+                try:
+                    candle = self.price_data.latest_candle(symbol, "5m")
+                except Exception as error:
+                    print(symbol, "5-minute square-off data error:", error)
+
+            if candle is None:
+                print(symbol, ": no market price available for mandatory square-off.")
+                continue
+
+            try:
+                exit_price = float(candle.get("Close"))
+            except (TypeError, ValueError):
+                print(symbol, ": invalid square-off close price.")
+                continue
+
+            closed_trade = self.paper_engine.close_position(
+                symbol,
+                exit_price,
+                exit_time,
+                "SQUARE_OFF"
+            )
+
+            if closed_trade is None:
+                continue
+
+            pnl = float(closed_trade.get("pnl", 0) or 0)
+            self.daily_pnl += pnl
+            self.journal.log_trade(closed_trade)
+
+            print(
+                symbol,
+                "SQUARE_OFF",
+                "Exit:",
+                closed_trade.get("exit_price"),
+                "P&L:",
+                pnl
+            )
+
+        print("=" * 100)
+
+    bot.force_square_off = MethodType(force_square_off_ist, bot)
+
 
 def _run_one_trading_day():
     # Lazy import: dashboard startup is independent from trading dependencies.
