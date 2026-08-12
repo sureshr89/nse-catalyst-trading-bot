@@ -30,6 +30,7 @@ from config.settings import (
     MIN_REQUIRED_RISK,
     RISK_PERCENT,
     MAX_TRADES_PER_STOCK,
+    MIN_RR_RATIO,
 )
 
 
@@ -502,6 +503,26 @@ class RiskEngine:
         ]
 
         # --------------------------------------------------------
+        # MINIMUM RISK : REWARD
+        #
+        # Every new setup must provide at least 1:1.5.
+        # --------------------------------------------------------
+
+        if signal == "BUY":
+            reward_per_share = target - entry
+        else:
+            reward_per_share = entry - target
+
+        reward = reward_per_share * quantity
+        rr_ratio = (reward / actual_risk) if actual_risk > 0 else 0.0
+
+        if rr_ratio < float(MIN_RR_RATIO):
+            reasons.append(
+                f"Risk:Reward {rr_ratio:.2f} is below minimum "
+                f"1:{float(MIN_RR_RATIO):.1f}"
+            )
+
+        # --------------------------------------------------------
         # MINIMUM RISK
         # --------------------------------------------------------
 
@@ -616,6 +637,15 @@ class RiskEngine:
 
             "actual_risk":
                 actual_risk,
+
+            "reward":
+                round(reward, 2),
+
+            "rr":
+                round(rr_ratio, 4),
+
+            "min_rr_ratio":
+                float(MIN_RR_RATIO),
 
             "position_value":
                 position_value,
