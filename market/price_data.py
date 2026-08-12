@@ -15,6 +15,7 @@ class PriceData:
         self.download_timeout = 10
         self.batch_size = 25
         self.max_workers = 4
+        self.batch_retries = 1
 
     def yahoo_symbol(self, symbol):
         symbol = str(symbol).strip().upper()
@@ -131,9 +132,23 @@ class PriceData:
                     raw = future.result()
                 except Exception as error:
                     print("Yahoo batch worker failed:", error)
-                    continue
+                    raw = pd.DataFrame()
+
+                # A transient Yahoo failure used to discard the entire 25-stock
+                # batch for that scan. Retry the failed batch once before giving
+                # up so one temporary request failure does not hide valid setups.
+                if raw is None or raw.empty:
+                    for attempt in range(self.batch_retries):
+                        print("Retrying Yahoo batch", len(batch), "stocks", "attempt", attempt + 1)
+                        raw = self._download_multi_batch(
+                            [f"{s}.NS" for s in batch], "1m", "1d"
+                        )
+                        if raw is not None and not raw.empty:
+                            break
+
                 if raw is not None and not raw.empty:
                     raw_frames.append((batch, raw))
+
         result = {}
         for batch, raw in raw_frames:
             tickers = [f"{s}.NS" for s in batch]
