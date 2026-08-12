@@ -68,16 +68,16 @@ class TradingBot:
             if df.empty or "pnl" not in df.columns or "exit_time" not in df.columns:
                 return 0.0
 
-            exits = pd.to_datetime(df["exit_time"], errors="coerce", utc=True)
+            raw_exits = pd.to_datetime(df["exit_time"], errors="coerce")
             today = self._now().date()
             pnl = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
 
-            # If timestamps are timezone-naive, compare their date directly;
-            # otherwise convert to IST before extracting the date.
-            try:
-                dates = exits.dt.tz_convert(INDIA_TZ).dt.date
-            except Exception:
-                dates = exits.dt.date
+            # Journal timestamps without an offset are stored as IST. Aware
+            # timestamps are converted to IST before the date is compared.
+            if getattr(raw_exits.dt, "tz", None) is None:
+                dates = raw_exits.dt.date
+            else:
+                dates = raw_exits.dt.tz_convert(INDIA_TZ).dt.date
 
             closed_mask = dates == today
             if "status" in df.columns:
@@ -151,8 +151,6 @@ class TradingBot:
         if key in self.processed_signals:
             return
 
-        # Do not mark it processed until the risk gate has been evaluated.
-        # This lets a transient execution failure be retried safely.
         if self.daily_limit_reached() or self.cooldown_active():
             return
         if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
@@ -162,9 +160,11 @@ class TradingBot:
 
         risk_result = self.risk_engine.approve_trade(signal)
         self.log_signal(signal, risk_result)
-        self.processed_signals.add(key)
 
         if not risk_result.get("approved", False):
+            # A rejected signal is complete; do not evaluate the same scanner
+            # event repeatedly during subsequent 30-second scans.
+            self.processed_signals.add(key)
             print("Risk rejected", symbol, risk_result.get("reasons", []))
             return
 
@@ -175,7 +175,8 @@ class TradingBot:
         open_result = self.paper_engine.open_trade(approved_trade)
         if not open_result.get("opened", False):
             # RiskEngine registers an accepted trade before PaperTradeEngine
-            # opens it. Roll that registration back if execution fails.
+            # opens it. Roll that registration back and leave the signal
+            # unprocessed so a transient execution failure can be retried.
             try:
                 count = self.risk_engine.get_trade_count(symbol)
                 if count > 0:
@@ -185,6 +186,7 @@ class TradingBot:
             print("Paper trade not opened:", symbol, open_result.get("reason", ""))
             return
 
+        self.processed_signals.add(key)
         position = open_result["position"]
         position = self._attach_trade_context(position, approved_trade)
         position["status"] = "OPEN"
@@ -247,9 +249,6 @@ class TradingBot:
         if df is None or df.empty:
             return None
 
-        # yfinance can include the currently forming row. Only use a row that
-        # has a subsequent row, otherwise a completed-only feed would lose the
-        # newest bar. The timestamp is checked against the current minute.
         frame = df.copy()
         try:
             index = pd.to_datetime(frame.index, errors="coerce")
@@ -267,7 +266,6 @@ class TradingBot:
                 if last_time >= current_minute:
                     frame = frame.iloc[:-1]
         except Exception:
-            # If timestamp inspection fails, conservatively use the previous row.
             if len(frame) > 1:
                 frame = frame.iloc[:-1]
 
@@ -328,8 +326,6 @@ class TradingBot:
                 exit_price = candle.get("Close", candle.get("close"))
                 exit_time = candle.get("Datetime", candle.get("datetime")) or exit_time
 
-            # If no completed candle is available, use the newest available
-            # market row so a 15:00 square-off is not silently skipped.
             if exit_price is None:
                 try:
                     df = self.price_data.get_1m(symbol)
@@ -378,8 +374,6 @@ class TradingBot:
     def run_cycle(self):
         now = self.current_time()
 
-        # Square-off is checked first so no new entry can be created at/after
-        # 15:00, and the operation happens exactly once per bot instance.
         if now >= SQUARE_OFF_TIME:
             if not self.square_off_done:
                 self.force_square_off()
@@ -387,7 +381,6 @@ class TradingBot:
             self.display_status()
             return
 
-        # Manage existing positions before looking for a new entry.
         self.monitor_open_positions()
         if self.current_time() < SQUARE_OFF_TIME:
             self.scan_for_entries()
@@ -408,8 +401,6 @@ class TradingBot:
             while self.running:
                 self.run_cycle()
                 if self.current_time() >= SQUARE_OFF_TIME:
-                    # A square-off retry is needed only when an exit price was
-                    # temporarily unavailable. Otherwise the day is complete.
                     if not self.paper_engine.open_positions:
                         break
                 time.sleep(max(1, int(SCAN_INTERVAL_SECONDS)))
