@@ -10,9 +10,6 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# Streamlit runs dashboard/app.py directly, so explicitly add the repository
-# root to sys.path before loading bot_runner.py. This lets bot_runner import
-# config.settings and main.py from the project root.
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -78,7 +75,6 @@ def read_status():
 
 
 def heartbeat_is_fresh(heartbeat, max_age_seconds=90):
-    """Treat a recent heartbeat as evidence of a worker in another process."""
     if not heartbeat:
         return False
     try:
@@ -93,24 +89,17 @@ def heartbeat_is_fresh(heartbeat, max_age_seconds=90):
 
 @st.cache_resource(show_spinner=False)
 def get_persistent_worker():
-    """Load bot_runner once per Streamlit server process."""
     if not BOT_RUNNER_FILE.exists():
         raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
-
-    # v29 forces a fresh cached worker module after the cross-process
-    # heartbeat/status fix.
     module_name = "nse_paper_bot_runner_persistent_v29"
     spec = importlib.util.spec_from_file_location(module_name, BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:
         raise ImportError("Could not create a loader for bot_runner.py")
-
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-
     starter = getattr(module, "ensure_bot_running", None)
     if not callable(starter):
         raise RuntimeError("Current bot_runner.py does not provide ensure_bot_running().")
-
     starter()
     return module
 
@@ -139,8 +128,6 @@ if worker_module is not None:
     try:
         live_status = worker_module.get_status()
         if isinstance(live_status, dict):
-            # Preserve the disk heartbeat/worker identity when the real worker
-            # is running in a different Streamlit server process.
             local_alive = bool(live_status.get("worker_alive", False))
             bot_status.update(live_status)
             if not local_alive:
@@ -159,7 +146,6 @@ scanner_status = str(bot_status.get("scanner_status", "IDLE"))
 
 effective_start = TRADING_START
 effective_entry = LAST_ENTRY_TIME
-# Explicit safety guard: this dashboard must never display the old 13:30 cutoff.
 if effective_entry != "14:00":
     effective_entry = "14:00"
 effective_square = SQUARE_OFF_TIME
@@ -188,10 +174,7 @@ with st.expander("Bot / Strategy Status", expanded=True):
     b.write(f"Live Trading: {LIVE_TRADING}")
     c.write(f"Scanner: {scanner_status}")
     d.write(f"Scan Interval: {effective_scan}s")
-    st.write(
-        f"Entry: {effective_start} → {effective_entry} IST | "
-        f"Square-off: {effective_square} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}"
-    )
+    st.write(f"Entry: {effective_start} → {effective_entry} IST | Square-off: {effective_square} IST | Capital: ₹{TOTAL_CAPITAL:,.0f}")
     st.write(f"Worker ID: {bot_status.get('worker_id') or '—'}")
 
 m1, m2, m3, m4 = st.columns(4)
@@ -235,4 +218,4 @@ st.sidebar.write(f"Daily P&L: ₹{number(bot_status, 'daily_pnl'):,.2f}")
 st.sidebar.write(f"Worker: {'ALIVE' if worker_alive else 'STARTING/STOPPED'}")
 st.sidebar.write(f"Dashboard Refresh: {now.strftime('%H:%M:%S IST')}")
 st.sidebar.divider()
-st.sidebar.page_link("analysis.py", label="📊 Analysis", icon="📊")
+st.sidebar.page_link("pages/analysis.py", label="📊 Analysis", icon="📊")
