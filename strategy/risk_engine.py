@@ -45,22 +45,16 @@ class RiskEngine:
 
     @staticmethod
     def _entry_date_ist(value):
-        """Convert journal timestamps to their India date before enforcing daily limits."""
+        """Interpret naive journal timestamps as IST; convert aware timestamps to IST."""
         try:
-            parsed = pd.to_datetime(value, errors="coerce", utc=True)
+            parsed = pd.to_datetime(value, errors="coerce")
             if pd.isna(parsed):
                 return None
+            if getattr(parsed, "tzinfo", None) is None:
+                return parsed.date()
             return parsed.tz_convert(INDIA_TZ).date()
         except Exception:
-            try:
-                parsed = pd.to_datetime(value, errors="coerce")
-                if pd.isna(parsed):
-                    return None
-                if getattr(parsed, "tzinfo", None) is not None:
-                    return parsed.tz_convert(INDIA_TZ).date()
-                return parsed.date()
-            except Exception:
-                return None
+            return None
 
     def restore_today_trade_counts(self):
         """Restore today's accepted entries so a restart cannot reset stock limits."""
@@ -81,7 +75,6 @@ class RiskEngine:
                 if key:
                     self.trade_counts[key] = self.trade_counts.get(key, 0) + 1
         except Exception:
-            # A malformed journal must never crash the worker; the normal gate still applies.
             self.trade_counts = {}
 
     def get_trade_count(self, symbol):
@@ -152,8 +145,6 @@ class RiskEngine:
         if risk_per_share <= 0:
             return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Invalid risk per share"]}
 
-        # Use the largest whole quantity that stays at or below ₹1,500 risk.
-        # Capital remains a second gate.
         max_risk_qty = int(self.max_risk_per_trade // risk_per_share)
         capital_qty = int(self.total_capital // entry)
         quantity = min(max_risk_qty, capital_qty)
