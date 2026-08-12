@@ -1,4 +1,8 @@
 from datetime import datetime
+import json
+import os
+
+from papertrade.persistent_storage import restore_json, sync_json
 
 from config.settings import (
     PAPER_TRADING,
@@ -53,6 +57,50 @@ class PaperTradeEngine:
         self.total_capital = TOTAL_CAPITAL
         self.available_capital = TOTAL_CAPITAL
         self.used_capital = 0
+
+        # Restore durable runtime state after Streamlit/container restart.
+        self._restore_state()
+
+    def _state_path(self):
+        return os.path.join("outputs", "paper_engine_state.json")
+
+    def _restore_state(self):
+        path = self._state_path()
+        repo_path = path.replace(os.sep, "/")
+        try:
+            restore_json(path, repo_path)
+            if not os.path.exists(path):
+                return
+            with open(path, "r", encoding="utf-8") as file:
+                state = json.load(file)
+            self.open_positions = state.get("open_positions", {}) or {}
+            self.closed_positions = state.get("closed_positions", []) or []
+            self.trade_counter = int(state.get("trade_counter", 0) or 0)
+            self.total_capital = float(state.get("total_capital", TOTAL_CAPITAL) or TOTAL_CAPITAL)
+            self.available_capital = float(state.get("available_capital", TOTAL_CAPITAL) or TOTAL_CAPITAL)
+            self.used_capital = float(state.get("used_capital", 0) or 0)
+            print(f"Persistent paper state restored: {len(self.open_positions)} open position(s)")
+        except Exception as error:
+            print(f"Paper state restore skipped: {type(error).__name__}: {error}")
+
+    def _save_state(self):
+        path = self._state_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        state = {
+            "open_positions": self.open_positions,
+            "closed_positions": self.closed_positions,
+            "trade_counter": self.trade_counter,
+            "total_capital": self.total_capital,
+            "available_capital": self.available_capital,
+            "used_capital": self.used_capital,
+            "saved_at": datetime.now().isoformat(),
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump(state, file, ensure_ascii=False, indent=2, default=str)
+            sync_json(path, path.replace(os.sep, "/"), "Persist paper trading runtime state")
+        except Exception as error:
+            print(f"Paper state sync skipped: {type(error).__name__}: {error}")
 
     # ============================================================
     # TIME HELPERS
@@ -500,6 +548,8 @@ class PaperTradeEngine:
         self.used_capital += position_value
         self.available_capital -= position_value
 
+        self._save_state()
+
         return {
 
             "opened":
@@ -630,6 +680,8 @@ class PaperTradeEngine:
         del self.open_positions[
             symbol
         ]
+
+        self._save_state()
 
         return closed
 
