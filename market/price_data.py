@@ -17,6 +17,18 @@ class PriceData:
         symbol = str(symbol).strip().upper()
         return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
 
+    @staticmethod
+    def _to_ist(series):
+        """Convert Yahoo timestamps to timezone-aware India time."""
+        values = pd.to_datetime(series, errors="coerce")
+        try:
+            if getattr(values.dt, "tz", None) is None:
+                # Yahoo may return naive timestamps representing exchange-local time.
+                return values.dt.tz_localize("Asia/Kolkata")
+            return values.dt.tz_convert("Asia/Kolkata")
+        except Exception:
+            return values
+
     def _clean_data(self, df):
         if df is None or df.empty:
             return pd.DataFrame()
@@ -37,7 +49,7 @@ class PriceData:
         required = ["Datetime", "Open", "High", "Low", "Close"]
         if any(c not in data.columns for c in required):
             return pd.DataFrame()
-        data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
+        data["Datetime"] = self._to_ist(data["Datetime"])
         for c in ["Open", "High", "Low", "Close", "Volume"]:
             if c in data.columns:
                 data[c] = pd.to_numeric(data[c], errors="coerce")
@@ -155,7 +167,7 @@ class PriceData:
         if df is None or df.empty:
             return pd.DataFrame()
         result = df.copy()
-        result["Datetime"] = pd.to_datetime(result["Datetime"], errors="coerce")
+        result["Datetime"] = self._to_ist(result["Datetime"])
         result = result.dropna(subset=["Datetime"])
         if result.empty:
             return pd.DataFrame()
