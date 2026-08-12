@@ -1,5 +1,14 @@
 """NIFTY 100 Gap-Failure + Open-Reclaim paper trading strategy."""
 
+# All bot time comparisons use India Standard Time (IST), even when the
+# hosting environment itself is configured for UTC.
+import os
+import time
+
+os.environ["TZ"] = "Asia/Kolkata"
+if hasattr(time, "tzset"):
+    time.tzset()
+
 STOCK_UNIVERSE = "NIFTY_100"
 MAX_STOCKS = 100
 MARKET_OPEN = "09:15"
