@@ -1,0 +1,51 @@
+name: One-time square-off patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/squareoff_patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch square-off only
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('bot_runner.py')
+          text = path.read_text(encoding='utf-8')
+
+          start = text.find('def _patch_bot_for_ist(bot):')
+          end = text.find('\n\ndef _run_one_trading_day():', start)
+          if start < 0 or end < 0:
+              raise SystemExit('Could not locate bot runner patch section')
+
+          old = text[start:end]
+          if 'def force_square_off_ist' in old:
+              raise SystemExit('Square-off patch already present')
+
+          new_method = '''    original_force_square_off = bot.force_square_off\n\n    def force_square_off_ist(self):\n        symbols = list(self.paper_engine.open_positions.keys())\n        if not symbols:\n            return\n\n        print()\n        print("=" * 100)\n        print("MANDATORY 15:00 SQUARE-OFF")\n        print("=" * 100)\n\n        exit_time = _now()\n\n        for symbol in symbols:\n            candle = None\n            try:\n                candle = self.price_data.latest_candle(symbol, "1m")\n            except Exception as error:\n                print(symbol, "1-minute square-off data error:", error)\n\n            if candle is None:\n                try:\n                    candle = self.price_data.latest_candle(symbol, "5m")\n                except Exception as error:\n                    print(symbol, "5-minute square-off data error:", error)\n\n            if candle is None:\n                print(symbol, ": no market price available for mandatory square-off.")\n                continue\n\n            try:\n                exit_price = float(candle.get("Close"))\n            except (TypeError, ValueError):\n                print(symbol, ": invalid square-off close price.")\n                continue\n\n            closed_trade = self.paper_engine.close_position(\n                symbol,\n                exit_price,\n                exit_time,\n                "SQUARE_OFF"\n            )\n\n            if closed_trade is None:\n                continue\n\n            pnl = float(closed_trade.get("pnl", 0) or 0)\n            self.daily_pnl += pnl\n            self.journal.log_trade(closed_trade)\n\n            print(\n                symbol,\n                "SQUARE_OFF",\n                "Exit:",\n                closed_trade.get("exit_price"),\n                "P&L:",\n                pnl\n            )\n\n        print("=" * 100)\n\n    bot.force_square_off = MethodType(force_square_off_ist, bot)\n'''
+
+          new = old + '\n' + new_method
+          text = text[:start] + new + text[end:]
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bot_runner.py .github/workflows/squareoff_patch.yml
+          git rm .github/workflows/squareoff_patch.yml
+          git commit -m 'Fix mandatory 15:00 paper square-off'
+          git push
