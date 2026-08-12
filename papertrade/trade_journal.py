@@ -12,10 +12,10 @@ from papertrade.persistent_storage import restore, sync
 
 class TradeJournal:
     TRADE_COLUMNS = [
-        "trade_id", "symbol", "industry", "signal",
+        "trade_id", "symbol", "stock", "industry", "signal", "buy_sell",
         "entry_time", "entry", "stop_loss", "target", "quantity",
-        "exit_time", "exit_price", "exit_reason", "pnl",
-        "risk_per_share", "actual_risk", "position_value",
+        "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr",
+        "pnl", "risk_per_share", "actual_risk", "position_value",
         "breakout_level", "market_direction", "industry_direction",
         "stock_direction", "status",
     ]
@@ -45,6 +45,19 @@ class TradeJournal:
             if directory:
                 os.makedirs(directory, exist_ok=True)
             if not os.path.exists(path):
+                with open(path, "w", newline="", encoding="utf-8") as file:
+                    csv.DictWriter(file, fieldnames=columns).writeheader()
+                continue
+            # Migrate existing CSVs without deleting historical data.
+            try:
+                df = pd.read_csv(path)
+                missing = [column for column in columns if column not in df.columns]
+                if missing:
+                    for column in missing:
+                        df[column] = ""
+                    df = df.reindex(columns=columns)
+                    df.to_csv(path, index=False)
+            except (FileNotFoundError, pd.errors.EmptyDataError):
                 with open(path, "w", newline="", encoding="utf-8") as file:
                     csv.DictWriter(file, fieldnames=columns).writeheader()
 
@@ -81,13 +94,16 @@ class TradeJournal:
             df = pd.read_csv(self.trade_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             df = pd.DataFrame(columns=self.TRADE_COLUMNS)
-        if "trade_id" not in df.columns:
-            df = pd.DataFrame(columns=self.TRADE_COLUMNS)
+        for column in self.TRADE_COLUMNS:
+            if column not in df.columns:
+                df[column] = ""
         mask = df["trade_id"].astype(str).str.strip() == trade_id if not df.empty else pd.Series(dtype=bool)
         if not df.empty and bool(mask.any()):
             idx = df.index[mask][0]
             for column in self.TRADE_COLUMNS:
-                df.at[idx, column] = row[column]
+                # Preserve existing values when an OPEN update does not yet have exit data.
+                if row[column] != "" or column not in {"exit_time", "exit_price", "exit_reason", "pnl"}:
+                    df.at[idx, column] = row[column]
         else:
             df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         df = df.reindex(columns=self.TRADE_COLUMNS)
