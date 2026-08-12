@@ -1,11 +1,20 @@
 """NIFTY 100 Gap-Failure + Open-Reclaim scanner."""
+
 import pandas as pd
-from data.stock_universe import StockUniverse
+
+from config.settings import (
+    REQUIRE_MARKET_ALIGNMENT,
+    REQUIRE_SECTOR_ALIGNMENT,
+    REQUIRE_STOCK_ALIGNMENT,
+    TRADING_START,
+    LAST_ENTRY_TIME,
+    RISK_REWARD_RATIO,
+)
 from data.reference_store import ReferenceStore
 from data.sector_store import SectorStore
+from data.stock_universe import StockUniverse
 from market.price_data import PriceData
 from strategy.gap_reclaim_engine import GapReclaimEngine
-from config.settings import TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO
 
 
 class ScannerEngine:
@@ -19,7 +28,7 @@ class ScannerEngine:
         self._prepared_date = None
 
     def prepare_reference_data(self, force=False):
-        """Prepare PDC/previous-day direction and sector mapping before entries."""
+        """Prepare PDC/previous-day direction and sector mapping once per IST date."""
         today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
         if not force and self._prepared_date == today and not self.references.empty:
             return self.references
@@ -34,13 +43,16 @@ class ScannerEngine:
     def _direction(df):
         if df is None or df.empty:
             return "UNKNOWN"
-        # Alignment uses the latest completed candle only.
         completed = df.iloc[:-1] if len(df) > 1 else df
         if completed.empty:
             return "UNKNOWN"
         day_open = float(completed.iloc[0]["Open"])
         close = float(completed.iloc[-1]["Close"])
-        return "BULLISH" if close > day_open else "BEARISH" if close < day_open else "NEUTRAL"
+        if close > day_open:
+            return "BULLISH"
+        if close < day_open:
+            return "BEARISH"
+        return "NEUTRAL"
 
     def _nifty100_direction(self):
         return self._direction(self.price_data.get_index_1m("^CNX100"))
@@ -80,7 +92,7 @@ class ScannerEngine:
         print("Stocks Loaded:", len(symbols))
         nifty_direction = self._nifty100_direction()
         print("NIFTY 100 Direction:", nifty_direction)
-        if nifty_direction not in {"BULLISH", "BEARISH"}:
+        if REQUIRE_MARKET_ALIGNMENT and nifty_direction not in {"BULLISH", "BEARISH"}:
             print("NIFTY 100 is neutral/unavailable. No new trades.")
             return []
 
@@ -97,10 +109,12 @@ class ScannerEngine:
             ref = reference_by_symbol.get(symbol)
             if not ref:
                 continue
+
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
-            if sector_direction == "UNKNOWN":
+            if REQUIRE_SECTOR_ALIGNMENT and sector_direction not in {"BULLISH", "BEARISH"}:
                 continue
+
             signal = self.strategy.build(
                 symbol=symbol,
                 candles=candles,
@@ -109,12 +123,29 @@ class ScannerEngine:
                 sector_direction=sector_direction,
                 nifty_direction=nifty_direction,
             )
-            if signal:
-                signal["sector"] = sector
-                signal["market_direction"] = nifty_direction
-                signal["stock_previous_day_direction"] = ref.get("PreviousDayDirection")
-                signals.append(signal)
-                print("SIGNAL:", symbol, signal["signal"], "Entry", signal["entry"], "SL", signal["stop_loss"], "Target", signal["target"])
+            if not signal:
+                continue
+
+            # The current strategy's stock alignment is the completed 1m
+            # reclaim itself. Keep the explicit flag for future strategies.
+            if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") not in {"BULLISH", "BEARISH"}:
+                continue
+
+            signal["sector"] = sector
+            signal["industry"] = sector
+            signal["sector_direction"] = sector_direction
+            signal["industry_direction"] = sector_direction
+            signal["market_direction"] = nifty_direction
+            signal["nifty100_direction"] = nifty_direction
+            signal["stock_previous_day_direction"] = ref.get("PreviousDayDirection")
+            signal["previous_day_direction"] = ref.get("PreviousDayDirection")
+            signals.append(signal)
+            print(
+                "SIGNAL:", symbol, signal["signal"],
+                "Entry", signal["entry"],
+                "SL", signal["stop_loss"],
+                "Target", signal["target"],
+            )
 
         print("Final signals:", len(signals))
         return signals
