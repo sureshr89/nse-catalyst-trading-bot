@@ -1,8 +1,12 @@
-"""Cached stock-to-sector mapping for the price-action sector filter."""
+"""Cached sector grouping for the Nifty 100 price-action filter.
+
+The official Nifty constituent CSV exposes an Industry grouping. This file
+uses that published grouping as the stable sector bucket for the scanner so
+sector alignment does not require 100 extra network calls during market hours.
+"""
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
-import yfinance as yf
 
 
 class SectorStore:
@@ -11,24 +15,11 @@ class SectorStore:
         self.path = Path("data") / "nifty100_sectors.csv"
 
     def prepare(self):
-        existing = self.load()
-        mapping = {}
-        if not existing.empty:
-            mapping = dict(zip(existing["Symbol"], existing["Sector"]))
-
-        for symbol, fallback in self.universe[["Symbol", "Industry"]].itertuples(index=False):
-            symbol = str(symbol).upper()
-            if mapping.get(symbol) and mapping[symbol] != "UNKNOWN":
-                continue
-            sector = None
-            try:
-                info = yf.Ticker(f"{symbol}.NS").info
-                sector = info.get("sector") or info.get("sectorDisp")
-            except Exception:
-                sector = None
-            mapping[symbol] = str(sector).strip() if sector else str(fallback or "UNKNOWN").strip()
-
-        result = pd.DataFrame([{"Symbol": s, "Sector": mapping.get(s, "UNKNOWN")} for s in self.universe["Symbol"]])
+        result = self.universe[["Symbol", "Industry"]].copy()
+        result["Symbol"] = result["Symbol"].astype(str).str.upper().str.strip()
+        result["Sector"] = result["Industry"].fillna("UNKNOWN").astype(str).str.strip()
+        result.loc[result["Sector"] == "", "Sector"] = "UNKNOWN"
+        result = result[["Symbol", "Sector"]].drop_duplicates("Symbol").reset_index(drop=True)
         result["PreparedAtIST"] = datetime.now().isoformat(timespec="seconds")
         result.to_csv(self.path, index=False)
         return result
