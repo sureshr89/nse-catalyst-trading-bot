@@ -459,6 +459,12 @@ class PaperTradeEngine:
             f"PAPER-{self.trade_counter:04d}"
         )
 
+        # Complete risk/reward figures are stored with the position so they
+        # remain available after a refresh/restart and in the EOD journal.
+        risk_amount = round(abs(entry - stop_loss) * quantity, 2)
+        reward_amount = round(abs(target - entry) * quantity, 2)
+        rr_ratio = round(reward_amount / risk_amount, 4) if risk_amount > 0 else 0.0
+
         position = {
 
             "trade_id":
@@ -467,7 +473,13 @@ class PaperTradeEngine:
             "symbol":
                 symbol,
 
+            "stock":
+                symbol,
+
             "signal":
+                signal,
+
+            "buy_sell":
                 signal,
 
             "entry_time":
@@ -495,6 +507,15 @@ class PaperTradeEngine:
                 int(
                     quantity
                 ),
+
+            "risk":
+                risk_amount,
+
+            "reward":
+                reward_amount,
+
+            "rr":
+                rr_ratio,
 
             "status":
                 "OPEN",
