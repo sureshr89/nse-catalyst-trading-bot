@@ -54,28 +54,30 @@ class GapReclaimEngine:
         )
 
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first completed 1m candle reclaiming today's open after PDC failure."""
+        """Return the first completed 1m candle reclaiming today's open after an earlier PDC failure."""
         data = self._clean(df)
         if len(data) < 2:
             return None
 
-        # PriceData normally supplies completed candles already. Keep this
-        # defensive filter here too, but never discard the latest completed bar.
         current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
         completed = data[data["Datetime"] < current_minute].copy()
         if len(completed) < 2:
             return None
 
         pdc_breached = False
+        # A PDC failure may happen on the first completed candle. That candle
+        # establishes the failure; a later completed candle must reclaim the
+        # open, preventing the same candle from being both failure and entry.
         for i in range(1, len(completed)):
+            prior = completed.iloc[i - 1]
             cur = completed.iloc[i]
+
+            if side == "BUY" and float(prior["Low"]) < pdc:
+                pdc_breached = True
+            elif side == "SELL" and float(prior["High"]) > pdc:
+                pdc_breached = True
+
             cur_time = cur["Datetime"].time()
-
-            if side == "BUY" and float(cur["Low"]) < pdc:
-                pdc_breached = True
-            elif side == "SELL" and float(cur["High"]) > pdc:
-                pdc_breached = True
-
             if cur_time < self.start:
                 continue
             if cur_time > self.end:
@@ -83,7 +85,7 @@ class GapReclaimEngine:
             if not pdc_breached:
                 continue
 
-            prev_close = float(completed.iloc[i - 1]["Close"])
+            prev_close = float(prior["Close"])
             close = float(cur["Close"])
             if side == "BUY" and prev_close <= today_open and close > today_open:
                 return cur
