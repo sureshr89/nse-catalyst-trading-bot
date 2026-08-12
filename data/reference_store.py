@@ -1,7 +1,6 @@
-"""Daily pre-market reference data: PDC, previous-day direction and sector."""
+"""Daily pre-market reference data: PDC and previous-day direction."""
 from datetime import datetime
 from pathlib import Path
-import json
 import pandas as pd
 import yfinance as yf
 
@@ -35,27 +34,28 @@ class ReferenceStore:
 
         symbols = self.universe["Symbol"].astype(str).str.upper().tolist()
         tickers = [self._ticker(s) for s in symbols]
+        today = pd.Timestamp.now(tz="Asia/Kolkata").date()
         rows = []
         try:
             raw = yf.download(
-                tickers=tickers,
-                period="10d",
-                interval="1d",
-                auto_adjust=False,
-                progress=False,
-                threads=True,
-                group_by="ticker",
+                tickers=tickers, period="10d", interval="1d", auto_adjust=False,
+                progress=False, threads=True, group_by="ticker",
             )
             for symbol, ticker in zip(symbols, tickers):
                 try:
-                    data = raw[ticker] if hasattr(raw, "columns") and isinstance(raw.columns, pd.MultiIndex) and ticker in raw.columns.get_level_values(0) else raw
+                    data = raw[ticker] if isinstance(raw.columns, pd.MultiIndex) and ticker in raw.columns.get_level_values(0) else raw
                     if data is None or data.empty:
                         continue
                     data = data.dropna(subset=["Open", "Close"])
-                    if len(data) < 2:
+                    if data.empty:
                         continue
-                    prev = data.iloc[-1]
-                    # At pre-market, the latest completed daily row is yesterday.
+                    dates = pd.to_datetime(data.index).date
+                    # If today's partial daily row exists, ignore it. PDC must
+                    # always be the most recent completed trading session.
+                    completed = data[[d < today for d in dates]]
+                    if completed.empty:
+                        continue
+                    prev = completed.iloc[-1]
                     pdc = float(prev["Close"])
                     prev_open = float(prev["Open"])
                     rows.append({
@@ -72,8 +72,6 @@ class ReferenceStore:
         result = pd.DataFrame(rows)
         if result.empty:
             return result
-
-        # Preserve the configured sector/industry fallback from the universe.
         result = result.merge(self.universe[["Symbol", "Industry"]], on="Symbol", how="left")
         result = result.rename(columns={"Industry": "SectorFallback"})
         result["PreparedAtIST"] = datetime.now().isoformat(timespec="seconds")
