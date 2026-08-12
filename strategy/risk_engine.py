@@ -43,6 +43,25 @@ class RiskEngine:
     def _today_ist():
         return datetime.now(INDIA_TZ).date()
 
+    @staticmethod
+    def _entry_date_ist(value):
+        """Convert journal timestamps to their India date before enforcing daily limits."""
+        try:
+            parsed = pd.to_datetime(value, errors="coerce", utc=True)
+            if pd.isna(parsed):
+                return None
+            return parsed.tz_convert(INDIA_TZ).date()
+        except Exception:
+            try:
+                parsed = pd.to_datetime(value, errors="coerce")
+                if pd.isna(parsed):
+                    return None
+                if getattr(parsed, "tzinfo", None) is not None:
+                    return parsed.tz_convert(INDIA_TZ).date()
+                return parsed.date()
+            except Exception:
+                return None
+
     def restore_today_trade_counts(self):
         """Restore today's accepted entries so a restart cannot reset stock limits."""
         self.trade_counts = {}
@@ -53,15 +72,14 @@ class RiskEngine:
             df = pd.read_csv(path)
             if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
                 return
-            entries = pd.to_datetime(df["entry_time"], errors="coerce")
             today = self._today_ist()
-            for symbol, entry_time in zip(df["symbol"], entries):
-                if pd.isna(entry_time):
+            for symbol, entry_time in zip(df["symbol"], df["entry_time"]):
+                entry_date = self._entry_date_ist(entry_time)
+                if entry_date != today:
                     continue
-                if entry_time.date() == today:
-                    key = str(symbol).strip().upper()
-                    if key:
-                        self.trade_counts[key] = self.trade_counts.get(key, 0) + 1
+                key = str(symbol).strip().upper()
+                if key:
+                    self.trade_counts[key] = self.trade_counts.get(key, 0) + 1
         except Exception:
             # A malformed journal must never crash the worker; the normal gate still applies.
             self.trade_counts = {}
@@ -134,8 +152,8 @@ class RiskEngine:
         if risk_per_share <= 0:
             return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Invalid risk per share"]}
 
-        # The strategy's risk budget is ₹1,500 per stock. Use the largest whole
-        # quantity that stays at or below that budget; capital remains a second gate.
+        # Use the largest whole quantity that stays at or below ₹1,500 risk.
+        # Capital remains a second gate.
         max_risk_qty = int(self.max_risk_per_trade // risk_per_share)
         capital_qty = int(self.total_capital // entry)
         quantity = min(max_risk_qty, capital_qty)
