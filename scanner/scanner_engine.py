@@ -34,8 +34,12 @@ class ScannerEngine:
     def _direction(df):
         if df is None or df.empty:
             return "UNKNOWN"
-        day_open = float(df.iloc[0]["Open"])
-        close = float(df.iloc[-1]["Close"])
+        # Alignment uses the latest completed candle only.
+        completed = df.iloc[:-1] if len(df) > 1 else df
+        if completed.empty:
+            return "UNKNOWN"
+        day_open = float(completed.iloc[0]["Open"])
+        close = float(completed.iloc[-1]["Close"])
         return "BULLISH" if close > day_open else "BEARISH" if close < day_open else "NEUTRAL"
 
     def _nifty100_direction(self):
