@@ -26,6 +26,7 @@ st.set_page_config(page_title="NSE Catalyst Trading Bot", page_icon="📈", layo
 
 TOTAL_CAPITAL = 250000
 MAX_RISK_PER_TRADE = 1500
+MIN_REQUIRED_RISK = 1400
 RISK_REWARD_RATIO = 1.5
 MAX_OPEN_POSITIONS = 2
 PAPER_TRADING = True
@@ -44,6 +45,7 @@ try:
     spec.loader.exec_module(settings)
     TOTAL_CAPITAL = int(settings.TOTAL_CAPITAL)
     MAX_RISK_PER_TRADE = float(settings.MAX_RISK_PER_TRADE)
+    MIN_REQUIRED_RISK = float(settings.MIN_REQUIRED_RISK)
     RISK_REWARD_RATIO = float(settings.RISK_REWARD_RATIO)
     MAX_OPEN_POSITIONS = int(settings.MAX_OPEN_POSITIONS)
     PAPER_TRADING = bool(settings.PAPER_TRADING)
@@ -84,33 +86,13 @@ def read_status():
     if status:
         return status
     return {
-        "status": "STARTING",
-        "message": "Dashboard is online. Paper bot is starting...",
-        "scanner_status": "IDLE",
-        "worker_alive": False,
-        "last_cycle": None,
-        "last_scan": None,
-        "last_scan_completed": None,
-        "scan_duration_seconds": None,
-        "last_signal_count": 0,
-        "last_scan_error": None,
-        "heartbeat": None,
-        "error": None,
-        "open_positions": 0,
-        "available_capital": TOTAL_CAPITAL,
-        "used_capital": 0,
-        "daily_pnl": 0,
-        "total_trades": 0,
-        "winning_trades": 0,
-        "losing_trades": 0,
-        "journal_pnl": 0,
-        "cycle_count": 0,
-        "scan_count": 0,
-        "worker_id": None,
-        "trading_start": TRADING_START,
-        "last_entry_time": LAST_ENTRY_TIME,
-        "square_off_time": SQUARE_OFF_TIME,
-        "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+        "status": "STARTING", "message": "Dashboard is online. Paper bot is starting...", "scanner_status": "IDLE",
+        "worker_alive": False, "last_cycle": None, "last_scan": None, "last_scan_completed": None,
+        "scan_duration_seconds": None, "last_signal_count": 0, "last_scan_error": None, "heartbeat": None,
+        "error": None, "open_positions": 0, "available_capital": TOTAL_CAPITAL, "used_capital": 0,
+        "daily_pnl": 0, "total_trades": 0, "winning_trades": 0, "losing_trades": 0, "journal_pnl": 0,
+        "cycle_count": 0, "scan_count": 0, "worker_id": None, "trading_start": TRADING_START,
+        "last_entry_time": LAST_ENTRY_TIME, "square_off_time": SQUARE_OFF_TIME, "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
     }
 
 
@@ -148,10 +130,7 @@ st_autorefresh(interval=5000, limit=None, key="nse_bot_dashboard_refresh")
 now = datetime.now(INDIA_TZ)
 
 st.title("📈 NSE Catalyst Trading Bot Dashboard")
-st.caption(
-    f"NIFTY 100 Gap-Failure + Open-Reclaim | Paper only | "
-    f"Entry {TRADING_START}–{LAST_ENTRY_TIME} IST | Square-off {SQUARE_OFF_TIME} IST"
-)
+st.caption(f"NIFTY 100 Gap-Failure + Open-Reclaim | Paper only | Entry {TRADING_START}–{LAST_ENTRY_TIME} IST | Square-off {SQUARE_OFF_TIME} IST")
 
 if SETTINGS_LOAD_ERROR:
     st.error(f"Settings load error: {SETTINGS_LOAD_ERROR}")
@@ -198,9 +177,6 @@ elif not worker_alive:
 else:
     st.info("🔵 DASHBOARD ONLINE — STARTING PAPER BOT")
 
-# -----------------------------------------------------------------------------
-# LIVE BOT STATUS
-# -----------------------------------------------------------------------------
 s1, s2, s3, s4 = st.columns(4)
 s1.metric("India Time", now.strftime("%H:%M:%S"))
 s2.metric("Bot Status", status)
@@ -209,24 +185,14 @@ s4.metric("Last Scanner Run", str(bot_status.get("last_scan") or "—"))
 
 with st.expander("Bot / Strategy Configuration", expanded=True):
     a, b, c, d, e = st.columns(5)
-    a.write(f"Universe: **NIFTY 100**")
-    b.write(f"Risk/Trade: **₹{MAX_RISK_PER_TRADE:,.0f}**")
+    a.write("Universe: **NIFTY 100**")
+    b.write(f"Risk/Trade: **₹{MIN_REQUIRED_RISK:,.0f}–₹{MAX_RISK_PER_TRADE:,.0f}**")
     c.write(f"R:R: **1:{RISK_REWARD_RATIO:g}**")
     d.write(f"Max Positions: **{MAX_OPEN_POSITIONS}**")
     e.write(f"Scan: **{SCAN_INTERVAL_SECONDS}s**")
-    st.write(
-        f"Strategy: **GAP_FAILURE_OPEN_RECLAIM** | "
-        f"Entry: **{TRADING_START}–{LAST_ENTRY_TIME} IST** | "
-        f"Mandatory square-off: **{SQUARE_OFF_TIME} IST**"
-    )
-    st.write(
-        f"Paper Trading: **{PAPER_TRADING}** | Live Trading: **{LIVE_TRADING}** | "
-        f"Capital: **₹{TOTAL_CAPITAL:,.0f}**"
-    )
+    st.write(f"Strategy: **GAP_FAILURE_OPEN_RECLAIM** | Entry: **{TRADING_START}–{LAST_ENTRY_TIME} IST** | Mandatory square-off: **{SQUARE_OFF_TIME} IST**")
+    st.write(f"Paper Trading: **{PAPER_TRADING}** | Live Trading: **{LIVE_TRADING}** | Capital: **₹{TOTAL_CAPITAL:,.0f}**")
 
-# -----------------------------------------------------------------------------
-# CAPITAL / POSITION STATUS
-# -----------------------------------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Available Capital", f"₹{number(bot_status, 'available_capital', TOTAL_CAPITAL):,.2f}")
 m2.metric("Used Capital", f"₹{number(bot_status, 'used_capital'):,.2f}")
@@ -235,19 +201,14 @@ m4.metric("Daily P&L", f"₹{number(bot_status, 'daily_pnl'):,.2f}")
 
 st.subheader("Trading Status")
 st.write(f"Message: {bot_status.get('message', 'Dashboard is online.')}")
-
 x1, x2, x3, x4 = st.columns(4)
 x1.metric("Closed Trades", int(number(bot_status, "total_trades")))
 x2.metric("Winning Trades", int(number(bot_status, "winning_trades")))
 x3.metric("Losing Trades", int(number(bot_status, "losing_trades")))
 x4.metric("Journal P&L", f"₹{number(bot_status, 'journal_pnl'):,.2f}")
 
-# -----------------------------------------------------------------------------
-# OPEN POSITIONS - directly from durable paper-engine state
-# -----------------------------------------------------------------------------
 state = read_json(STATE_FILE, {})
 open_positions = state.get("open_positions", {}) or {}
-
 st.subheader("📌 Open Positions")
 if open_positions:
     rows = []
@@ -256,32 +217,17 @@ if open_positions:
         stop = float(position.get("stop_loss", 0) or 0)
         target = float(position.get("target", 0) or 0)
         qty = int(float(position.get("quantity", 0) or 0))
-        rows.append({
-            "Symbol": symbol,
-            "Side": position.get("signal", ""),
-            "Entry": entry,
-            "Stop Loss": stop,
-            "Target": target,
-            "Qty": qty,
-            "Risk": round(abs(entry - stop) * qty, 2),
-            "R:R": position.get("risk_reward", RISK_REWARD_RATIO),
-            "Entry Time": position.get("entry_time", ""),
-            "Setup": position.get("setup_type", "GAP_FAILURE_OPEN_RECLAIM"),
-        })
+        rows.append({"Symbol": symbol, "Side": position.get("signal", ""), "Entry": entry, "Stop Loss": stop, "Target": target, "Qty": qty, "Risk": round(abs(entry - stop) * qty, 2), "R:R": position.get("risk_reward", RISK_REWARD_RATIO), "Entry Time": position.get("entry_time", ""), "Setup": position.get("setup_type", "GAP_FAILURE_OPEN_RECLAIM")})
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 else:
     st.info("No open paper positions.")
 
-# -----------------------------------------------------------------------------
-# SCANNER DIAGNOSTICS
-# -----------------------------------------------------------------------------
 st.subheader("🔎 Scanner Diagnostics")
 q1, q2, q3, q4 = st.columns(4)
 q1.metric("Scan Count", int(number(bot_status, "scan_count")))
 q2.metric("Last Signals", int(number(bot_status, "last_signal_count")))
 q3.metric("Last Scan Seconds", number(bot_status, "scan_duration_seconds"))
 q4.metric("Worker Alive", "YES" if worker_alive else "NO")
-
 if bot_status.get("last_scan_error"):
     st.error(f"Last scanner error: {bot_status['last_scan_error']}")
 
@@ -292,40 +238,23 @@ d2.write(f"Cycles: {int(number(bot_status, 'cycle_count'))}")
 d3.write(f"Last Scan Completed: {bot_status.get('last_scan_completed') or '—'}")
 d4.write(f"Worker: {'ALIVE' if worker_alive else 'STOPPED/STARTING'}")
 
-# -----------------------------------------------------------------------------
-# RECENT SIGNALS - this is the missing execution/decision log view
-# -----------------------------------------------------------------------------
 signals = read_csv(SIGNALS_FILE)
 st.subheader("📡 Recent Scanner Signals")
 if signals.empty:
     st.info("No scanner signals have been recorded yet.")
 else:
     recent = signals.tail(20).copy()
-    preferred = [
-        "timestamp", "symbol", "signal", "entry", "stop_loss", "target",
-        "risk_reward", "pdc", "today_open", "today_low", "today_high",
-        "nifty100_direction", "sector", "sector_direction", "stock_today_direction",
-        "setup_type", "approved", "reason",
-    ]
+    preferred = ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "risk_reward", "actual_risk", "pdc", "today_open", "today_low", "today_high", "nifty100_direction", "sector", "sector_direction", "stock_today_direction", "setup_type", "approved", "reason"]
     columns = [c for c in preferred if c in recent.columns]
     st.dataframe(recent[columns].iloc[::-1], use_container_width=True, hide_index=True)
 
-# -----------------------------------------------------------------------------
-# RECENT TRADES - actual journal rows
-# -----------------------------------------------------------------------------
 trades = read_csv(TRADES_FILE)
 st.subheader("📒 Recent Trade Log")
 if trades.empty:
     st.info("No trade journal entries yet.")
 else:
     recent_trades = trades.tail(20).copy()
-    preferred = [
-        "trade_id", "symbol", "signal", "entry_time", "entry", "stop_loss", "target",
-        "quantity", "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr",
-        "pnl", "actual_risk", "position_value", "pdc", "today_open", "today_low", "today_high",
-        "nifty100_direction", "sector", "sector_direction", "stock_today_direction",
-        "setup_type", "status",
-    ]
+    preferred = ["trade_id", "symbol", "signal", "entry_time", "entry", "stop_loss", "target", "quantity", "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr", "pnl", "actual_risk", "position_value", "pdc", "today_open", "today_low", "today_high", "nifty100_direction", "sector", "sector_direction", "stock_today_direction", "setup_type", "status"]
     columns = [c for c in preferred if c in recent_trades.columns]
     st.dataframe(recent_trades[columns].iloc[::-1], use_container_width=True, hide_index=True)
 
