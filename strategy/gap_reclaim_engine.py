@@ -4,8 +4,6 @@ import pandas as pd
 
 
 class GapReclaimEngine:
-    """Build BUY/SELL signals from PDC, today's OHLC and alignment."""
-
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.5):
         self.start = self._time(trading_start)
         self.end = self._time(last_entry_time)
@@ -21,33 +19,37 @@ class GapReclaimEngine:
         if df is None or df.empty:
             return pd.DataFrame()
         data = df.copy()
-        for c in ["Datetime", "Open", "High", "Low", "Close"]:
-            if c not in data.columns:
-                return pd.DataFrame()
+        if any(c not in data.columns for c in ["Datetime", "Open", "High", "Low", "Close"]):
+            return pd.DataFrame()
         data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
         for c in ["Open", "High", "Low", "Close"]:
             data[c] = pd.to_numeric(data[c], errors="coerce")
         return (data.dropna(subset=["Datetime", "Open", "High", "Low", "Close"])
                 .sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True))
 
-    def _entry_candle(self, df, today_open, side):
+    def _entry_after_failure(self, df, today_open, pdc, side):
         data = self._clean(df)
-        if len(data) < 2:
+        if len(data) < 3:
             return None
-        # Use only completed candles; the last row may still be forming.
         completed = data.iloc[:-1].copy()
-        if len(completed) < 2:
+        if side == "BUY":
+            breach_positions = completed.index[completed["Low"] < pdc].tolist()
+        else:
+            breach_positions = completed.index[completed["High"] > pdc].tolist()
+        if not breach_positions:
             return None
-        for i in range(1, len(completed)):
-            prev = float(completed.iloc[i-1]["Close"])
-            cur = completed.iloc[i]
-            close = float(cur["Close"])
-            if cur["Datetime"].time() < self.start or cur["Datetime"].time() > self.end:
+        breach_pos = breach_positions[0]
+        for i in range(max(1, breach_pos + 1), len(completed)):
+            prev_close = float(completed.iloc[i - 1]["Close"])
+            candle = completed.iloc[i]
+            close = float(candle["Close"])
+            t = candle["Datetime"].time()
+            if t < self.start or t > self.end:
                 continue
-            if side == "BUY" and prev <= today_open and close > today_open:
-                return cur
-            if side == "SELL" and prev >= today_open and close < today_open:
-                return cur
+            if side == "BUY" and prev_close <= today_open and close > today_open:
+                return candle
+            if side == "SELL" and prev_close >= today_open and close < today_open:
+                return candle
         return None
 
     def build(self, symbol, candles, pdc, previous_day_open, sector_direction, nifty_direction):
@@ -59,38 +61,31 @@ class GapReclaimEngine:
         today_open = float(data.iloc[0]["Open"])
         today_low = float(data["Low"].min())
         today_high = float(data["High"].max())
-        latest_close = float(data.iloc[-1]["Close"])
         previous_day_green = pdc > previous_day_open
         previous_day_red = pdc < previous_day_open
 
-        # BUY: yesterday green + gap-up + gap failure below PDC + bullish
-        # Nifty/sector/current stock + reclaim today's open.
-        if previous_day_green and today_open > pdc:
-            if today_low < pdc and sector_direction == "BULLISH" and nifty_direction == "BULLISH":
-                entry_candle = self._entry_candle(data, today_open, "BUY")
-                if entry_candle is not None:
-                    entry = float(entry_candle["Close"])
+        if previous_day_green and today_open > pdc and today_low < pdc:
+            if sector_direction == "BULLISH" and nifty_direction == "BULLISH":
+                candle = self._entry_after_failure(data, today_open, pdc, "BUY")
+                if candle is not None:
+                    entry = float(candle["Close"])
                     stop = today_low
                     risk = entry - stop
                     if risk > 0:
-                        return self._trade("BUY", symbol, entry_candle, entry, stop,
-                                           entry + risk * self.rr, pdc, today_open,
-                                           today_low, today_high, sector_direction,
+                        return self._trade("BUY", symbol, candle, entry, stop, entry + risk * self.rr,
+                                           pdc, today_open, today_low, today_high, sector_direction,
                                            nifty_direction, previous_day_green)
 
-        # SELL: yesterday red + gap-down + gap failure above PDC + bearish
-        # Nifty/sector/current stock + breakdown through today's open.
-        if previous_day_red and today_open < pdc:
-            if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
-                entry_candle = self._entry_candle(data, today_open, "SELL")
-                if entry_candle is not None:
-                    entry = float(entry_candle["Close"])
+        if previous_day_red and today_open < pdc and today_high > pdc:
+            if sector_direction == "BEARISH" and nifty_direction == "BEARISH":
+                candle = self._entry_after_failure(data, today_open, pdc, "SELL")
+                if candle is not None:
+                    entry = float(candle["Close"])
                     stop = today_high
                     risk = stop - entry
                     if risk > 0:
-                        return self._trade("SELL", symbol, entry_candle, entry, stop,
-                                           entry - risk * self.rr, pdc, today_open,
-                                           today_low, today_high, sector_direction,
+                        return self._trade("SELL", symbol, candle, entry, stop, entry - risk * self.rr,
+                                           pdc, today_open, today_low, today_high, sector_direction,
                                            nifty_direction, previous_day_red)
         return None
 
