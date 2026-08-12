@@ -1,9 +1,14 @@
 """Price data engine for the pure price-action paper strategy."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class PriceData:
@@ -23,11 +28,27 @@ class PriceData:
         values = pd.to_datetime(series, errors="coerce")
         try:
             if getattr(values.dt, "tz", None) is None:
-                # Yahoo may return naive timestamps representing exchange-local time.
-                return values.dt.tz_localize("Asia/Kolkata")
-            return values.dt.tz_convert("Asia/Kolkata")
+                return values.dt.tz_localize(INDIA_TZ)
+            return values.dt.tz_convert(INDIA_TZ)
         except Exception:
             return values
+
+    @staticmethod
+    def _completed_1m(df):
+        """Exclude the currently forming 1-minute candle."""
+        if df is None or df.empty or "Datetime" not in df.columns:
+            return df
+        data = df.copy()
+        timestamps = pd.to_datetime(data["Datetime"], errors="coerce")
+        try:
+            if getattr(timestamps.dt, "tz", None) is None:
+                timestamps = timestamps.dt.tz_localize(INDIA_TZ)
+            else:
+                timestamps = timestamps.dt.tz_convert(INDIA_TZ)
+            current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
+            return data[timestamps < current_minute].reset_index(drop=True)
+        except Exception:
+            return data
 
     def _clean_data(self, df):
         if df is None or df.empty:
@@ -61,11 +82,14 @@ class PriceData:
         if interval not in self.valid_intervals:
             raise ValueError(f"Unsupported interval: {interval}")
         try:
-            return self._clean_data(yf.download(
+            data = self._clean_data(yf.download(
                 tickers=self.yahoo_symbol(symbol), period=period, interval=interval,
                 auto_adjust=False, progress=False, threads=False, prepost=False,
                 timeout=self.download_timeout,
             ))
+            if interval == "1m":
+                data = self._completed_1m(data)
+            return data
         except Exception as error:
             print(f"Price download failed for {symbol}: {error}")
             return pd.DataFrame()
@@ -155,10 +179,10 @@ class PriceData:
 
     def get_index_1m(self, ticker="^CNX100"):
         try:
-            return self._clean_data(yf.download(
+            return self._completed_1m(self._clean_data(yf.download(
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
                 progress=False, threads=False, prepost=False, timeout=self.download_timeout,
-            ))
+            )))
         except Exception as error:
             print("Nifty 100 data failed:", error)
             return pd.DataFrame()
