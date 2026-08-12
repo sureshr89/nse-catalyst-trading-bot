@@ -1,8 +1,8 @@
-"""Small persistence bridge for Streamlit's ephemeral filesystem.
+"""Persistence bridge for Streamlit's ephemeral filesystem.
 
-When GITHUB_TOKEN is configured in the deployment environment, selected local
-CSV files are restored from and synchronized back to the bot repository.
-Without the token the bot keeps its existing local-file behavior unchanged.
+CSV journal files and the paper-engine runtime state can be restored from and
+synchronized to the GitHub repository when GITHUB_TOKEN is configured in the
+Streamlit deployment secrets.
 """
 
 import base64
@@ -11,7 +11,6 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-
 
 REPO = os.getenv("GITHUB_REPOSITORY", "sureshr89/nse-catalyst-trading-bot")
 BRANCH = os.getenv("GITHUB_BRANCH", "main")
@@ -27,6 +26,7 @@ def _request(url, method="GET", payload=None):
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "nse-catalyst-trading-bot",
+        "X-GitHub-Api-Version": "2026-03-10",
     }
     if TOKEN:
         headers["Authorization"] = f"Bearer {TOKEN}"
@@ -90,3 +90,11 @@ def sync(local_path, repo_path, message):
     except Exception as error:
         print(f"Persistent sync skipped for {repo_path}: {error}")
         return False
+
+
+def restore_json(local_path, repo_path):
+    return restore(local_path, repo_path)
+
+
+def sync_json(local_path, repo_path, message):
+    return sync(local_path, repo_path, message)
