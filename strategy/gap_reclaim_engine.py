@@ -1,8 +1,12 @@
 """Pure price-action Gap-Failure + Open-Reclaim strategy."""
 
 from datetime import time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class GapReclaimEngine:
@@ -19,7 +23,14 @@ class GapReclaimEngine:
         return time(h, m)
 
     @staticmethod
-    def _clean(df):
+    def _to_ist(value):
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return ts.tz_localize(INDIA_TZ)
+        return ts.tz_convert(INDIA_TZ)
+
+    @classmethod
+    def _clean(cls, df):
         if df is None or df.empty:
             return pd.DataFrame()
         data = df.copy()
@@ -27,6 +38,13 @@ class GapReclaimEngine:
             if c not in data.columns:
                 return pd.DataFrame()
         data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
+        try:
+            if getattr(data["Datetime"].dt, "tz", None) is None:
+                data["Datetime"] = data["Datetime"].dt.tz_localize(INDIA_TZ)
+            else:
+                data["Datetime"] = data["Datetime"].dt.tz_convert(INDIA_TZ)
+        except Exception:
+            return pd.DataFrame()
         for c in ["Open", "High", "Low", "Close"]:
             data[c] = pd.to_numeric(data[c], errors="coerce")
         return (
@@ -49,20 +67,19 @@ class GapReclaimEngine:
         pdc_breached = False
         for i in range(1, len(completed)):
             cur = completed.iloc[i]
-            if cur["Datetime"].time() < self.start:
-                if side == "BUY" and float(cur["Low"]) < pdc:
-                    pdc_breached = True
-                elif side == "SELL" and float(cur["High"]) > pdc:
-                    pdc_breached = True
-                continue
-            if cur["Datetime"].time() > self.end:
-                break
+            cur_time = cur["Datetime"].time()
 
+            # A PDC breach may occur before the entry window. Once it has
+            # happened, the first valid reclaim inside 09:45-14:00 can trigger.
             if side == "BUY" and float(cur["Low"]) < pdc:
                 pdc_breached = True
             elif side == "SELL" and float(cur["High"]) > pdc:
                 pdc_breached = True
 
+            if cur_time < self.start:
+                continue
+            if cur_time > self.end:
+                break
             if not pdc_breached:
                 continue
 
@@ -81,15 +98,18 @@ class GapReclaimEngine:
 
         pdc = float(pdc)
         previous_day_open = float(previous_day_open)
-        today_open = float(data.iloc[0]["Open"])
-        today_low = float(data["Low"].min())
-        today_high = float(data["High"].max())
+        today_data = data[data["Datetime"].dt.date == data["Datetime"].dt.date.max()].copy()
+        if today_data.empty:
+            return None
+        today_open = float(today_data.iloc[0]["Open"])
+        today_low = float(today_data["Low"].min())
+        today_high = float(today_data["High"].max())
         previous_day_green = pdc > previous_day_open
         previous_day_red = pdc < previous_day_open
 
         if previous_day_green and today_open > pdc:
             if today_low < pdc and sector_direction == "BULLISH" and nifty_direction == "BULLISH":
-                entry_candle = self._entry_candle(data, today_open, pdc, "BUY")
+                entry_candle = self._entry_candle(today_data, today_open, pdc, "BUY")
                 if entry_candle is not None:
                     entry = float(entry_candle["Close"])
                     stop = today_low
@@ -104,7 +124,7 @@ class GapReclaimEngine:
 
         if previous_day_red and today_open < pdc:
             if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
-                entry_candle = self._entry_candle(data, today_open, pdc, "SELL")
+                entry_candle = self._entry_candle(today_data, today_open, pdc, "SELL")
                 if entry_candle is not None:
                     entry = float(entry_candle["Close"])
                     stop = today_high
@@ -135,9 +155,7 @@ class GapReclaimEngine:
             "today_open": round(today_open, 2),
             "today_low": round(today_low, 2),
             "today_high": round(today_high, 2),
-            "sector": sector_direction,
             "sector_direction": sector_direction,
-            "industry": sector_direction,
             "industry_direction": sector_direction,
             "market_direction": nifty_direction,
             "nifty100_direction": nifty_direction,
