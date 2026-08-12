@@ -28,7 +28,6 @@ class ScannerEngine:
         self._prepared_date = None
 
     def prepare_reference_data(self, force=False):
-        """Prepare PDC/previous-day direction and sector mapping once per IST date."""
         today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
         if not force and self._prepared_date == today and not self.references.empty:
             return self.references
@@ -43,11 +42,13 @@ class ScannerEngine:
     def _direction(df):
         if df is None or df.empty:
             return "UNKNOWN"
-        completed = df.iloc[:-1] if len(df) > 1 else df
-        if completed.empty:
+        data = df.copy()
+        if "Datetime" in data.columns:
+            data = data.sort_values("Datetime")
+        if data.empty:
             return "UNKNOWN"
-        day_open = float(completed.iloc[0]["Open"])
-        close = float(completed.iloc[-1]["Close"])
+        day_open = float(data.iloc[0]["Open"])
+        close = float(data.iloc[-1]["Close"])
         if close > day_open:
             return "BULLISH"
         if close < day_open:
@@ -99,8 +100,8 @@ class ScannerEngine:
         market_data = self.price_data.get_multi_1m(symbols)
         sector_directions = self._sector_directions(market_data)
         reference_by_symbol = self.references.set_index("Symbol").to_dict("index")
-        sector_map = dict(zip(self.sectors["Symbol"], self.sectors["Sector"])) if not self.sectors.empty else {}
         signals = []
+        sector_map = dict(zip(self.sectors["Symbol"], self.sectors["Sector"])) if not self.sectors.empty else {}
 
         for symbol in symbols:
             candles = market_data.get(symbol)
@@ -109,7 +110,6 @@ class ScannerEngine:
             ref = reference_by_symbol.get(symbol)
             if not ref:
                 continue
-
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
             if REQUIRE_SECTOR_ALIGNMENT and sector_direction not in {"BULLISH", "BEARISH"}:
@@ -127,16 +127,11 @@ class ScannerEngine:
             if not signal:
                 continue
 
-            # The strategy itself already requires the previous day to agree
-            # with the setup (green for BUY / red for SELL). Enforce the same
-            # requirement here so a future strategy cannot accidentally bypass
-            # the configured stock-alignment rule.
             expected_previous = "BULLISH" if signal.get("signal") == "BUY" else "BEARISH"
             previous_day_aligned = previous_day_direction == expected_previous
             if REQUIRE_STOCK_ALIGNMENT and not previous_day_aligned:
                 print("REJECT:", symbol, "previous-day stock alignment mismatch")
                 continue
-
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") not in {"BULLISH", "BEARISH"}:
                 continue
 
@@ -152,13 +147,10 @@ class ScannerEngine:
             signals.append(signal)
             print(
                 "SIGNAL:", symbol, signal["signal"],
-                "Entry", signal["entry"],
-                "SL", signal["stop_loss"],
-                "Target", signal["target"],
-                "PDC", signal["pdc"],
+                "Entry", signal["entry"], "SL", signal["stop_loss"],
+                "Target", signal["target"], "PDC", signal["pdc"],
                 "Previous Day", previous_day_direction,
-                "Sector", sector_direction,
-                "NIFTY 100", nifty_direction,
+                "Sector", sector_direction, "NIFTY 100", nifty_direction,
             )
 
         print("Final signals:", len(signals))
