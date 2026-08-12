@@ -7,9 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
-
 
 class PriceData:
     def __init__(self):
@@ -24,7 +22,6 @@ class PriceData:
 
     @staticmethod
     def _to_ist(series):
-        """Convert Yahoo timestamps to timezone-aware India time."""
         values = pd.to_datetime(series, errors="coerce")
         try:
             if getattr(values.dt, "tz", None) is None:
@@ -35,7 +32,6 @@ class PriceData:
 
     @staticmethod
     def _completed_1m(df):
-        """Exclude the currently forming 1-minute candle."""
         if df is None or df.empty or "Datetime" not in df.columns:
             return df
         data = df.copy()
@@ -87,9 +83,7 @@ class PriceData:
                 auto_adjust=False, progress=False, threads=False, prepost=False,
                 timeout=self.download_timeout,
             ))
-            if interval == "1m":
-                data = self._completed_1m(data)
-            return data
+            return self._completed_1m(data) if interval == "1m" else data
         except Exception as error:
             print(f"Price download failed for {symbol}: {error}")
             return pd.DataFrame()
@@ -111,37 +105,24 @@ class PriceData:
     def _download_multi_batch(self, tickers, interval="1m", period="1d"):
         try:
             return yf.download(
-                tickers=tickers,
-                period=period,
-                interval=interval,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-                prepost=False,
-                group_by="ticker",
-                timeout=self.download_timeout,
+                tickers=tickers, period=period, interval=interval,
+                auto_adjust=False, progress=False, threads=False,
+                prepost=False, group_by="ticker", timeout=self.download_timeout,
             )
         except Exception as error:
             print(f"Yahoo batch failed ({len(tickers)} tickers): {error}")
             return pd.DataFrame()
 
     def get_multi_1m(self, symbols):
-        """Download Nifty 100 1-minute data in small Yahoo-safe batches."""
         symbols = [str(s).upper().replace(".NS", "") for s in symbols]
         symbols = list(dict.fromkeys(s for s in symbols if s))
         if not symbols:
             return {}
-
         batches = list(self._chunks(symbols, self.batch_size))
         raw_frames = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_map = {
-                executor.submit(
-                    self._download_multi_batch,
-                    [f"{s}.NS" for s in batch],
-                    "1m",
-                    "1d",
-                ): batch
+                executor.submit(self._download_multi_batch, [f"{s}.NS" for s in batch], "1m", "1d"): batch
                 for batch in batches
             }
             for future in as_completed(future_map):
@@ -153,7 +134,6 @@ class PriceData:
                     continue
                 if raw is not None and not raw.empty:
                     raw_frames.append((batch, raw))
-
         result = {}
         for batch, raw in raw_frames:
             tickers = [f"{s}.NS" for s in batch]
@@ -163,26 +143,27 @@ class PriceData:
                 for symbol, ticker in zip(batch, tickers):
                     try:
                         if ticker in level0:
-                            result[symbol] = self._clean_data(raw[ticker])
+                            data = raw[ticker]
                         elif ticker in level1:
-                            result[symbol] = self._clean_data(raw.xs(ticker, axis=1, level=1))
+                            data = raw.xs(ticker, axis=1, level=1)
                         else:
-                            result[symbol] = pd.DataFrame()
+                            data = pd.DataFrame()
+                        result[symbol] = self._completed_1m(self._clean_data(data))
                     except Exception:
                         result[symbol] = pd.DataFrame()
             elif len(batch) == 1:
-                result[batch[0]] = self._clean_data(raw)
-
+                result[batch[0]] = self._completed_1m(self._clean_data(raw))
         for symbol in symbols:
             result.setdefault(symbol, pd.DataFrame())
         return result
 
     def get_index_1m(self, ticker="^CNX100"):
         try:
-            return self._completed_1m(self._clean_data(yf.download(
+            data = self._clean_data(yf.download(
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
                 progress=False, threads=False, prepost=False, timeout=self.download_timeout,
-            )))
+            ))
+            return self._completed_1m(data)
         except Exception as error:
             print("Nifty 100 data failed:", error)
             return pd.DataFrame()
