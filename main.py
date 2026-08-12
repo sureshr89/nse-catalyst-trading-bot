@@ -62,11 +62,25 @@ class TradingBot:
 
         self.processed_signals = set()
 
-        self.daily_pnl = 0.0
+        self.daily_pnl = self._restore_daily_pnl()
 
         self.cooldown_until = None
 
         self.square_off_done = False
+
+    def _restore_daily_pnl(self):
+
+        try:
+            df = self.journal.get_trades()
+            if df.empty or "pnl" not in df.columns:
+                return 0.0
+            today = datetime.now().strftime("%Y-%m-%d")
+            exit_dates = df["exit_time"].astype(str).str[:10]
+            pnl = __import__("pandas").to_numeric(df["pnl"], errors="coerce").fillna(0.0)
+            return round(float(pnl[exit_dates == today].sum()), 2)
+        except Exception as error:
+            print(f"Daily P&L restore skipped: {type(error).__name__}: {error}")
+            return 0.0
 
     # ============================================================
     # CURRENT TIME
