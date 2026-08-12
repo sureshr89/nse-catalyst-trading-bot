@@ -1,8 +1,12 @@
 """Daily pre-market reference data: PDC and previous-day direction."""
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
+
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class ReferenceStore:
@@ -13,7 +17,9 @@ class ReferenceStore:
 
     @property
     def date_key(self):
-        return datetime.now().strftime("%Y-%m-%d")
+        # Reference files must be keyed to the Indian trading date, not the
+        # Streamlit server's UTC/system date.
+        return datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
 
     @property
     def path(self):
@@ -34,12 +40,17 @@ class ReferenceStore:
 
         symbols = self.universe["Symbol"].astype(str).str.upper().tolist()
         tickers = [self._ticker(s) for s in symbols]
-        today = pd.Timestamp.now(tz="Asia/Kolkata").date()
+        today = datetime.now(INDIA_TZ).date()
         rows = []
         try:
             raw = yf.download(
-                tickers=tickers, period="10d", interval="1d", auto_adjust=False,
-                progress=False, threads=True, group_by="ticker",
+                tickers=tickers,
+                period="10d",
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=True,
+                group_by="ticker",
             )
             for symbol, ticker in zip(symbols, tickers):
                 try:
@@ -50,8 +61,8 @@ class ReferenceStore:
                     if data.empty:
                         continue
                     dates = pd.to_datetime(data.index).date
-                    # If today's partial daily row exists, ignore it. PDC must
-                    # always be the most recent completed trading session.
+                    # Ignore today's partial daily row. PDC is always the
+                    # most recent completed Indian trading session.
                     completed = data[[d < today for d in dates]]
                     if completed.empty:
                         continue
@@ -74,7 +85,7 @@ class ReferenceStore:
             return result
         result = result.merge(self.universe[["Symbol", "Industry"]], on="Symbol", how="left")
         result = result.rename(columns={"Industry": "SectorFallback"})
-        result["PreparedAtIST"] = datetime.now().isoformat(timespec="seconds")
+        result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         result.to_csv(self.path, index=False)
         return result
 
