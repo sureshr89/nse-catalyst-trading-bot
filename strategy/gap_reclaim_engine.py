@@ -1,10 +1,9 @@
 """Pure price-action Gap-Failure + Open-Reclaim strategy."""
 
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -60,7 +59,10 @@ class GapReclaimEngine:
         if len(data) < 2:
             return None
 
-        completed = data.iloc[:-1].copy()
+        # PriceData normally supplies completed candles already. Keep this
+        # defensive filter here too, but never discard the latest completed bar.
+        current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
+        completed = data[data["Datetime"] < current_minute].copy()
         if len(completed) < 2:
             return None
 
@@ -69,8 +71,6 @@ class GapReclaimEngine:
             cur = completed.iloc[i]
             cur_time = cur["Datetime"].time()
 
-            # A PDC breach may occur before the entry window. Once it has
-            # happened, the first valid reclaim inside 09:45-14:00 can trigger.
             if side == "BUY" and float(cur["Low"]) < pdc:
                 pdc_breached = True
             elif side == "SELL" and float(cur["High"]) > pdc:
