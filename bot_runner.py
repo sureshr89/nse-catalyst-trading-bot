@@ -6,13 +6,11 @@ and guarantees that the TradingBot gets a square-off cycle at 15:00 IST.
 """
 
 import json
-import math
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from types import MethodType
 from zoneinfo import ZoneInfo
 
 try:
@@ -21,12 +19,9 @@ except ImportError:  # pragma: no cover - Streamlit Cloud runs Linux
     fcntl = None
 
 from config.settings import (
-    COOLDOWN_MINUTES,
     TRADING_START,
     LAST_ENTRY_TIME,
     SQUARE_OFF_TIME,
-    MAX_RISK_PER_TRADE,
-    MIN_REQUIRED_RISK,
     TOTAL_CAPITAL,
     SCAN_INTERVAL_SECONDS,
 )
@@ -177,65 +172,10 @@ def _ist_cooldown_active(self):
     return True
 
 
-def _normalise_risk_quantity(signal, available_capital):
-    """Choose the smallest whole-share quantity that satisfies minimum risk."""
-    if not isinstance(signal, dict):
-        return signal
-    try:
-        entry = float(signal.get("entry"))
-        stop_loss = float(signal.get("stop_loss"))
-        risk_per_share = abs(entry - stop_loss)
-    except (TypeError, ValueError):
-        return signal
-    if risk_per_share <= 0:
-        return signal
-
-    max_qty = math.floor(MAX_RISK_PER_TRADE / risk_per_share)
-    min_qty = math.ceil(MIN_REQUIRED_RISK / risk_per_share)
-    if max_qty <= 0 or min_qty > max_qty:
-        return signal
-    try:
-        capital_qty = math.floor(float(available_capital) / entry)
-    except (TypeError, ValueError, ZeroDivisionError):
-        capital_qty = 0
-    if min_qty > capital_qty:
-        return signal
-
-    adjusted = dict(signal)
-    adjusted["quantity"] = int(min_qty)
-    adjusted["risk_per_share"] = round(risk_per_share, 4)
-    adjusted["actual_risk"] = round(risk_per_share * min_qty, 2)
-    adjusted["maximum_risk"] = round(MAX_RISK_PER_TRADE, 2)
-    return adjusted
-
-
 def _patch_bot_for_ist(bot):
-    """Patch the legacy TradingBot helpers without changing its strategy logic."""
-    bot.current_time = MethodType(_ist_current_time, bot)
-    bot.cooldown_active = MethodType(_ist_cooldown_active, bot)
-
-    original_approve = bot.risk_engine.approve_trade
-
-    def approve_trade_safe(self, signal):
-        available = getattr(bot.paper_engine, "available_capital", TOTAL_CAPITAL)
-        adjusted = _normalise_risk_quantity(signal, available)
-        return original_approve(adjusted)
-
-    bot.risk_engine.approve_trade = MethodType(approve_trade_safe, bot.risk_engine)
-
-    original_open = bot.paper_engine.open_trade
-
-    def open_trade_safe(self, trade):
-        symbol = str(trade.get("symbol", "")).strip().upper()
-        before_count = bot.risk_engine.get_trade_count(symbol)
-        result = original_open(trade)
-        if not result.get("opened", False):
-            after_count = bot.risk_engine.get_trade_count(symbol)
-            if after_count > before_count:
-                bot.risk_engine.trade_counts[symbol] = before_count
-        return result
-
-    bot.paper_engine.open_trade = MethodType(open_trade_safe, bot.paper_engine)
+    """Patch only legacy time helpers; RiskEngine remains the single sizing authority."""
+    bot.current_time = __import__("types").MethodType(_ist_current_time, bot)
+    bot.cooldown_active = __import__("types").MethodType(_ist_cooldown_active, bot)
 
 
 def _run_one_trading_day():
@@ -270,7 +210,6 @@ def _run_one_trading_day():
             time.sleep(10)
             continue
 
-        # Run one normal cycle while the market is inside the trading window.
         if current < SQUARE_OFF_TIME:
             started = time.monotonic()
             _write_status(
@@ -281,7 +220,6 @@ def _run_one_trading_day():
                 cycle_count=int(_state.get("cycle_count", 0)) + 1,
             )
             try:
-                # Scanner diagnostics are kept around the existing TradingBot cycle.
                 original_scan = bot.scanner.scan
 
                 def monitored_scan():
@@ -328,7 +266,6 @@ def _run_one_trading_day():
                     error=f"{type(error).__name__}: {error}",
                 )
             finally:
-                # Restore the original method so each cycle wraps it only once.
                 bot.scanner.scan = original_scan
                 _write_status(
                     bot,
@@ -338,8 +275,6 @@ def _run_one_trading_day():
             time.sleep(SCAN_INTERVAL_SECONDS)
             continue
 
-        # CRITICAL: give TradingBot a cycle at/after 15:00. Its run_cycle()
-        # performs mandatory square-off before returning.
         _write_status(
             bot,
             status="RUNNING",
@@ -392,7 +327,6 @@ def _run_bot():
                 time.sleep(30)
                 continue
 
-            # Start a trading-day controller before/at the configured entry time.
             if now.strftime("%H:%M") < SQUARE_OFF_TIME:
                 _run_one_trading_day()
             else:
