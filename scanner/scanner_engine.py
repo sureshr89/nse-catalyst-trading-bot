@@ -115,6 +115,7 @@ class ScannerEngine:
             if REQUIRE_SECTOR_ALIGNMENT and sector_direction not in {"BULLISH", "BEARISH"}:
                 continue
 
+            previous_day_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
             signal = self.strategy.build(
                 symbol=symbol,
                 candles=candles,
@@ -126,8 +127,16 @@ class ScannerEngine:
             if not signal:
                 continue
 
-            # The current strategy's stock alignment is the completed 1m
-            # reclaim itself. Keep the explicit flag for future strategies.
+            # The strategy itself already requires the previous day to agree
+            # with the setup (green for BUY / red for SELL). Enforce the same
+            # requirement here so a future strategy cannot accidentally bypass
+            # the configured stock-alignment rule.
+            expected_previous = "BULLISH" if signal.get("signal") == "BUY" else "BEARISH"
+            previous_day_aligned = previous_day_direction == expected_previous
+            if REQUIRE_STOCK_ALIGNMENT and not previous_day_aligned:
+                print("REJECT:", symbol, "previous-day stock alignment mismatch")
+                continue
+
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") not in {"BULLISH", "BEARISH"}:
                 continue
 
@@ -137,14 +146,19 @@ class ScannerEngine:
             signal["industry_direction"] = sector_direction
             signal["market_direction"] = nifty_direction
             signal["nifty100_direction"] = nifty_direction
-            signal["stock_previous_day_direction"] = ref.get("PreviousDayDirection")
-            signal["previous_day_direction"] = ref.get("PreviousDayDirection")
+            signal["stock_previous_day_direction"] = previous_day_direction
+            signal["previous_day_direction"] = previous_day_direction
+            signal["previous_day_aligned"] = previous_day_aligned
             signals.append(signal)
             print(
                 "SIGNAL:", symbol, signal["signal"],
                 "Entry", signal["entry"],
                 "SL", signal["stop_loss"],
                 "Target", signal["target"],
+                "PDC", signal["pdc"],
+                "Previous Day", previous_day_direction,
+                "Sector", sector_direction,
+                "NIFTY 100", nifty_direction,
             )
 
         print("Final signals:", len(signals))
