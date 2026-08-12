@@ -2,13 +2,17 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 
 
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+
+
 class SectorStore:
-    """Prepare sector buckets once before market hours; never fetch during scans."""
+    """Prepare sector buckets once per IST date and cache them locally."""
 
     def __init__(self, universe_df):
         self.universe = universe_df.copy()
@@ -23,9 +27,18 @@ class SectorStore:
         except Exception:
             return None
 
-    def prepare(self):
+    def prepare(self, force=False):
         if self.universe.empty or "Symbol" not in self.universe.columns:
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
+
+        if not force and self.path.exists():
+            try:
+                cached = pd.read_csv(self.path)
+                required = {"Symbol", "Sector"}
+                if required.issubset(cached.columns) and len(cached) >= max(1, int(len(self.universe) * 0.8)):
+                    return cached
+            except Exception:
+                pass
 
         result = self.universe[[c for c in ["Symbol", "Industry"] if c in self.universe.columns]].copy()
         if "Industry" not in result.columns:
@@ -51,18 +64,20 @@ class SectorStore:
         result["SectorSource"] = result["Symbol"].map(
             lambda symbol: "YAHOO_SECTOR" if sectors.get(symbol) else "NIFTY_INDUSTRY_FALLBACK"
         )
-        result["PreparedAtIST"] = datetime.now().isoformat(timespec="seconds")
-        return result[["Symbol", "Sector", "SectorSource", "PreparedAtIST"]].drop_duplicates("Symbol").reset_index(drop=True)
+        result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
+        result = result[["Symbol", "Sector", "SectorSource", "PreparedAtIST"]].drop_duplicates("Symbol").reset_index(drop=True)
+        result.to_csv(self.path, index=False)
+        return result
 
     def load(self):
         if not self.path.exists():
-            return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
+            return self.prepare()
         try:
             df = pd.read_csv(self.path)
             if "Symbol" not in df.columns or "Sector" not in df.columns:
-                return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
+                return self.prepare(force=True)
             if "SectorSource" not in df.columns:
                 df["SectorSource"] = "UNKNOWN"
             return df
         except Exception:
-            return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
+            return self.prepare(force=True)
