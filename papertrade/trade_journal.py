@@ -11,27 +11,32 @@ from papertrade.persistent_storage import restore, sync
 
 
 class TradeJournal:
+    # Keep both the legacy names and the current strategy fields so old CSVs
+    # migrate safely while new trades retain the complete setup context.
     TRADE_COLUMNS = [
-        "trade_id", "symbol", "stock", "industry", "signal", "buy_sell",
+        "trade_id", "symbol", "stock", "industry", "sector", "signal", "buy_sell",
         "entry_time", "entry", "stop_loss", "target", "quantity",
         "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr",
         "pnl", "risk_per_share", "actual_risk", "position_value",
-        "breakout_level", "market_direction", "industry_direction",
-        "stock_direction", "status",
+        "breakout_level", "pdc", "today_open", "today_low", "today_high",
+        "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
+        "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
+        "setup_type", "entry_candle_close", "status",
     ]
 
     SIGNAL_COLUMNS = [
-        "timestamp", "symbol", "industry", "signal",
-        "market_direction", "industry_direction", "stock_direction",
-        "breakout_level", "entry", "stop_loss", "target", "quantity",
-        "approved", "reason",
+        "timestamp", "symbol", "industry", "sector", "signal",
+        "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
+        "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
+        "breakout_level", "pdc", "today_open", "today_low", "today_high",
+        "entry", "stop_loss", "target", "quantity", "risk_reward", "setup_type",
+        "entry_candle_close", "approved", "reason",
     ]
 
     def __init__(self, trade_file=TRADE_LOG_FILE, signal_file=SIGNAL_LOG_FILE):
         self.trade_file = trade_file
         self.signal_file = signal_file
         self._prepare_files()
-        # Restore the latest committed journal after a Streamlit restart.
         restore(self.trade_file, self.trade_file.replace(os.sep, "/"))
         restore(self.signal_file, self.signal_file.replace(os.sep, "/"))
         self._prepare_files()
@@ -48,7 +53,6 @@ class TradeJournal:
                 with open(path, "w", newline="", encoding="utf-8") as file:
                     csv.DictWriter(file, fieldnames=columns).writeheader()
                 continue
-            # Migrate existing CSVs without deleting historical data.
             try:
                 df = pd.read_csv(path)
                 missing = [column for column in columns if column not in df.columns]
@@ -57,6 +61,12 @@ class TradeJournal:
                         df[column] = ""
                     df = df.reindex(columns=columns)
                     df.to_csv(path, index=False)
+                else:
+                    # Also normalize column order after older journal versions.
+                    extra = [c for c in df.columns if c not in columns]
+                    if extra or list(df.columns) != columns:
+                        df = df.reindex(columns=columns)
+                        df.to_csv(path, index=False)
             except (FileNotFoundError, pd.errors.EmptyDataError):
                 with open(path, "w", newline="", encoding="utf-8") as file:
                     csv.DictWriter(file, fieldnames=columns).writeheader()
@@ -97,11 +107,14 @@ class TradeJournal:
         for column in self.TRADE_COLUMNS:
             if column not in df.columns:
                 df[column] = ""
-        mask = df["trade_id"].astype(str).str.strip() == trade_id if not df.empty else pd.Series(dtype=bool)
+        mask = (
+            df["trade_id"].astype(str).str.strip() == trade_id
+            if not df.empty else pd.Series(dtype=bool)
+        )
         if not df.empty and bool(mask.any()):
             idx = df.index[mask][0]
             for column in self.TRADE_COLUMNS:
-                # Preserve existing values when an OPEN update does not yet have exit data.
+                # Do not erase exit data during an OPEN refresh.
                 if row[column] != "" or column not in {"exit_time", "exit_price", "exit_reason", "pnl"}:
                     df.at[idx, column] = row[column]
         else:
@@ -153,7 +166,21 @@ class TradeJournal:
                 "breakeven_trades": 0, "win_rate": 0.0,
                 "total_pnl": 0.0, "average_pnl": 0.0,
             }
-        pnl = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
+
+        # Journal summary means completed trades. Open entries must not count
+        # as wins/losses or distort the win rate.
+        if "status" in df.columns:
+            closed = df[df["status"].astype(str).str.upper() == "CLOSED"].copy()
+        else:
+            closed = df.copy()
+        if closed.empty:
+            return {
+                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+                "breakeven_trades": 0, "win_rate": 0.0,
+                "total_pnl": 0.0, "average_pnl": 0.0,
+            }
+
+        pnl = pd.to_numeric(closed["pnl"], errors="coerce").fillna(0.0)
         total = len(pnl)
         winning = int((pnl > 0).sum())
         losing = int((pnl < 0).sum())
