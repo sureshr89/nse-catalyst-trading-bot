@@ -1,0 +1,39 @@
+name: Priority 3 trade details
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Complete Priority 3 trade details'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch paper trade fields
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('papertrade/paper_trade_engine.py')
+          text = p.read_text(encoding='utf-8-sig')
+          old = '''        position = {\n\n            "trade_id":\n                trade_id,\n\n            "symbol":\n                symbol,\n\n            "signal":\n                signal,\n\n            "entry_time":\n                entry_time,\n\n            "entry":\n                round(\n                    entry,\n                    4\n                ),\n\n            "stop_loss":\n                round(\n                    stop_loss,\n                    4\n                ),\n\n            "target":\n                round(\n                    target,\n                    4\n                ),\n\n            "quantity":\n                int(\n                    quantity\n                ),\n\n            "status":\n                "OPEN",'''
+          new = '''        # Complete risk/reward figures are stored with the position so they\n        # remain available after a refresh/restart and in the EOD journal.\n        risk_amount = round(abs(entry - stop_loss) * quantity, 2)\n        reward_amount = round(abs(target - entry) * quantity, 2)\n        rr_ratio = round(reward_amount / risk_amount, 4) if risk_amount > 0 else 0.0\n\n        position = {\n\n            "trade_id":\n                trade_id,\n\n            "symbol":\n                symbol,\n\n            "stock":\n                symbol,\n\n            "signal":\n                signal,\n\n            "buy_sell":\n                signal,\n\n            "entry_time":\n                entry_time,\n\n            "entry":\n                round(\n                    entry,\n                    4\n                ),\n\n            "stop_loss":\n                round(\n                    stop_loss,\n                    4\n                ),\n\n            "target":\n                round(\n                    target,\n                    4\n                ),\n\n            "quantity":\n                int(\n                    quantity\n                ),\n\n            "risk":\n                risk_amount,\n\n            "reward":\n                reward_amount,\n\n            "rr":\n                rr_ratio,\n\n            "status":\n                "OPEN",'''
+          if old not in text:
+              raise SystemExit('Expected position block not found')
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+      - name: Validate
+        run: python -m py_compile main.py papertrade/paper_trade_engine.py papertrade/trade_journal.py papertrade/persistent_storage.py
+      - name: Commit and remove workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add papertrade/paper_trade_engine.py
+          git diff --cached --quiet || git commit -m "Complete Priority 3 trade details"
+          git push
+          git rm -f .github/workflows/priority3-trade-details.yml
+          git diff --cached --quiet || git commit -m "Remove one-time Priority 3 workflow"
+          git push
