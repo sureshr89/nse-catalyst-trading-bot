@@ -1,22 +1,18 @@
-"""Paper-trading package bootstrap.
-
-The hosted Streamlit filesystem is ephemeral. Patch the paper engine at package
-load time so open positions, capital and trade counters are restored from the
-same-day durable state and persisted immediately after every open/close.
-"""
+"""Paper-trading package bootstrap with durable runtime recovery."""
 
 from __future__ import annotations
 
 import json
+import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 from . import paper_trade_engine as _engine
 from .persistent_storage import restore, sync
 
-
 _STATE_FILE = "outputs/paper_engine_state.json"
-
 
 _original_init = _engine.PaperTradeEngine.__init__
 _original_open = _engine.PaperTradeEngine.open_trade
@@ -86,3 +82,38 @@ def _close(self, symbol, exit_price, exit_time, reason):
 _engine.PaperTradeEngine.__init__ = _init
 _engine.PaperTradeEngine.open_trade = _open
 _engine.PaperTradeEngine.close_position = _close
+
+
+def _patch_trading_bot():
+    """Patch TradingBot once its module finishes importing."""
+    for _ in range(200):
+        module = sys.modules.get("main")
+        bot_class = getattr(module, "TradingBot", None) if module else None
+        if bot_class is not None:
+            if getattr(bot_class, "_persistent_state_patched", False):
+                return
+            original = bot_class.__init__
+
+            def restored_init(self, *args, **kwargs):
+                original(self, *args, **kwargs)
+                try:
+                    df = self.journal.get_trades()
+                    if not df.empty and "pnl" in df.columns and "exit_time" in df.columns:
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        dates = df["exit_time"].astype(str).str[:10]
+                        pnl = __import__("pandas").to_numeric(
+                            df["pnl"], errors="coerce"
+                        ).fillna(0.0)
+                        self.daily_pnl = round(float(pnl[dates == today].sum()), 2)
+                except Exception as error:
+                    print(
+                        f"Daily P&L restore skipped: {type(error).__name__}: {error}"
+                    )
+
+            bot_class.__init__ = restored_init
+            bot_class._persistent_state_patched = True
+            return
+        time.sleep(0.025)
+
+
+threading.Thread(target=_patch_trading_bot, daemon=True).start()
