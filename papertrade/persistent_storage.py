@@ -1,6 +1,6 @@
 """Persistence bridge for Streamlit's ephemeral filesystem.
 
-CSV journal files and the paper-engine runtime state can be restored from and
+CSV journal files and paper-engine runtime state can be restored from and
 synchronized to the GitHub repository when GITHUB_TOKEN is configured in the
 Streamlit deployment secrets.
 """
@@ -8,6 +8,7 @@ Streamlit deployment secrets.
 import base64
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -16,6 +17,7 @@ REPO = os.getenv("GITHUB_REPOSITORY", "sureshr89/nse-catalyst-trading-bot")
 BRANCH = os.getenv("GITHUB_BRANCH", "main")
 TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 API_ROOT = f"https://api.github.com/repos/{REPO}/contents"
+_LAST_SIGNAL_SYNC = 0.0
 
 
 def enabled():
@@ -41,7 +43,6 @@ def _request(url, method="GET", payload=None):
 
 
 def restore(local_path, repo_path):
-    """Restore a tracked file from GitHub if persistence is configured."""
     if not enabled():
         return False
     try:
@@ -60,9 +61,15 @@ def restore(local_path, repo_path):
 
 
 def sync(local_path, repo_path, message):
-    """Push the current local file to GitHub when persistence is configured."""
+    """Push local data to GitHub; scanner signals are rate-limited to once/minute."""
+    global _LAST_SIGNAL_SYNC
     if not enabled():
         return False
+    if "scanner signal" in str(message).lower():
+        now = time.monotonic()
+        if now - _LAST_SIGNAL_SYNC < 60.0:
+            return False
+        _LAST_SIGNAL_SYNC = now
     path = Path(local_path)
     if not path.exists():
         return False
