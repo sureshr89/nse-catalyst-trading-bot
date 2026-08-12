@@ -1,5 +1,7 @@
 """Pure price-action Gap-Failure + Open-Reclaim strategy."""
+
 from datetime import time
+
 import pandas as pd
 
 
@@ -35,14 +37,12 @@ class GapReclaimEngine:
         )
 
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first completed 1m candle reclaiming today's open,
-        but only after the price has already crossed the PDC in the required
-        gap-failure direction."""
+        """Return the first completed 1m candle reclaiming today's open after PDC failure."""
         data = self._clean(df)
         if len(data) < 2:
             return None
 
-        completed = data.iloc[:-1].copy()  # never use a still-forming candle
+        completed = data.iloc[:-1].copy()
         if len(completed) < 2:
             return None
 
@@ -50,8 +50,6 @@ class GapReclaimEngine:
         for i in range(1, len(completed)):
             cur = completed.iloc[i]
             if cur["Datetime"].time() < self.start:
-                # The PDC breach can happen during the observation period;
-                # continue tracking it, but no entry is allowed yet.
                 if side == "BUY" and float(cur["Low"]) < pdc:
                     pdc_breached = True
                 elif side == "SELL" and float(cur["High"]) > pdc:
@@ -76,8 +74,7 @@ class GapReclaimEngine:
                 return cur
         return None
 
-    def build(self, symbol, candles, pdc, previous_day_open,
-              sector_direction, nifty_direction):
+    def build(self, symbol, candles, pdc, previous_day_open, sector_direction, nifty_direction):
         data = self._clean(candles)
         if data.empty or pdc is None or previous_day_open is None:
             return None
@@ -90,8 +87,6 @@ class GapReclaimEngine:
         previous_day_green = pdc > previous_day_open
         previous_day_red = pdc < previous_day_open
 
-        # BUY: yesterday green + gap-up + price trades below PDC +
-        # bullish Nifty 100 + bullish sector + current stock reclaims today's open.
         if previous_day_green and today_open > pdc:
             if today_low < pdc and sector_direction == "BULLISH" and nifty_direction == "BULLISH":
                 entry_candle = self._entry_candle(data, today_open, pdc, "BUY")
@@ -107,8 +102,6 @@ class GapReclaimEngine:
                             nifty_direction, previous_day_green,
                         )
 
-        # SELL: yesterday red + gap-down + price trades above PDC +
-        # bearish Nifty 100 + bearish sector + current stock breaks today's open.
         if previous_day_red and today_open < pdc:
             if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
                 entry_candle = self._entry_candle(data, today_open, pdc, "SELL")
@@ -128,6 +121,7 @@ class GapReclaimEngine:
     def _trade(self, side, symbol, candle, entry, stop, target, pdc,
                today_open, today_low, today_high, sector_direction,
                nifty_direction, previous_aligned):
+        stock_direction = "BULLISH" if side == "BUY" else "BEARISH"
         return {
             "symbol": symbol,
             "signal": side,
@@ -141,10 +135,16 @@ class GapReclaimEngine:
             "today_open": round(today_open, 2),
             "today_low": round(today_low, 2),
             "today_high": round(today_high, 2),
+            "sector": sector_direction,
             "sector_direction": sector_direction,
+            "industry": sector_direction,
+            "industry_direction": sector_direction,
+            "market_direction": nifty_direction,
             "nifty100_direction": nifty_direction,
-            "stock_today_direction": "BULLISH" if side == "BUY" else "BEARISH",
+            "stock_direction": stock_direction,
+            "stock_today_direction": stock_direction,
             "previous_day_aligned": bool(previous_aligned),
+            "previous_day_direction": "BULLISH" if previous_aligned and side == "BUY" else "BEARISH" if previous_aligned and side == "SELL" else "NEUTRAL",
             "setup_type": "GAP_FAILURE_OPEN_RECLAIM",
             "entry_candle_close": round(float(candle["Close"]), 2),
         }
