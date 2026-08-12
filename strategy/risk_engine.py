@@ -1,28 +1,10 @@
-"""
-RISK ENGINE
-===========
+"""Risk and position sizing gate for the NIFTY 100 paper strategy."""
 
-Final safety gate between a scanner signal and a paper trade.
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-Checks
-------
-1. Signal must be BUY or SELL
-2. Entry must be valid
-3. Stop loss must be valid
-4. Target must be valid
-5. Quantity must be positive integer
-6. BUY stop loss must be below entry
-7. SELL stop loss must be above entry
-8. BUY target must be above entry
-9. SELL target must be below entry
-10. Risk per share must be positive
-11. Actual trade risk must be >= MIN_REQUIRED_RISK
-12. Actual trade risk must not exceed MAX_RISK_PER_TRADE
-13. Position value must not exceed TOTAL_CAPITAL
-14. Same stock cannot exceed MAX_TRADES_PER_STOCK
-
-This engine does NOT place orders.
-"""
+import pandas as pd
 
 from config.settings import (
     TOTAL_CAPITAL,
@@ -31,874 +13,186 @@ from config.settings import (
     RISK_PERCENT,
     MAX_TRADES_PER_STOCK,
     MIN_RR_RATIO,
+    TRADE_LOG_FILE,
 )
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class RiskEngine:
+    """Final safety gate. Position size is derived from the real entry/SL distance."""
 
     def __init__(self):
-
-        self.total_capital = float(
-            TOTAL_CAPITAL
-        )
-
-        self.max_risk_per_trade = float(
-            MAX_RISK_PER_TRADE
-        )
-
-        self.min_required_risk = float(
-            MIN_REQUIRED_RISK
-        )
-
-        self.risk_percent = float(
-            RISK_PERCENT
-        )
-
-        self.max_trades_per_stock = int(
-            MAX_TRADES_PER_STOCK
-        )
-
-        # --------------------------------------------------------
-        # Trades accepted during this program session.
-        # --------------------------------------------------------
-
+        self.total_capital = float(TOTAL_CAPITAL)
+        self.max_risk_per_trade = float(MAX_RISK_PER_TRADE)
+        self.min_required_risk = float(MIN_REQUIRED_RISK)
+        self.risk_percent = float(RISK_PERCENT)
+        self.max_trades_per_stock = int(MAX_TRADES_PER_STOCK)
         self.trade_counts = {}
+        self.restore_today_trade_counts()
 
-    # ============================================================
-    # SAFE NUMBER CONVERSION
-    # ============================================================
-
-    def _number(self, value):
-
+    @staticmethod
+    def _number(value):
         try:
-
             number = float(value)
-
-            if not number == number:
-                return None
-
-            return number
-
-        except (
-            TypeError,
-            ValueError
-        ):
-
+            return number if number == number else None
+        except (TypeError, ValueError):
             return None
 
-    # ============================================================
-    # TRADE COUNT
-    # ============================================================
+    @staticmethod
+    def _today_ist():
+        return datetime.now(INDIA_TZ).date()
+
+    def restore_today_trade_counts(self):
+        """Restore today's accepted entries so a restart cannot reset stock limits."""
+        self.trade_counts = {}
+        path = Path(TRADE_LOG_FILE)
+        if not path.exists():
+            return
+        try:
+            df = pd.read_csv(path)
+            if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
+                return
+            entries = pd.to_datetime(df["entry_time"], errors="coerce")
+            today = self._today_ist()
+            for symbol, entry_time in zip(df["symbol"], entries):
+                if pd.isna(entry_time):
+                    continue
+                if entry_time.date() == today:
+                    key = str(symbol).strip().upper()
+                    if key:
+                        self.trade_counts[key] = self.trade_counts.get(key, 0) + 1
+        except Exception:
+            # A malformed journal must never crash the worker; the normal gate still applies.
+            self.trade_counts = {}
 
     def get_trade_count(self, symbol):
-
-        symbol = (
-            str(symbol)
-            .strip()
-            .upper()
-        )
-
-        return self.trade_counts.get(
-            symbol,
-            0
-        )
-
-    # ============================================================
-    # CAN STOCK TRADE?
-    # ============================================================
+        return self.trade_counts.get(str(symbol).strip().upper(), 0)
 
     def stock_trade_allowed(self, symbol):
-
-        count = self.get_trade_count(
-            symbol
-        )
-
-        return (
-            count <
-            self.max_trades_per_stock
-        )
-
-    # ============================================================
-    # REGISTER APPROVED TRADE
-    # ============================================================
+        return self.get_trade_count(symbol) < self.max_trades_per_stock
 
     def register_trade(self, symbol):
-
-        symbol = (
-            str(symbol)
-            .strip()
-            .upper()
-        )
-
-        current = self.get_trade_count(
-            symbol
-        )
-
-        self.trade_counts[symbol] = (
-            current + 1
-        )
-
-        return self.trade_counts[
-            symbol
-        ]
-
-    # ============================================================
-    # RESET SESSION COUNTS
-    # ============================================================
+        key = str(symbol).strip().upper()
+        self.trade_counts[key] = self.get_trade_count(key) + 1
+        return self.trade_counts[key]
 
     def reset_trade_counts(self):
-
         self.trade_counts = {}
 
-    # ============================================================
-    # CALCULATE RISK
-    # ============================================================
-
-    def calculate_risk(
-        self,
-        signal,
-        entry,
-        stop_loss,
-        quantity
-    ):
-
-        signal = (
-            str(signal)
-            .strip()
-            .upper()
-        )
-
-        entry = self._number(
-            entry
-        )
-
-        stop_loss = self._number(
-            stop_loss
-        )
-
-        quantity = self._number(
-            quantity
-        )
-
-        if (
-            entry is None
-            or stop_loss is None
-            or quantity is None
-        ):
-
+    def calculate_risk(self, signal, entry, stop_loss, quantity):
+        entry = self._number(entry)
+        stop_loss = self._number(stop_loss)
+        quantity = self._number(quantity)
+        side = str(signal).strip().upper()
+        if entry is None or stop_loss is None or quantity is None or quantity <= 0:
             return None
-
-        if quantity <= 0:
-
+        risk_per_share = entry - stop_loss if side == "BUY" else stop_loss - entry if side == "SELL" else None
+        if risk_per_share is None or risk_per_share <= 0:
             return None
-
-        if signal == "BUY":
-
-            risk_per_share = (
-                entry - stop_loss
-            )
-
-        elif signal == "SELL":
-
-            risk_per_share = (
-                stop_loss - entry
-            )
-
-        else:
-
-            return None
-
-        if risk_per_share <= 0:
-
-            return None
-
-        actual_risk = (
-            risk_per_share
-            *
-            quantity
-        )
-
-        position_value = (
-            entry
-            *
-            quantity
-        )
-
         return {
-
-            "risk_per_share":
-                round(
-                    risk_per_share,
-                    4
-                ),
-
-            "actual_risk":
-                round(
-                    actual_risk,
-                    2
-                ),
-
-            "position_value":
-                round(
-                    position_value,
-                    2
-                ),
+            "risk_per_share": round(risk_per_share, 4),
+            "actual_risk": round(risk_per_share * quantity, 2),
+            "position_value": round(entry * quantity, 2),
         }
 
-    # ============================================================
-    # VALIDATE TRADE
-    # ============================================================
+    def validate(self, trade, check_trade_count=True):
+        if not isinstance(trade, dict):
+            return {"approved": False, "reasons": ["Trade must be a dictionary"]}
 
-    def validate(
-        self,
-        trade,
-        check_trade_count=True
-    ):
-
+        symbol = str(trade.get("symbol", "")).strip().upper()
+        signal = str(trade.get("signal", "")).strip().upper()
+        entry = self._number(trade.get("entry"))
+        stop = self._number(trade.get("stop_loss"))
+        target = self._number(trade.get("target"))
         reasons = []
 
-        # --------------------------------------------------------
-        # TRADE OBJECT
-        # --------------------------------------------------------
-
-        if not isinstance(
-            trade,
-            dict
-        ):
-
-            return {
-
-                "approved": False,
-
-                "reasons": [
-                    "Trade must be a dictionary"
-                ]
-            }
-
-        # --------------------------------------------------------
-        # SYMBOL
-        # --------------------------------------------------------
-
-        symbol = (
-            str(
-                trade.get(
-                    "symbol",
-                    ""
-                )
-            )
-            .strip()
-            .upper()
-        )
-
         if not symbol:
-
-            reasons.append(
-                "Missing symbol"
-            )
-
-        # --------------------------------------------------------
-        # SIGNAL
-        # --------------------------------------------------------
-
-        signal = (
-            str(
-                trade.get(
-                    "signal",
-                    ""
-                )
-            )
-            .strip()
-            .upper()
-        )
-
-        if signal not in [
-            "BUY",
-            "SELL"
-        ]:
-
-            reasons.append(
-                "Signal must be BUY or SELL"
-            )
-
-        # --------------------------------------------------------
-        # NUMBERS
-        # --------------------------------------------------------
-
-        entry = self._number(
-            trade.get(
-                "entry"
-            )
-        )
-
-        stop_loss = self._number(
-            trade.get(
-                "stop_loss"
-            )
-        )
-
-        target = self._number(
-            trade.get(
-                "target"
-            )
-        )
-
-        quantity = self._number(
-            trade.get(
-                "quantity"
-            )
-        )
-
-        # --------------------------------------------------------
-        # BASIC VALIDATION
-        # --------------------------------------------------------
-
-        if (
-            entry is None
-            or entry <= 0
-        ):
-
-            reasons.append(
-                "Invalid entry price"
-            )
-
-        if (
-            stop_loss is None
-            or stop_loss <= 0
-        ):
-
-            reasons.append(
-                "Invalid stop loss"
-            )
-
-        if (
-            target is None
-            or target <= 0
-        ):
-
-            reasons.append(
-                "Invalid target"
-            )
-
-        if (
-            quantity is None
-            or quantity <= 0
-        ):
-
-            reasons.append(
-                "Invalid quantity"
-            )
-
-        # Quantity must be a whole number.
-        if (
-            quantity is not None
-            and quantity > 0
-            and quantity != int(quantity)
-        ):
-
-            reasons.append(
-                "Quantity must be a whole number"
-            )
-
-        # --------------------------------------------------------
-        # STOP LOSS / TARGET DIRECTION
-        # --------------------------------------------------------
-
-        if (
-            signal == "BUY"
-            and entry is not None
-            and stop_loss is not None
-        ):
-
-            if stop_loss >= entry:
-
-                reasons.append(
-                    "BUY stop loss must be below entry"
-                )
-
-            if (
-                target is not None
-                and target <= entry
-            ):
-
-                reasons.append(
-                    "BUY target must be above entry"
-                )
-
-        if (
-            signal == "SELL"
-            and entry is not None
-            and stop_loss is not None
-        ):
-
-            if stop_loss <= entry:
-
-                reasons.append(
-                    "SELL stop loss must be above entry"
-                )
-
-            if (
-                target is not None
-                and target >= entry
-            ):
-
-                reasons.append(
-                    "SELL target must be below entry"
-                )
-
-        # --------------------------------------------------------
-        # STOP IF BASIC VALUES ARE INVALID
-        # --------------------------------------------------------
-
+            reasons.append("Missing symbol")
+        if signal not in {"BUY", "SELL"}:
+            reasons.append("Signal must be BUY or SELL")
+        if entry is None or entry <= 0:
+            reasons.append("Invalid entry price")
+        if stop is None or stop <= 0:
+            reasons.append("Invalid stop loss")
+        if target is None or target <= 0:
+            reasons.append("Invalid target")
+        if entry is not None and stop is not None:
+            if signal == "BUY" and stop >= entry:
+                reasons.append("BUY stop loss must be below entry")
+            if signal == "SELL" and stop <= entry:
+                reasons.append("SELL stop loss must be above entry")
+        if entry is not None and target is not None:
+            if signal == "BUY" and target <= entry:
+                reasons.append("BUY target must be above entry")
+            if signal == "SELL" and target >= entry:
+                reasons.append("SELL target must be below entry")
         if reasons:
+            return {"approved": False, "symbol": symbol, "signal": signal, "reasons": reasons}
 
-            return {
+        risk_per_share = abs(entry - stop)
+        if risk_per_share <= 0:
+            return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Invalid risk per share"]}
 
-                "approved": False,
+        # The strategy's risk budget is ₹1,500 per stock. Use the largest whole
+        # quantity that stays at or below that budget; capital remains a second gate.
+        max_risk_qty = int(self.max_risk_per_trade // risk_per_share)
+        capital_qty = int(self.total_capital // entry)
+        quantity = min(max_risk_qty, capital_qty)
+        if quantity <= 0:
+            return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Risk distance is too large for available capital/risk budget"]}
 
-                "symbol": symbol,
+        actual_risk = round(risk_per_share * quantity, 2)
+        position_value = round(entry * quantity, 2)
+        reward_per_share = (target - entry) if signal == "BUY" else (entry - target)
+        reward = round(reward_per_share * quantity, 2)
+        rr = reward / actual_risk if actual_risk > 0 else 0.0
 
-                "signal": signal,
-
-                "reasons": reasons
-            }
-
-        # --------------------------------------------------------
-        # RECALCULATE RISK
-        #
-        # Never trust risk values supplied by another module.
-        # --------------------------------------------------------
-
-        risk = self.calculate_risk(
-            signal,
-            entry,
-            stop_loss,
-            quantity
-        )
-
-        if risk is None:
-
-            return {
-
-                "approved": False,
-
-                "symbol": symbol,
-
-                "signal": signal,
-
-                "reasons": [
-                    "Unable to calculate valid risk"
-                ]
-            }
-
-        risk_per_share = risk[
-            "risk_per_share"
-        ]
-
-        actual_risk = risk[
-            "actual_risk"
-        ]
-
-        position_value = risk[
-            "position_value"
-        ]
-
-        # --------------------------------------------------------
-        # MINIMUM RISK : REWARD
-        #
-        # Every new setup must provide at least 1:1.5.
-        # --------------------------------------------------------
-
-        if signal == "BUY":
-            reward_per_share = target - entry
-        else:
-            reward_per_share = entry - target
-
-        reward = reward_per_share * quantity
-        rr_ratio = (reward / actual_risk) if actual_risk > 0 else 0.0
-
-        if rr_ratio < float(MIN_RR_RATIO):
-            reasons.append(
-                f"Risk:Reward {rr_ratio:.2f} is below minimum "
-                f"1:{float(MIN_RR_RATIO):.1f}"
-            )
-
-        # --------------------------------------------------------
-        # MINIMUM RISK
-        # --------------------------------------------------------
-
-        if (
-            actual_risk
-            <
-            self.min_required_risk
-        ):
-
-            reasons.append(
-
-                f"Actual risk Rs {actual_risk:.2f} "
-                f"is below minimum required "
-                f"Rs {self.min_required_risk:.2f}"
-            )
-
-        # --------------------------------------------------------
-        # MAXIMUM RISK
-        # --------------------------------------------------------
-
-        if (
-            actual_risk
-            >
-            self.max_risk_per_trade
-        ):
-
-            reasons.append(
-
-                f"Actual risk Rs {actual_risk:.2f} "
-                f"exceeds maximum "
-                f"Rs {self.max_risk_per_trade:.2f}"
-            )
-
-        # --------------------------------------------------------
-        # CAPITAL LIMIT
-        # --------------------------------------------------------
-
-        if (
-            position_value
-            >
-            self.total_capital
-        ):
-
-            reasons.append(
-
-                f"Position value Rs {position_value:.2f} "
-                f"exceeds capital "
-                f"Rs {self.total_capital:.2f}"
-            )
-
-        # --------------------------------------------------------
-        # MAX TRADES PER STOCK
-        # --------------------------------------------------------
-
-        if (
-            check_trade_count
-            and
-            not self.stock_trade_allowed(
-                symbol
-            )
-        ):
-
-            reasons.append(
-
-                f"{symbol} already reached "
-                f"maximum trades per stock "
-                f"({self.max_trades_per_stock})"
-            )
-
-        # --------------------------------------------------------
-        # FINAL RESULT
-        # --------------------------------------------------------
-
-        approved = (
-            len(reasons) == 0
-        )
+        if rr < float(MIN_RR_RATIO):
+            reasons.append(f"Risk:Reward {rr:.2f} is below minimum 1:{float(MIN_RR_RATIO):.1f}")
+        if actual_risk < self.min_required_risk:
+            reasons.append(f"Actual risk Rs {actual_risk:.2f} is below minimum required Rs {self.min_required_risk:.2f}")
+        if actual_risk > self.max_risk_per_trade:
+            reasons.append(f"Actual risk Rs {actual_risk:.2f} exceeds maximum Rs {self.max_risk_per_trade:.2f}")
+        if position_value > self.total_capital:
+            reasons.append(f"Position value Rs {position_value:.2f} exceeds capital Rs {self.total_capital:.2f}")
+        if check_trade_count and not self.stock_trade_allowed(symbol):
+            reasons.append(f"{symbol} already reached maximum trades per stock ({self.max_trades_per_stock})")
 
         return {
-
-            "approved":
-                approved,
-
-            "symbol":
-                symbol,
-
-            "signal":
-                signal,
-
-            "entry":
-                round(
-                    entry,
-                    4
-                ),
-
-            "stop_loss":
-                round(
-                    stop_loss,
-                    4
-                ),
-
-            "target":
-                round(
-                    target,
-                    4
-                ),
-
-            "quantity":
-                int(quantity),
-
-            "risk_per_share":
-                risk_per_share,
-
-            "actual_risk":
-                actual_risk,
-
-            "reward":
-                round(reward, 2),
-
-            "rr":
-                round(rr_ratio, 4),
-
-            "min_rr_ratio":
-                float(MIN_RR_RATIO),
-
-            "position_value":
-                position_value,
-
-            "min_required_risk":
-                self.min_required_risk,
-
-            "max_risk":
-                self.max_risk_per_trade,
-
-            "capital":
-                self.total_capital,
-
-            "reasons":
-                reasons
+            "approved": not reasons,
+            "symbol": symbol,
+            "signal": signal,
+            "entry": round(entry, 4),
+            "stop_loss": round(stop, 4),
+            "target": round(target, 4),
+            "quantity": int(quantity),
+            "risk_per_share": round(risk_per_share, 4),
+            "actual_risk": actual_risk,
+            "reward": reward,
+            "rr": round(rr, 4),
+            "min_rr_ratio": float(MIN_RR_RATIO),
+            "position_value": position_value,
+            "min_required_risk": self.min_required_risk,
+            "max_risk": self.max_risk_per_trade,
+            "capital": self.total_capital,
+            "reasons": reasons,
         }
 
-    # ============================================================
-    # APPROVE AND REGISTER
-    # ============================================================
-
     def approve_trade(self, trade):
-
-        result = self.validate(
-            trade,
-            check_trade_count=True
-        )
-
-        if not result[
-            "approved"
-        ]:
-
+        result = self.validate(trade, check_trade_count=True)
+        if not result.get("approved"):
             return result
-
-        # Only register after successful validation.
-
-        self.register_trade(
-            result["symbol"]
-        )
-
-        result[
-            "trade_count"
-        ] = self.get_trade_count(
-            result["symbol"]
-        )
-
+        self.register_trade(result["symbol"])
+        result["trade_count"] = self.get_trade_count(result["symbol"])
         return result
 
-
-# ================================================================
-# TEST
-# ================================================================
-
-if __name__ == "__main__":
-
-    print("=" * 90)
-    print("RISK ENGINE")
-    print("=" * 90)
-
-    engine = RiskEngine()
-
-    print(
-        "Total Capital        :",
-        f"Rs {engine.total_capital:.2f}"
-    )
-
-    print(
-        "Minimum Risk / Trade :",
-        f"Rs {engine.min_required_risk:.2f}"
-    )
-
-    print(
-        "Maximum Risk / Trade :",
-        f"Rs {engine.max_risk_per_trade:.2f}"
-    )
-
-    print(
-        "Risk Percent         :",
-        f"{engine.risk_percent}%"
-    )
-
-    print(
-        "Max Trades / Stock   :",
-        engine.max_trades_per_stock
-    )
-
-    # ------------------------------------------------------------
-    # TEST 1 - VALID BUY
-    # ------------------------------------------------------------
-
-    buy_trade = {
-
-        "symbol":
-            "RELIANCE",
-
-        "signal":
-            "BUY",
-
-        "entry":
-            105.40,
-
-        "stop_loss":
-            102.80,
-
-        "target":
-            108.00,
-
-        "quantity":
-            480
-    }
-
-    print()
-    print(
-        "TEST 1 - VALID BUY"
-    )
-    print("-" * 90)
-
-    result = engine.approve_trade(
-        buy_trade
-    )
-
-    print(result)
-
-    # ------------------------------------------------------------
-    # TEST 2 - DUPLICATE STOCK
-    # ------------------------------------------------------------
-
-    print()
-    print(
-        "TEST 2 - SECOND RELIANCE TRADE"
-    )
-    print("-" * 90)
-
-    result = engine.approve_trade(
-        buy_trade
-    )
-
-    print(result)
-
-    # ------------------------------------------------------------
-    # TEST 3 - BELOW MINIMUM RISK
-    # ------------------------------------------------------------
-
-    low_risk_trade = {
-
-        "symbol":
-            "INFY",
-
-        "signal":
-            "BUY",
-
-        "entry":
-            100.00,
-
-        "stop_loss":
-            99.00,
-
-        "target":
-            101.00,
-
-        "quantity":
-            500
-    }
-
-    print()
-    print(
-        "TEST 3 - BELOW MINIMUM RISK"
-    )
-    print("-" * 90)
-
-    result = engine.approve_trade(
-        low_risk_trade
-    )
-
-    print(result)
-
-    # ------------------------------------------------------------
-    # TEST 4 - EXCESS RISK
-    # ------------------------------------------------------------
-
-    high_risk_trade = {
-
-        "symbol":
-            "HDFCBANK",
-
-        "signal":
-            "BUY",
-
-        "entry":
-            100.00,
-
-        "stop_loss":
-            95.00,
-
-        "target":
-            105.00,
-
-        "quantity":
-            500
-    }
-
-    print()
-    print(
-        "TEST 4 - EXCESS RISK"
-    )
-    print("-" * 90)
-
-    result = engine.approve_trade(
-        high_risk_trade
-    )
-
-    print(result)
-
-    # ------------------------------------------------------------
-    # TEST 5 - VALID SELL
-    # ------------------------------------------------------------
-
-    sell_trade = {
-
-        "symbol":
-            "TCS",
-
-        "signal":
-            "SELL",
-
-        "entry":
-            99.60,
-
-        "stop_loss":
-            102.20,
-
-        "target":
-            97.00,
-
-        "quantity":
-            480
-    }
-
-    print()
-    print(
-        "TEST 5 - VALID SELL"
-    )
-    print("-" * 90)
-
-    result = engine.approve_trade(
-        sell_trade
-    )
-
-    print(result)
-
-    print()
-    print("=" * 90)
-    print(
-        "RISK ENGINE TEST COMPLETE"
-    )
-    print("=" * 90)
+    def calculate_position_size(self, entry, stop_loss, available_capital=None):
+        entry = self._number(entry)
+        stop_loss = self._number(stop_loss)
+        if entry is None or stop_loss is None or entry <= 0 or entry == stop_loss:
+            return 0
+        risk_per_share = abs(entry - stop_loss)
+        risk_qty = int(self.max_risk_per_trade // risk_per_share)
+        capital = self.total_capital if available_capital is None else float(available_capital)
+        return max(0, min(risk_qty, int(capital // entry)))
