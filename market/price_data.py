@@ -1,4 +1,7 @@
 """Price data engine for the pure price-action paper strategy."""
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import pandas as pd
 import yfinance as yf
 
@@ -7,6 +10,8 @@ class PriceData:
     def __init__(self):
         self.valid_intervals = {"1m", "5m", "1d"}
         self.download_timeout = 10
+        self.batch_size = 25
+        self.max_workers = 4
 
     def yahoo_symbol(self, symbol):
         symbol = str(symbol).strip().upper()
@@ -62,35 +67,78 @@ class PriceData:
     def get_daily(self, symbol, period="10d"):
         return self.get_candles(symbol, "1d", period)
 
-    def get_multi_1m(self, symbols):
-        """Batch 1-minute download for the Nifty 100 scanner."""
-        symbols = [str(s).upper().replace(".NS", "") for s in symbols]
-        tickers = [f"{s}.NS" for s in symbols]
-        if not tickers:
-            return {}
+    @staticmethod
+    def _chunks(items, size):
+        for i in range(0, len(items), size):
+            yield items[i:i + size]
+
+    def _download_multi_batch(self, tickers, interval="1m", period="1d"):
         try:
-            raw = yf.download(
-                tickers=tickers, period="1d", interval="1m", auto_adjust=False,
-                progress=False, threads=True, prepost=False, group_by="ticker",
+            return yf.download(
+                tickers=tickers,
+                period=period,
+                interval=interval,
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+                prepost=False,
+                group_by="ticker",
                 timeout=self.download_timeout,
             )
         except Exception as error:
-            print("Batch 1-minute download failed:", error)
+            print(f"Yahoo batch failed ({len(tickers)} tickers): {error}")
+            return pd.DataFrame()
+
+    def get_multi_1m(self, symbols):
+        """Download Nifty 100 1-minute data in small Yahoo-safe batches."""
+        symbols = [str(s).upper().replace(".NS", "") for s in symbols]
+        symbols = list(dict.fromkeys(s for s in symbols if s))
+        if not symbols:
             return {}
-        result = {}
-        if isinstance(raw.columns, pd.MultiIndex):
-            level0 = set(raw.columns.get_level_values(0))
-            level1 = set(raw.columns.get_level_values(1))
-            for symbol, ticker in zip(symbols, tickers):
+
+        batches = list(self._chunks(symbols, self.batch_size))
+        raw_frames = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_map = {
+                executor.submit(
+                    self._download_multi_batch,
+                    [f"{s}.NS" for s in batch],
+                    "1m",
+                    "1d",
+                ): batch
+                for batch in batches
+            }
+            for future in as_completed(future_map):
+                batch = future_map[future]
                 try:
-                    if ticker in level0:
-                        result[symbol] = self._clean_data(raw[ticker])
-                    elif ticker in level1:
-                        result[symbol] = self._clean_data(raw.xs(ticker, axis=1, level=1))
-                except Exception:
-                    result[symbol] = pd.DataFrame()
-        else:
-            result[symbols[0]] = self._clean_data(raw)
+                    raw = future.result()
+                except Exception as error:
+                    print("Yahoo batch worker failed:", error)
+                    continue
+                if raw is not None and not raw.empty:
+                    raw_frames.append((batch, raw))
+
+        result = {}
+        for batch, raw in raw_frames:
+            tickers = [f"{s}.NS" for s in batch]
+            if isinstance(raw.columns, pd.MultiIndex):
+                level0 = set(raw.columns.get_level_values(0))
+                level1 = set(raw.columns.get_level_values(1))
+                for symbol, ticker in zip(batch, tickers):
+                    try:
+                        if ticker in level0:
+                            result[symbol] = self._clean_data(raw[ticker])
+                        elif ticker in level1:
+                            result[symbol] = self._clean_data(raw.xs(ticker, axis=1, level=1))
+                        else:
+                            result[symbol] = pd.DataFrame()
+                    except Exception:
+                        result[symbol] = pd.DataFrame()
+            elif len(batch) == 1:
+                result[batch[0]] = self._clean_data(raw)
+
+        for symbol in symbols:
+            result.setdefault(symbol, pd.DataFrame())
         return result
 
     def get_index_1m(self, ticker="^CNX100"):
