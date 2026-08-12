@@ -1,1 +1,1 @@
-timestamp,symbol,industry,signal,market_direction,industry_direction,stock_direction,breakout_level,entry,stop_loss,target,quantity,approved,reason
+timestamp,symbol,industry,sector,signal,market_direction,nifty100_direction,industry_direction,sector_direction,stock_direction,stock_today_direction,previous_day_aligned,previous_day_direction,breakout_level,pdc,today_open,today_low,today_high,entry,stop_loss,target,quantity,risk_reward,setup_type,entry_candle_close,approved,reason
