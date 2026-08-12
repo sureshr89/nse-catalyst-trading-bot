@@ -70,6 +70,31 @@ class TradeJournal:
             return False
         return str(trade_id).strip() in df["trade_id"].astype(str).str.strip().values
 
+    def upsert_trade(self, trade):
+        if not isinstance(trade, dict):
+            return {"saved": False, "reason": "Trade must be a dictionary"}
+        trade_id = str(trade.get("trade_id", "")).strip()
+        if not trade_id:
+            return {"saved": False, "reason": "Missing trade_id"}
+        row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}
+        try:
+            df = pd.read_csv(self.trade_file)
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            df = pd.DataFrame(columns=self.TRADE_COLUMNS)
+        if "trade_id" not in df.columns:
+            df = pd.DataFrame(columns=self.TRADE_COLUMNS)
+        mask = df["trade_id"].astype(str).str.strip() == trade_id if not df.empty else pd.Series(dtype=bool)
+        if not df.empty and bool(mask.any()):
+            idx = df.index[mask][0]
+            for column in self.TRADE_COLUMNS:
+                df.at[idx, column] = row[column]
+        else:
+            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        df = df.reindex(columns=self.TRADE_COLUMNS)
+        df.to_csv(self.trade_file, index=False)
+        sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")
+        return {"saved": True, "trade_id": trade_id, "file": self.trade_file}
+
     def log_trade(self, trade):
         if not isinstance(trade, dict):
             return {"saved": False, "reason": "Trade must be a dictionary"}
@@ -77,17 +102,9 @@ class TradeJournal:
         if not trade_id:
             return {"saved": False, "reason": "Missing trade_id"}
         status = str(trade.get("status", "")).strip().upper()
-        if status != "CLOSED":
-            return {"saved": False, "reason": "Only CLOSED trades can be saved"}
-        if self.trade_exists(trade_id):
-            return {"saved": False, "reason": f"{trade_id} already exists"}
-
-        row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}
-        with open(self.trade_file, "a", newline="", encoding="utf-8") as file:
-            csv.DictWriter(file, fieldnames=self.TRADE_COLUMNS).writerow(row)
-
-        sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")
-        return {"saved": True, "trade_id": trade_id, "file": self.trade_file}
+        if status not in {"OPEN", "CLOSED"}:
+            return {"saved": False, "reason": "Trade status must be OPEN or CLOSED"}
+        return self.upsert_trade(trade)
 
     def log_signal(self, signal):
         if not isinstance(signal, dict):

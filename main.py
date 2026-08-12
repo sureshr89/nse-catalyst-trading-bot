@@ -501,6 +501,14 @@ class TradingBot:
             )
         )
 
+        # Persist the open entry immediately so a reboot cannot lose it.
+        position["status"] = "OPEN"
+        entry_save = self.journal.log_trade(position)
+        print(
+            "Entry Journal Saved:",
+            entry_save.get("saved", False)
+        )
+
     # ============================================================
     # SCAN FOR NEW ENTRIES
     # ============================================================
