@@ -1,0 +1,54 @@
+name: Finish Priority 1 journal entry persistence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch journal and entry logging
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('papertrade/trade_journal.py')
+          text = p.read_text(encoding='utf-8-sig')
+          if 'def upsert_trade' not in text:
+              marker = '    def log_trade(self, trade):\n'
+              if marker not in text:
+                  raise RuntimeError('log_trade marker not found')
+              method = '''    def upsert_trade(self, trade):\n        if not isinstance(trade, dict):\n            return {"saved": False, "reason": "Trade must be a dictionary"}\n        trade_id = str(trade.get("trade_id", "")).strip()\n        if not trade_id:\n            return {"saved": False, "reason": "Missing trade_id"}\n        row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}\n        try:\n            df = pd.read_csv(self.trade_file)\n        except (FileNotFoundError, pd.errors.EmptyDataError):\n            df = pd.DataFrame(columns=self.TRADE_COLUMNS)\n        if "trade_id" not in df.columns:\n            df = pd.DataFrame(columns=self.TRADE_COLUMNS)\n        mask = df["trade_id"].astype(str).str.strip() == trade_id if not df.empty else pd.Series(dtype=bool)\n        if not df.empty and bool(mask.any()):\n            idx = df.index[mask][0]\n            for column in self.TRADE_COLUMNS:\n                df.at[idx, column] = row[column]\n        else:\n            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)\n        df = df.reindex(columns=self.TRADE_COLUMNS)\n        df.to_csv(self.trade_file, index=False)\n        sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")\n        return {"saved": True, "trade_id": trade_id, "file": self.trade_file}\n\n'''
+              text = text.replace(marker, method + marker, 1)
+          old = '''        status = str(trade.get("status", "")).strip().upper()\n        if status != "CLOSED":\n            return {"saved": False, "reason": "Only CLOSED trades can be saved"}\n        if self.trade_exists(trade_id):\n            return {"saved": False, "reason": f"{trade_id} already exists"}\n\n        row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}\n        with open(self.trade_file, "a", newline="", encoding="utf-8") as file:\n            csv.DictWriter(file, fieldnames=self.TRADE_COLUMNS).writerow(row)\n\n        sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")\n        return {"saved": True, "trade_id": trade_id, "file": self.trade_file}\n'''
+          if old in text:
+              new = '''        status = str(trade.get("status", "")).strip().upper()\n        if status not in {"OPEN", "CLOSED"}:\n            return {"saved": False, "reason": "Trade status must be OPEN or CLOSED"}\n        return self.upsert_trade(trade)\n'''
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('main.py')
+          text = p.read_text(encoding='utf-8-sig')
+          needle = '''        print(\n            "Actual Risk       :",\n            position.get(\n                "actual_risk"\n            )\n        )\n'''
+          if 'self.journal.log_trade(position)' not in text:
+              if needle not in text:
+                  raise RuntimeError('entry output marker not found')
+              addition = needle + '''\n        # Persist the open entry immediately so a reboot cannot lose it.\n        position["status"] = "OPEN"\n        entry_save = self.journal.log_trade(position)\n        print(\n            "Entry Journal Saved:",\n            entry_save.get("saved", False)\n        )\n'''
+              text = text.replace(needle, addition, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit and remove workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py papertrade/trade_journal.py
+          git diff --cached --quiet || git commit -m "Persist paper trade entries immediately"
+          git push
+          git rm -f .github/workflows/finish-priority1-journal-entry.yml || true
+          git diff --cached --quiet || git commit -m "Remove one-time journal persistence workflow"
+          git push
