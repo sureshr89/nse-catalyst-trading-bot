@@ -50,7 +50,7 @@ class TradingBot:
         self.running = True
         self.processed_signals = set()
         self.daily_pnl = self._restore_daily_pnl()
-        self.cooldown_until = None
+        self.cooldown_until = self._restore_cooldown()
         self.square_off_done = False
 
     @staticmethod
@@ -72,8 +72,6 @@ class TradingBot:
             today = self._now().date()
             pnl = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
 
-            # Journal timestamps without an offset are stored as IST. Aware
-            # timestamps are converted to IST before the date is compared.
             if getattr(raw_exits.dt, "tz", None) is None:
                 dates = raw_exits.dt.date
             else:
@@ -87,6 +85,40 @@ class TradingBot:
             print(f"Daily P&L restore skipped: {type(error).__name__}: {error}")
             return 0.0
 
+    def _restore_cooldown(self):
+        """Restore an active post-stop-loss cooldown after a worker restart."""
+        try:
+            df = self.journal.get_trades()
+            if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:
+                return None
+
+            today = self._now().date()
+            closed = df.copy()
+            if "status" in closed.columns:
+                closed = closed[closed["status"].astype(str).str.upper() == "CLOSED"]
+            closed = closed[closed["exit_reason"].astype(str).str.upper() == "STOP_LOSS"]
+            if closed.empty:
+                return None
+
+            times = pd.to_datetime(closed["exit_time"], errors="coerce")
+            if getattr(times.dt, "tz", None) is None:
+                times = times.dt.tz_localize(INDIA_TZ)
+            else:
+                times = times.dt.tz_convert(INDIA_TZ)
+            times = times[times.dt.date == today].dropna()
+            if times.empty:
+                return None
+
+            latest = times.max().to_pydatetime()
+            cooldown_end = latest + timedelta(minutes=COOLDOWN_MINUTES)
+            now = self._now()
+            if cooldown_end <= now:
+                return None
+            return cooldown_end.replace(tzinfo=None)
+        except Exception as error:
+            print(f"Cooldown restore skipped: {type(error).__name__}: {error}")
+            return None
+
     def signal_key(self, signal):
         """Build a stable key so one scanner event is not opened twice."""
         return (
@@ -98,6 +130,11 @@ class TradingBot:
 
     def log_signal(self, signal, risk_result):
         row = dict(signal)
+        row.update({
+            "risk_per_share": risk_result.get("risk_per_share", ""),
+            "actual_risk": risk_result.get("actual_risk", ""),
+            "position_value": risk_result.get("position_value", ""),
+        })
         row["timestamp"] = signal.get("entry_time") or self._now().isoformat()
         row["approved"] = bool(risk_result.get("approved", False))
         reasons = risk_result.get("reasons", [])
@@ -126,13 +163,14 @@ class TradingBot:
         return True
 
     def _attach_trade_context(self, position, signal):
-        """Keep complete strategy context in the journal/state when a trade opens."""
+        """Keep complete strategy context in both live state and the journal."""
         context_fields = (
             "stock", "industry", "sector", "buy_sell", "breakout_level", "pdc",
             "today_open", "today_low", "today_high", "market_direction",
             "nifty100_direction", "industry_direction", "sector_direction",
             "stock_direction", "stock_today_direction", "previous_day_aligned",
-            "previous_day_direction", "setup_type", "entry_candle_close",
+            "previous_day_direction", "setup_type", "entry_candle_open",
+            "entry_candle_close", "risk_per_share", "actual_risk", "position_value",
         )
         for field in context_fields:
             if field in signal:
@@ -162,8 +200,6 @@ class TradingBot:
         self.log_signal(signal, risk_result)
 
         if not risk_result.get("approved", False):
-            # A rejected signal is complete; do not evaluate the same scanner
-            # event repeatedly during subsequent 30-second scans.
             self.processed_signals.add(key)
             print("Risk rejected", symbol, risk_result.get("reasons", []))
             return
@@ -174,9 +210,6 @@ class TradingBot:
 
         open_result = self.paper_engine.open_trade(approved_trade)
         if not open_result.get("opened", False):
-            # RiskEngine registers an accepted trade before PaperTradeEngine
-            # opens it. Roll that registration back and leave the signal
-            # unprocessed so a transient execution failure can be retried.
             try:
                 count = self.risk_engine.get_trade_count(symbol)
                 if count > 0:
@@ -187,27 +220,32 @@ class TradingBot:
             return
 
         self.processed_signals.add(key)
-        position = open_result["position"]
-        position = self._attach_trade_context(position, approved_trade)
-        position["status"] = "OPEN"
-        saved = self.journal.log_trade(position)
+
+        # open_result["position"] is a copy. Update the actual engine position
+        # so the context survives SL/target/square-off and worker restarts.
+        live_position = self.paper_engine.open_positions.get(symbol)
+        if live_position is None:
+            print("Paper trade opened but live position is missing:", symbol)
+            return
+        self._attach_trade_context(live_position, approved_trade)
+        live_position["status"] = "OPEN"
+
+        saved = self.journal.log_trade(live_position.copy())
         print(
             "PAPER OPENED:", symbol,
             approved_trade.get("signal"),
-            "entry=", position.get("entry"),
-            "SL=", position.get("stop_loss"),
-            "target=", position.get("target"),
-            "qty=", position.get("quantity"),
-            "risk=", position.get("actual_risk"),
-            "R:R=", position.get("rr"),
+            "entry=", live_position.get("entry"),
+            "SL=", live_position.get("stop_loss"),
+            "target=", live_position.get("target"),
+            "qty=", live_position.get("quantity"),
+            "risk=", live_position.get("actual_risk"),
+            "R:R=", live_position.get("rr"),
             "journal=", saved.get("saved", False),
         )
 
     def scan_for_entries(self):
         now = self.current_time()
-        if now < TRADING_START:
-            return
-        if now > LAST_ENTRY_TIME:
+        if now < TRADING_START or now > LAST_ENTRY_TIME:
             return
         if self.daily_limit_reached() or self.cooldown_active():
             return
@@ -251,20 +289,16 @@ class TradingBot:
 
         frame = df.copy()
         try:
-            index = pd.to_datetime(frame.index, errors="coerce")
-            if getattr(index, "tz", None) is not None:
-                index_ist = index.tz_convert(INDIA_TZ)
+            if "Datetime" in frame.columns:
+                timestamps = pd.to_datetime(frame["Datetime"], errors="coerce")
             else:
-                index_ist = index
-            current_minute = self._now().replace(second=0, microsecond=0, tzinfo=None)
-            if len(frame) >= 1:
-                last_time = index_ist[-1]
-                if hasattr(last_time, "to_pydatetime"):
-                    last_time = last_time.to_pydatetime()
-                if getattr(last_time, "tzinfo", None) is not None:
-                    last_time = last_time.replace(tzinfo=None)
-                if last_time >= current_minute:
-                    frame = frame.iloc[:-1]
+                timestamps = pd.to_datetime(frame.index, errors="coerce")
+            if getattr(timestamps.dt, "tz", None) is None:
+                timestamps = timestamps.dt.tz_localize(INDIA_TZ)
+            else:
+                timestamps = timestamps.dt.tz_convert(INDIA_TZ)
+            current_minute = self._now().replace(second=0, microsecond=0)
+            frame = frame[timestamps < current_minute].copy()
         except Exception:
             if len(frame) > 1:
                 frame = frame.iloc[:-1]
@@ -274,7 +308,7 @@ class TradingBot:
 
         row = frame.iloc[-1]
         candle = row.to_dict()
-        candle.setdefault("Datetime", row.name)
+        candle.setdefault("Datetime", row.get("Datetime", row.name))
         return candle
 
     def monitor_position(self, symbol):
@@ -291,8 +325,7 @@ class TradingBot:
 
         if str(closed_trade.get("exit_reason", "")).upper() == "STOP_LOSS":
             self.cooldown_until = (
-                self._now().replace(tzinfo=None)
-                + timedelta(minutes=COOLDOWN_MINUTES)
+                self._now().replace(tzinfo=None) + timedelta(minutes=COOLDOWN_MINUTES)
             )
 
         saved = self.journal.log_trade(closed_trade)
@@ -309,7 +342,7 @@ class TradingBot:
             self.monitor_position(symbol)
 
     def force_square_off(self):
-        """Close every remaining position at the latest available price."""
+        """Close every remaining position at the latest completed price."""
         symbols = list(self.paper_engine.open_positions.keys())
         if not symbols:
             return
@@ -319,27 +352,17 @@ class TradingBot:
             if position is None:
                 continue
 
-            exit_price = None
-            exit_time = self._now().replace(tzinfo=None)
             candle = self.latest_1m_candle(symbol)
-            if candle is not None:
-                exit_price = candle.get("Close", candle.get("close"))
-                exit_time = candle.get("Datetime", candle.get("datetime")) or exit_time
+            if candle is None:
+                print(symbol, "square-off skipped: no completed 1-minute candle")
+                continue
 
-            if exit_price is None:
-                try:
-                    df = self.price_data.get_1m(symbol)
-                    if df is not None and not df.empty:
-                        row = df.iloc[-1]
-                        exit_price = row.get("Close", row.get("close"))
-                        exit_time = row.get("Datetime", row.get("datetime")) or row.name or exit_time
-                except Exception as error:
-                    print(symbol, "square-off price fallback error:", error)
-
+            exit_price = candle.get("Close", candle.get("close"))
+            exit_time = candle.get("Datetime", candle.get("datetime")) or self._now().replace(tzinfo=None)
             try:
                 exit_price = float(exit_price)
             except (TypeError, ValueError):
-                print(symbol, "square-off skipped: no valid exit price")
+                print(symbol, "square-off skipped: invalid completed close")
                 continue
 
             closed_trade = self.paper_engine.close_position(
@@ -362,8 +385,7 @@ class TradingBot:
         session = self.paper_engine.summary()
         history = self.journal.summary()
         print(
-            "STATUS",
-            self.current_time(),
+            "STATUS", self.current_time(),
             "open=", session.get("open_positions", 0),
             "session_pnl=", session.get("total_pnl", 0),
             "daily_pnl=", round(self.daily_pnl, 2),
@@ -373,7 +395,6 @@ class TradingBot:
 
     def run_cycle(self):
         now = self.current_time()
-
         if now >= SQUARE_OFF_TIME:
             if not self.square_off_done:
                 self.force_square_off()
@@ -392,17 +413,15 @@ class TradingBot:
         print("Strategy: pure price action | Paper: ON | Live: OFF")
         print(
             f"Entry: {TRADING_START}-{LAST_ENTRY_TIME} IST | "
-            f"Square-off: {SQUARE_OFF_TIME} IST | "
-            f"Scan: {SCAN_INTERVAL_SECONDS}s"
+            f"Square-off: {SQUARE_OFF_TIME} IST | Scan: {SCAN_INTERVAL_SECONDS}s"
         )
         print("=" * 90)
 
         try:
             while self.running:
                 self.run_cycle()
-                if self.current_time() >= SQUARE_OFF_TIME:
-                    if not self.paper_engine.open_positions:
-                        break
+                if self.current_time() >= SQUARE_OFF_TIME and not self.paper_engine.open_positions:
+                    break
                 time.sleep(max(1, int(SCAN_INTERVAL_SECONDS)))
         except KeyboardInterrupt:
             print("Bot stopped manually.")
