@@ -46,7 +46,8 @@ class SectorStore:
                 prepared = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce")
                 cache_is_today = bool(
                     not prepared.empty
-                    and prepared.dt.strftime("%Y-%m-%d").eq(today).any()
+                    and prepared.notna().all()
+                    and prepared.dt.strftime("%Y-%m-%d").eq(today).all()
                 )
                 if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows:
                     return cached
