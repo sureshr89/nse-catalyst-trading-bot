@@ -21,7 +21,7 @@ BOT_RUNNER_FILE = PROJECT_ROOT / "bot_runner.py"
 SETTINGS_FILE = PROJECT_ROOT / "config" / "settings.py"
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
-st.set_page_config(page_title="NSE Catalyst | Live", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="NSE Catalyst | Live", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st_autorefresh(interval=5000, limit=None, key="nse_live_refresh")
 
 TOTAL_CAPITAL=250000; MAX_RISK_PER_TRADE=1500; MIN_REQUIRED_RISK=1400; RISK_REWARD_RATIO=1.25
@@ -90,6 +90,8 @@ st.markdown("""
 <style>
 .block-container{max-width:1420px;padding:1rem 1.1rem 2.2rem}
 [data-testid="stAppViewContainer"]{background:#0b1220}
+[data-testid="stSidebar"]{display:none!important}
+[data-testid="stSidebarCollapsedControl"]{display:none!important}
 [data-testid="stMetric"]{background:#111b2d;border:1px solid #26344d;border-radius:12px;padding:.55rem .7rem;min-height:82px}
 [data-testid="stMetricLabel"]{font-size:.72rem!important;line-height:1.15!important;color:#9fb0c7!important}
 [data-testid="stMetricValue"]{font-size:1.18rem!important;line-height:1.25!important;font-weight:700!important;color:#f4f7fb!important}
@@ -97,33 +99,22 @@ st.markdown("""
 .live-subtitle{font-size:.78rem;color:#9fb0c7;margin-bottom:.7rem}
 .section-title{font-size:.92rem;font-weight:750;color:#dce6f3;margin:1rem 0 .45rem}
 .nav-note{font-size:.72rem;color:#8092aa;margin:.2rem 0 .65rem}
-[data-testid="stPageLink"] a{display:flex!important;align-items:center!important;justify-content:center!important;min-height:44px!important;padding:.55rem .65rem!important;border:1px solid #2b3b57!important;border-radius:12px!important;background:#142036!important;color:#e9f0f8!important;font-size:.78rem!important;font-weight:700!important;text-decoration:none!important;box-shadow:0 2px 8px rgba(0,0,0,.16)!important}
+[data-testid="stPageLink"] a{display:flex!important;align-items:center!important;justify-content:center!important;min-height:40px!important;padding:.42rem .65rem!important;border:1px solid #2b3b57!important;border-radius:11px!important;background:#142036!important;color:#e9f0f8!important;font-size:.76rem!important;font-weight:700!important;text-decoration:none!important;box-shadow:0 2px 8px rgba(0,0,0,.16)!important}
 [data-testid="stPageLink"] a:hover{background:#1b2d49!important;border-color:#4d79ad!important;color:#fff!important}
-[data-testid="stSidebar"]{background:#0d1728;border-right:1px solid #22314a}
-[data-testid="stSidebar"] [data-testid="stPageLink"] a{justify-content:flex-start!important;font-size:.78rem!important;margin:.18rem 0!important}
 [data-testid="stDataFrame"]{border:1px solid #26344d;border-radius:10px;overflow:hidden}
 .stAlert{border-radius:10px!important}
-@media(max-width:768px){.block-container{padding:.65rem .55rem 1.5rem}.live-title{font-size:1.25rem}.live-subtitle{font-size:.7rem;line-height:1.45}.section-title{font-size:.86rem}[data-testid="stMetric"]{min-height:68px;padding:.45rem .5rem}[data-testid="stMetricValue"]{font-size:1rem!important}[data-testid="stMetricLabel"]{font-size:.66rem!important}[data-testid="stPageLink"] a{min-height:40px!important;font-size:.7rem!important;padding:.45rem .4rem!important}}
+@media(max-width:768px){.block-container{padding:.65rem .55rem 1.5rem}.live-title{font-size:1.25rem}.live-subtitle{font-size:.7rem;line-height:1.45}.section-title{font-size:.86rem}[data-testid="stMetric"]{min-height:68px;padding:.45rem .5rem}[data-testid="stMetricValue"]{font-size:1rem!important}[data-testid="stMetricLabel"]{font-size:.66rem!important}}
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("### NSE CATALYST")
-st.sidebar.caption("LIVE PAPER-TRADING OPERATIONS")
-st.sidebar.divider()
-st.sidebar.page_link("app.py",label="🟢  BOT STATUS",icon="🟢")
-st.sidebar.page_link("pages/current_trading.py",label="📌  CURRENT TRADING",icon="📌")
-st.sidebar.page_link("pages/analysis.py",label="📊  AFTER-TRADING ANALYSIS",icon="📊")
-st.sidebar.page_link("pages/downloads.py",label="⬇️  DOWNLOAD FILES",icon="⬇️")
-st.sidebar.divider(); st.sidebar.caption(f"Refresh 5s • {now.strftime('%H:%M:%S IST')}")
-
+# The sidebar is intentionally unused. Navigation is always at the top of the page.
 st.markdown('<div class="live-title">📈 NSE Catalyst</div>',unsafe_allow_html=True)
 st.markdown(f'<div class="live-subtitle">NIFTY 100 • Gap-Failure + Open-Reclaim • PAPER ONLY • Entry {TRADING_START}–{LAST_ENTRY_TIME} • Square-off {SQUARE_OFF_TIME}</div>',unsafe_allow_html=True)
-st.markdown('<div class="nav-note">Operations are separated from current trades, research and downloads.</div>',unsafe_allow_html=True)
-n1,n2,n3,n4=st.columns(4)
-n1.page_link("app.py",label="🟢 BOT STATUS",icon="🟢")
-n2.page_link("pages/current_trading.py",label="📌 CURRENT TRADING",icon="📌")
-n3.page_link("pages/analysis.py",label="📊 AFTER-TRADING ANALYSIS",icon="📊")
-n4.page_link("pages/downloads.py",label="⬇️ DOWNLOAD FILES",icon="⬇️")
+with st.container(horizontal=True, gap="small"):
+    st.page_link("app.py",label="🟢 BOT",icon="🟢")
+    st.page_link("pages/current_trading.py",label="📌 TRADING",icon="📌")
+    st.page_link("pages/analysis.py",label="📊 ANALYSIS",icon="📊")
+    st.page_link("pages/downloads.py",label="⬇️ FILES",icon="⬇️")
 
 if worker_error:st.error(f"Worker unavailable: {worker_error}")
 elif status=="ERROR":st.error(f"BOT ERROR — {bot_status.get('error') or bot_status.get('message') or 'Unknown worker error'}")
