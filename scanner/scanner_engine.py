@@ -47,43 +47,60 @@ class ScannerEngine:
         return self.references
 
     def prepare_gap_candidates(self, force=False):
-        """Freeze today's gap-up/gap-down candidates before 09:45.
+        """Freeze the pre-09:45 candidate pool for the trading day.
 
-        PDC comes from the completed previous trading day. Today's Open is the
-        first regular-session 1-minute candle (09:15). The resulting lists are
-        persisted once per trading day and are not rebuilt on every 30-second
-        scan. A stock with an unavailable first candle is excluded rather than
-        being assigned a guessed open.
+        Candidate eligibility is intentionally decided before strategy scanning:
+        high liquidity + previous-day direction + today's opening gap direction.
+        Liquidity is measured by previous-day traded value (Close * Volume); the
+        high-liquidity set is the upper half of the valid NIFTY 100 universe by
+        previous-day traded value. A stock must also have a valid 09:15 regular-
+        session opening candle. The resulting pool is persisted once per day.
         """
         today = self._today()
         output = Path("outputs") / "references" / f"gap_candidates_{today}.csv"
+        required = {
+            "Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection",
+            "PreviousDayDirection", "PreviousDayTurnover", "LiquidityQualified",
+        }
         if not force and self._gap_prepared_date == today and not self.gap_candidates.empty:
             return self.gap_candidates
         if not force and output.exists():
             try:
                 saved = pd.read_csv(output)
-                if {"Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection"}.issubset(saved.columns) and not saved.empty:
+                if required.issubset(saved.columns) and not saved.empty:
                     self.gap_candidates = saved
                     self._gap_prepared_date = today
-                    print("PRE-09:45 GAP CANDIDATES LOADED:", len(saved), "stocks")
+                    print("PRE-09:45 CANDIDATES LOADED:", len(saved), "stocks")
                     return saved
             except Exception as error:
                 print("Saved gap candidates could not be loaded:", error)
 
         references = self.prepare_reference_data(force=force)
         if references.empty:
-            print("Cannot prepare gap candidates: PDC references unavailable")
+            print("Cannot prepare candidates: PDC references unavailable")
             return pd.DataFrame()
 
-        symbols = references["Symbol"].astype(str).str.upper().tolist()
+        refs = references.copy()
+        refs["PreviousDayTurnover"] = pd.to_numeric(refs["PreviousDayTurnover"], errors="coerce")
+        refs["PDC"] = pd.to_numeric(refs["PDC"], errors="coerce")
+        refs["PreviousDayOpen"] = pd.to_numeric(refs["PreviousDayOpen"], errors="coerce")
+        refs = refs.dropna(subset=["PDC", "PreviousDayTurnover"])
+        if refs.empty:
+            return pd.DataFrame()
+
+        liquidity_cutoff = float(refs["PreviousDayTurnover"].median())
+        refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= liquidity_cutoff
+        refs = refs[refs["LiquidityQualified"]].copy()
+        print("PRE-09:45 LIQUIDITY FILTER:", len(refs), "stocks | cutoff traded value:", round(liquidity_cutoff, 2))
+
+        symbols = refs["Symbol"].astype(str).str.upper().tolist()
         market_data = self.price_data.get_multi_1m(symbols)
-        reference_by_symbol = references.set_index("Symbol").to_dict("index")
         rows = []
 
-        for symbol in symbols:
+        for _, ref in refs.iterrows():
+            symbol = str(ref["Symbol"]).upper()
             candles = market_data.get(symbol)
-            ref = reference_by_symbol.get(symbol)
-            if candles is None or candles.empty or not ref:
+            if candles is None or candles.empty:
                 continue
             data = self.price_data.today_only(candles)
             if data is None or data.empty:
@@ -96,27 +113,43 @@ class ScannerEngine:
                 continue
             if today_open <= 0 or pdc <= 0:
                 continue
+
             gap_pct = round((today_open - pdc) / pdc * 100.0, 4)
-            direction = "GAP_UP" if today_open > pdc else "GAP_DOWN" if today_open < pdc else "FLAT"
+            gap_direction = "GAP_UP" if today_open > pdc else "GAP_DOWN" if today_open < pdc else "FLAT"
+            previous_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
+
+            # Pre-filter requires yesterday's direction to agree with today's gap.
+            # BULLISH yesterday -> today's GAP_UP; BEARISH yesterday -> today's GAP_DOWN.
+            if gap_direction == "GAP_UP" and previous_direction != "BULLISH":
+                continue
+            if gap_direction == "GAP_DOWN" and previous_direction != "BEARISH":
+                continue
+            if gap_direction == "FLAT":
+                continue
+
             rows.append({
                 "Symbol": symbol,
                 "PDC": round(pdc, 4),
                 "TodayOpen": round(today_open, 4),
                 "GapPct": gap_pct,
-                "GapDirection": direction,
+                "GapDirection": gap_direction,
+                "PreviousDayDirection": previous_direction,
+                "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
+                "LiquidityQualified": True,
                 "OpenTimestamp": str(first.get("Datetime", "")),
             })
 
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         if result.empty:
-            print("No valid today's opens available; refusing to save an empty candidate list")
+            print("No stocks met liquidity + previous-day direction + opening-gap filters")
             return pd.DataFrame()
+
         result.to_csv(output, index=False)
         self.gap_candidates = result
         self._gap_prepared_date = today
         up = int((result["GapDirection"] == "GAP_UP").sum())
         down = int((result["GapDirection"] == "GAP_DOWN").sum())
-        print("PRE-09:45 GAP CANDIDATES READY:", len(result), "| GAP UP:", up, "| GAP DOWN:", down)
+        print("PRE-09:45 CANDIDATES READY:", len(result), "| GAP UP:", up, "| GAP DOWN:", down)
         return result
 
     @staticmethod
@@ -172,7 +205,7 @@ class ScannerEngine:
 
         gap_candidates = self.prepare_gap_candidates()
         if gap_candidates.empty:
-            print("No pre-09:45 gap candidate data. No trades.")
+            print("No pre-09:45 candidate data. No trades.")
             return []
 
         nifty_direction = self._nifty100_direction()
@@ -237,6 +270,7 @@ class ScannerEngine:
             signal["previous_day_direction"] = previous_day_direction
             signal["previous_day_aligned"] = previous_day_aligned
             signal["gap_direction"] = selected_gap
+            signal["liquidity_qualified"] = True
             signals.append(signal)
             print(
                 "SIGNAL:", symbol, signal["signal"],
