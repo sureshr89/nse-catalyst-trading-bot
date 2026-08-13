@@ -46,6 +46,18 @@ class GapReclaimEngine:
             .reset_index(drop=True)
         )
 
+    @staticmethod
+    def _direction(df):
+        if df is None or df.empty:
+            return "UNKNOWN"
+        opening = float(df.iloc[0]["Open"])
+        closing = float(df.iloc[-1]["Close"])
+        if closing > opening:
+            return "BULLISH"
+        if closing < opening:
+            return "BEARISH"
+        return "NEUTRAL"
+
     def _entry_candle(self, df, today_open, pdc, side):
         """Return the first completed candle whose body reclaims today's open after PDC failure."""
         data = self._clean(df)
@@ -78,11 +90,9 @@ class GapReclaimEngine:
             candle_open = float(cur["Open"])
             candle_close = float(cur["Close"])
 
-            # BUY: entry candle must open below today's open and close above it.
             if side == "BUY" and candle_open < today_open and candle_close > today_open:
                 return cur
 
-            # SELL: entry candle must open above today's open and close below it.
             if side == "SELL" and candle_open > today_open and candle_close < today_open:
                 return cur
 
@@ -105,11 +115,16 @@ class GapReclaimEngine:
         today_high = float(today_data["High"].max())
         previous_day_green = pdc > previous_day_open
         previous_day_red = pdc < previous_day_open
+        previous_day_direction = (
+            "BULLISH" if previous_day_green else
+            "BEARISH" if previous_day_red else "NEUTRAL"
+        )
+        stock_today_direction = self._direction(today_data)
 
         if previous_day_green and today_open > pdc:
             if today_low < pdc and sector_direction == "BULLISH" and nifty_direction == "BULLISH":
                 entry_candle = self._entry_candle(today_data, today_open, pdc, "BUY")
-                if entry_candle is not None:
+                if entry_candle is not None and stock_today_direction == "BULLISH":
                     entry = float(entry_candle["Close"])
                     stop = today_low
                     risk = entry - stop
@@ -118,13 +133,14 @@ class GapReclaimEngine:
                             "BUY", symbol, entry_candle, entry, stop,
                             entry + risk * self.rr, pdc, today_open,
                             today_low, today_high, sector_direction,
-                            nifty_direction, previous_day_green,
+                            nifty_direction, previous_day_direction,
+                            stock_today_direction,
                         )
 
         if previous_day_red and today_open < pdc:
             if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
                 entry_candle = self._entry_candle(today_data, today_open, pdc, "SELL")
-                if entry_candle is not None:
+                if entry_candle is not None and stock_today_direction == "BEARISH":
                     entry = float(entry_candle["Close"])
                     stop = today_high
                     risk = stop - entry
@@ -133,14 +149,14 @@ class GapReclaimEngine:
                             "SELL", symbol, entry_candle, entry, stop,
                             entry - risk * self.rr, pdc, today_open,
                             today_low, today_high, sector_direction,
-                            nifty_direction, previous_day_red,
+                            nifty_direction, previous_day_direction,
+                            stock_today_direction,
                         )
         return None
 
     def _trade(self, side, symbol, candle, entry, stop, target, pdc,
                today_open, today_low, today_high, sector_direction,
-               nifty_direction, previous_aligned):
-        stock_direction = "BULLISH" if side == "BUY" else "BEARISH"
+               nifty_direction, previous_day_direction, stock_today_direction):
         return {
             "symbol": symbol,
             "signal": side,
@@ -158,10 +174,10 @@ class GapReclaimEngine:
             "industry_direction": sector_direction,
             "market_direction": nifty_direction,
             "nifty100_direction": nifty_direction,
-            "stock_direction": stock_direction,
-            "stock_today_direction": stock_direction,
-            "previous_day_aligned": bool(previous_aligned),
-            "previous_day_direction": "BULLISH" if previous_aligned and side == "BUY" else "BEARISH" if previous_aligned and side == "SELL" else "NEUTRAL",
+            "stock_direction": stock_today_direction,
+            "stock_today_direction": stock_today_direction,
+            "previous_day_aligned": previous_day_direction == ("BULLISH" if side == "BUY" else "BEARISH"),
+            "previous_day_direction": previous_day_direction,
             "setup_type": "GAP_FAILURE_OPEN_RECLAIM",
             "entry_candle_open": round(float(candle["Open"]), 2),
             "entry_candle_close": round(float(candle["Close"]), 2),
