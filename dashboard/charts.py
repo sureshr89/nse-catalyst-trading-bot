@@ -1,199 +1,68 @@
-"""
-Plotly charts for the Trading Dashboard
-"""
+"""Plotly charts for the paper-trading dashboard."""
 
 import pandas as pd
 import plotly.express as px
 
 
-# ============================================================
-# EQUITY CURVE
-# ============================================================
+def _closed(trades):
+    if trades is None or trades.empty:
+        return pd.DataFrame()
+    df = trades.copy()
+    if "status" in df.columns:
+        df = df[df["status"].astype(str).str.upper() == "CLOSED"].copy()
+    if "pnl" not in df.columns:
+        return pd.DataFrame()
+    df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
+    return df
+
 
 def equity_curve(trades: pd.DataFrame):
-
-    if trades.empty:
+    df = _closed(trades)
+    if df.empty:
         return None
-
-    df = trades.copy()
-
     df["equity"] = 250000 + df["pnl"].cumsum()
+    return px.line(df, x=df.index, y="equity", title="Equity Curve").update_layout(template="plotly_dark", height=420)
 
-    fig = px.line(
-        df,
-        x=df.index,
-        y="equity",
-        title="Equity Curve"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
-
-
-# ============================================================
-# TRADE PNL
-# ============================================================
 
 def pnl_chart(trades: pd.DataFrame):
-
-    if trades.empty:
+    df = _closed(trades)
+    if df.empty:
         return None
+    return px.bar(df, x=df.index, y="pnl", color="pnl", title="Trade Wise P&L").update_layout(template="plotly_dark", height=420)
 
-    fig = px.bar(
-        trades,
-        x=trades.index,
-        y="pnl",
-        color="pnl",
-        title="Trade Wise P&L"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
-
-
-# ============================================================
-# WIN / LOSS PIE
-# ============================================================
 
 def win_loss_chart(trades):
-
-    if trades.empty:
+    df = _closed(trades)
+    if df.empty:
         return None
+    wins = int((df["pnl"] > 0).sum())
+    losses = int((df["pnl"] < 0).sum())
+    flat = int((df["pnl"] == 0).sum())
+    return px.pie(names=["Winning", "Losing", "Flat"], values=[wins, losses, flat], title="Win vs Loss").update_layout(template="plotly_dark", height=420)
 
-    wins = len(
-        trades[
-            trades["pnl"] > 0
-        ]
-    )
-
-    losses = len(
-        trades[
-            trades["pnl"] < 0
-        ]
-    )
-
-    fig = px.pie(
-        names=["Winning", "Losing"],
-        values=[wins, losses],
-        title="Win vs Loss"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
-
-
-# ============================================================
-# INDUSTRY PERFORMANCE
-# ============================================================
 
 def industry_chart(trades):
-
-    if trades.empty:
+    df = _closed(trades)
+    if df.empty or "industry" not in df.columns:
         return None
+    grouped = df.groupby("industry", dropna=False)["pnl"].sum().reset_index()
+    return px.bar(grouped, x="industry", y="pnl", title="Industry Performance").update_layout(template="plotly_dark", height=420)
 
-    if "industry" not in trades.columns:
-        return None
-
-    df = (
-        trades
-        .groupby("industry")["pnl"]
-        .sum()
-        .reset_index()
-    )
-
-    fig = px.bar(
-        df,
-        x="industry",
-        y="pnl",
-        title="Industry Performance"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
-
-
-# ============================================================
-# CAPITAL UTILIZATION
-# ============================================================
 
 def capital_chart(metrics):
+    available = float(metrics.get("available_capital", 0) or 0)
+    used = float(metrics.get("used_capital", 0) or 0)
+    return px.pie(names=["Available", "Used"], values=[max(0.0, available), max(0.0, used)], title="Capital Utilization").update_layout(template="plotly_dark", height=420)
 
-    fig = px.pie(
-        names=[
-            "Available",
-            "Used"
-        ],
-        values=[
-            metrics["available_capital"],
-            metrics["used_capital"]
-        ],
-        title="Capital Utilization"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
-
-
-# ============================================================
-# MONTHLY PNL
-# ============================================================
 
 def monthly_pnl_chart(trades):
-
-    if trades.empty:
+    df = _closed(trades)
+    if df.empty or "exit_time" not in df.columns:
         return None
-
-    if "exit_time" not in trades.columns:
+    df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
+    df = df.dropna(subset=["exit_time"])
+    if df.empty:
         return None
-
-    df = trades.copy()
-
-    df["exit_time"] = pd.to_datetime(
-        df["exit_time"],
-        errors="coerce"
-    )
-
-    df["Month"] = (
-        df["exit_time"]
-        .dt.strftime("%Y-%m")
-    )
-
-    df = (
-        df.groupby("Month")["pnl"]
-        .sum()
-        .reset_index()
-    )
-
-    fig = px.bar(
-        df,
-        x="Month",
-        y="pnl",
-        title="Monthly P&L"
-    )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=420
-    )
-
-    return fig
+    df["Month"] = df["exit_time"].dt.strftime("%Y-%m")
+    grouped = df.groupby("Month")["pnl"].sum().reset_index()
+    return px.bar(grouped, x="Month", y="pnl", title="Monthly P&L").update_layout(template="plotly_dark", height=420)
