@@ -15,16 +15,10 @@ from zoneinfo import ZoneInfo
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - Streamlit Cloud runs Linux
+except ImportError:  # pragma: no cover
     fcntl = None
 
-from config.settings import (
-    TRADING_START,
-    LAST_ENTRY_TIME,
-    SQUARE_OFF_TIME,
-    TOTAL_CAPITAL,
-    SCAN_INTERVAL_SECONDS,
-)
+from config.settings import TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -38,26 +32,14 @@ _thread = None
 _worker_lock_handle = None
 
 _state = {
-    "status": "STARTING",
-    "message": "Paper bot is starting.",
-    "last_cycle": None,
-    "last_scan": None,
-    "last_scan_completed": None,
-    "scan_started_at": None,
-    "scan_duration_seconds": None,
-    "last_signal_count": 0,
-    "last_scan_error": None,
-    "scanner_status": "IDLE",
-    "error": None,
-    "worker_alive": False,
-    "heartbeat": None,
-    "cycle_count": 0,
-    "scan_count": 0,
-    "worker_id": None,
-    "trading_start": TRADING_START,
-    "last_entry_time": LAST_ENTRY_TIME,
-    "square_off_time": SQUARE_OFF_TIME,
-    "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+    "status": "STARTING", "message": "Paper bot is starting.",
+    "last_cycle": None, "last_scan": None, "last_scan_completed": None,
+    "scan_started_at": None, "scan_duration_seconds": None,
+    "last_signal_count": 0, "last_scan_error": None, "scanner_status": "IDLE",
+    "error": None, "worker_alive": False, "heartbeat": None,
+    "cycle_count": 0, "scan_count": 0, "worker_id": None,
+    "trading_start": TRADING_START, "last_entry_time": LAST_ENTRY_TIME,
+    "square_off_time": SQUARE_OFF_TIME, "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
 }
 
 
@@ -109,7 +91,6 @@ def _write_status(bot=None, **updates):
         payload = dict(_state)
         payload["server_time_ist"] = _iso_now()
         payload["worker_alive"] = _thread is not None and _thread.is_alive()
-
         if bot is not None:
             try:
                 session = bot.paper_engine.summary()
@@ -129,9 +110,7 @@ def _write_status(bot=None, **updates):
                 pass
             try:
                 payload["daily_pnl"] = bot.daily_pnl
-                payload["cooldown_until"] = (
-                    bot.cooldown_until.isoformat() if bot.cooldown_until is not None else None
-                )
+                payload["cooldown_until"] = bot.cooldown_until.isoformat() if bot.cooldown_until is not None else None
             except Exception:
                 pass
 
@@ -139,10 +118,7 @@ def _write_status(bot=None, **updates):
         status_lock = _with_file_lock(STATUS_LOCK_FILE)
         if status_lock is None:
             return
-
-        temporary = OUTPUT_DIR / (
-            f"bot_status.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
-        )
+        temporary = OUTPUT_DIR / f"bot_status.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
         try:
             with open(temporary, "w", encoding="utf-8") as file:
                 json.dump(payload, file, indent=2, default=str)
@@ -173,178 +149,103 @@ def _ist_cooldown_active(self):
 
 
 def _patch_bot_for_ist(bot):
-    """Patch only legacy time helpers; RiskEngine remains the single sizing authority."""
-    bot.current_time = __import__("types").MethodType(_ist_current_time, bot)
-    bot.cooldown_active = __import__("types").MethodType(_ist_cooldown_active, bot)
+    import types
+    bot.current_time = types.MethodType(_ist_current_time, bot)
+    bot.cooldown_active = types.MethodType(_ist_cooldown_active, bot)
 
 
 def _run_one_trading_day():
-    """Run the strategy loop directly so the 15:00 cycle cannot be skipped."""
     from main import TradingBot
 
     bot = TradingBot()
     _patch_bot_for_ist(bot)
-
-    _write_status(
-        bot,
-        status="RUNNING",
-        message="Paper trading bot is running.",
-        error=None,
-        scanner_status="IDLE",
-        cycle_count=0,
-        scan_count=0,
-        worker_id=_worker_id(),
-    )
+    _write_status(bot, status="RUNNING", message="Paper trading bot is running.", error=None,
+                  scanner_status="IDLE", cycle_count=0, scan_count=0, worker_id=_worker_id())
 
     while True:
-        now = _now()
-        current = now.strftime("%H:%M")
-
+        current = _now().strftime("%H:%M")
         if current < TRADING_START:
-            _write_status(
-                bot,
-                status="WAITING",
-                message=f"Waiting for trading start at {TRADING_START} IST.",
-                scanner_status="IDLE",
-            )
+            _write_status(bot, status="WAITING", message=f"Waiting for trading start at {TRADING_START} IST.", scanner_status="IDLE")
             time.sleep(10)
             continue
 
         if current < SQUARE_OFF_TIME:
-            started = time.monotonic()
-            _write_status(
-                bot,
-                status="RUNNING",
-                message="Paper trading bot is running.",
-                last_cycle=_iso_now(),
-                cycle_count=int(_state.get("cycle_count", 0)) + 1,
-            )
+            _write_status(bot, status="RUNNING", message="Paper trading bot is running.",
+                          last_cycle=_iso_now(), cycle_count=int(_state.get("cycle_count", 0)) + 1)
+            original_scan = bot.scanner.scan
             try:
-                original_scan = bot.scanner.scan
-
                 def monitored_scan():
                     scan_started = time.monotonic()
                     stamp = _iso_now()
-                    _write_status(
-                        bot,
-                        scanner_status="SCANNING",
-                        last_scan=stamp,
-                        scan_started_at=stamp,
-                        last_scan_error=None,
-                        scan_count=int(_state.get("scan_count", 0)) + 1,
-                    )
+                    _write_status(bot, scanner_status="SCANNING", last_scan=stamp,
+                                  scan_started_at=stamp, last_scan_error=None,
+                                  scan_count=int(_state.get("scan_count", 0)) + 1)
                     try:
                         result = original_scan()
-                        _write_status(
-                            bot,
-                            last_signal_count=len(result) if isinstance(result, list) else 0,
-                        )
+                        _write_status(bot, last_signal_count=len(result) if isinstance(result, list) else 0)
                         return result
                     except Exception as error:
-                        _write_status(
-                            bot,
-                            last_scan_error=f"{type(error).__name__}: {error}",
-                            error=f"Scanner error: {type(error).__name__}: {error}",
-                        )
+                        _write_status(bot,
+                                      last_scan_error=f"{type(error).__name__}: {error}",
+                                      error=f"Scanner error: {type(error).__name__}: {error}")
                         raise
                     finally:
-                        _write_status(
-                            bot,
-                            scanner_status="IDLE",
-                            last_scan_completed=_iso_now(),
-                            scan_duration_seconds=round(time.monotonic() - scan_started, 2),
-                        )
+                        _write_status(bot, scanner_status="IDLE",
+                                      last_scan_completed=_iso_now(),
+                                      scan_duration_seconds=round(time.monotonic() - scan_started, 2))
 
                 bot.scanner.scan = monitored_scan
                 bot.run_cycle()
             except Exception as error:
-                _write_status(
-                    bot,
-                    status="ERROR",
-                    message="Trading cycle failed; worker will retry.",
-                    scanner_status="ERROR",
-                    error=f"{type(error).__name__}: {error}",
-                )
+                _write_status(bot, status="ERROR", message="Trading cycle failed; worker will retry.",
+                              scanner_status="ERROR", error=f"{type(error).__name__}: {error}")
             finally:
                 bot.scanner.scan = original_scan
-                _write_status(
-                    bot,
-                    scanner_status="IDLE",
-                    scan_duration_seconds=round(time.monotonic() - started, 2),
-                )
+                # Do not overwrite scan_duration_seconds here: monitored_scan
+                # owns that metric. The cycle timestamp remains last_cycle.
+                _write_status(bot, scanner_status="IDLE")
             time.sleep(SCAN_INTERVAL_SECONDS)
             continue
 
-        _write_status(
-            bot,
-            status="RUNNING",
-            message="Running mandatory 15:00 IST square-off.",
-            last_cycle=_iso_now(),
-            scanner_status="IDLE",
-        )
+        _write_status(bot, status="RUNNING", message="Running mandatory 15:00 IST square-off.",
+                      last_cycle=_iso_now(), scanner_status="IDLE")
         try:
             bot.run_cycle()
         except Exception as error:
-            _write_status(
-                bot,
-                status="ERROR",
-                message="Square-off cycle failed; retrying.",
-                error=f"{type(error).__name__}: {error}",
-            )
+            _write_status(bot, status="ERROR", message="Square-off cycle failed; retrying.",
+                          error=f"{type(error).__name__}: {error}")
             time.sleep(15)
             continue
 
-        _write_status(
-            bot,
-            status="WAITING",
-            message="Trading day complete. Waiting for the next Indian market session.",
-            scanner_status="IDLE",
-            error=None,
-        )
+        _write_status(bot, status="WAITING",
+                      message="Trading day complete. Waiting for the next Indian market session.",
+                      scanner_status="IDLE", error=None)
         return
 
 
 def _run_bot():
     global _thread, _worker_lock_handle
     try:
-        _write_status(
-            status="STARTING",
-            message="Paper bot worker started.",
-            error=None,
-            worker_alive=True,
-            worker_id=_worker_id(),
-        )
-
+        _write_status(status="STARTING", message="Paper bot worker started.", error=None,
+                      worker_alive=True, worker_id=_worker_id())
         while True:
             now = _now()
             if now.weekday() >= 5:
-                _write_status(
-                    status="WAITING",
-                    message="Weekend. Waiting for the next Indian market session.",
-                    scanner_status="IDLE",
-                    error=None,
-                )
+                _write_status(status="WAITING", message="Weekend. Waiting for the next Indian market session.",
+                              scanner_status="IDLE", error=None)
                 time.sleep(30)
                 continue
-
             if now.strftime("%H:%M") < SQUARE_OFF_TIME:
                 _run_one_trading_day()
             else:
-                _write_status(
-                    status="WAITING",
-                    message="Market session finished. Waiting for the next Indian market session.",
-                    scanner_status="IDLE",
-                    error=None,
-                )
+                _write_status(status="WAITING", message="Market session finished. Waiting for the next Indian market session.",
+                              scanner_status="IDLE", error=None)
                 time.sleep(30)
     except Exception as error:
         try:
-            _write_status(
-                status="ERROR",
-                message="Trading worker hit an unrecoverable error; dashboard watchdog will restart it.",
-                scanner_status="ERROR",
-                error=f"{type(error).__name__}: {error}",
-            )
+            _write_status(status="ERROR",
+                          message="Trading worker hit an unrecoverable error; dashboard watchdog will restart it.",
+                          scanner_status="ERROR", error=f"{type(error).__name__}: {error}")
         except Exception:
             pass
     finally:
@@ -361,7 +262,6 @@ def start_bot():
     with _lock:
         if _thread is not None and _thread.is_alive():
             return get_status()
-
         lock_handle = _with_file_lock(WORKER_LOCK_FILE)
         if lock_handle is None:
             _state["status"] = "WAITING"
@@ -369,13 +269,8 @@ def start_bot():
             _state["worker_alive"] = False
             _state["error"] = None
             return get_status()
-
         _worker_lock_handle = lock_handle
-        _thread = threading.Thread(
-            target=_run_bot,
-            name="paper-trading-bot",
-            daemon=True,
-        )
+        _thread = threading.Thread(target=_run_bot, name="paper-trading-bot", daemon=True)
         _thread.start()
     return get_status()
 
@@ -392,11 +287,9 @@ def get_status():
             disk_state = json.load(file)
     except Exception:
         disk_state = {}
-
     with _lock:
         current = dict(_state)
         alive = _thread is not None and _thread.is_alive()
-
     current.update(disk_state)
     current["worker_alive"] = alive
     if alive and current.get("status") not in {"ERROR", "WAITING", "SCANNING"}:
