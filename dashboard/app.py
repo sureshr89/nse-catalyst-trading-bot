@@ -1,6 +1,6 @@
 from pathlib import Path
 import json,importlib.util,sys
-from datetime import datetime
+from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -25,9 +25,18 @@ status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engin
 try:
  spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);mod.ensure_bot_running();live=mod.get_status();status.update(live if isinstance(live,dict) else {})
 except Exception:pass
-worker=bool(status.get("worker_alive",False));bot=str(status.get("status","STARTING")).upper()
+
+def heartbeat_alive(value,max_age_seconds=90):
+ try:
+  stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+  if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+  return (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds() <= max_age_seconds
+ except Exception:return False
+
+worker=bool(status.get("worker_alive",False)) or heartbeat_alive(status.get("heartbeat"))
+bot=str(status.get("status","STARTING")).upper()
 st.warning("🟡 BOT READY • WAITING FOR MARKET SESSION" if worker and bot=="WAITING" else ("🟢 BOT RUNNING • PAPER TRADING" if worker else "🟠 WORKER NOT CONFIRMED ALIVE"))
-st.subheader("LIVE STATUS");grid([("India Time",datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")),("Bot",bot),("Worker","ALIVE" if worker else "OFFLINE"),("Scanner",status.get("scanner_status","IDLE")),("Open Positions",len(state.get("open_positions",{}) or {})),("Daily P&L",f"₹{float(status.get('daily_pnl',0) or 0):,.0f}")])
+st.subheader("LIVE STATUS");grid([("India Time",datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")),("Bot",bot),("Worker","ALIVE" if worker else "OFFLINE"),("Scanner",status.get("scanner_status","IDLE")),("Open Positions",len(state.get("open_positions",{}) or {})),("Daily P&L",f"₹{float(status.get('daily_pnl',0) or 0):,.2f}")])
 st.subheader("CAPITAL & RISK");grid([("Starting Capital","₹250,000"),("Available",f"₹{float(status.get('available_capital',250000) or 0):,.0f}"),("Used",f"₹{float(status.get('used_capital',0) or 0):,.0f}"),("Risk / Trade","₹1,400–₹1,500"),("R:R","1:1.25"),("Max Positions",2)])
 closed=trades[trades["status"].astype(str).str.upper().eq("CLOSED")].copy() if not trades.empty and "status" in trades.columns else pd.DataFrame()
 if not closed.empty and "pnl" in closed.columns:closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
