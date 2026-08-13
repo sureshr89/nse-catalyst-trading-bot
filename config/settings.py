@@ -33,7 +33,6 @@ TOTAL_CAPITAL = 250000
 MAX_RISK_PER_TRADE = 1500
 # Only trade when whole-share sizing can place actual risk in this narrow band.
 MIN_REQUIRED_RISK = 1400
-RISK_PERCENT = 0.6
 
 MAX_TRADES_PER_STOCK = 1
 MAX_OPEN_POSITIONS = 2
