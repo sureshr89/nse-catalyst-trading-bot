@@ -1,5 +1,6 @@
 """Analysis page wrapper with common 4-button navigation."""
 from pathlib import Path
+import importlib
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,11 +27,13 @@ with st.container(key="nav_grid"):
     n3.page_link("pages/analysis.py",label="📊 ANALYSIS",icon="📊",width="stretch")
     n4.page_link("pages/downloads.py",label="⬇️ DOWNLOADS",icon="⬇️",width="stretch")
 
-# Load the original full research dashboard. Its own set_page_config is
-# temporarily suppressed because this wrapper already configured the page.
+# Load the original full research dashboard on every Streamlit rerun.
+# Its own set_page_config is temporarily suppressed because this wrapper
+# already configured the page.
 _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
 try:
     from dashboard import analysis as _full_analysis
+    importlib.reload(_full_analysis)
 finally:
     st.set_page_config = _original_set_page_config
