@@ -164,7 +164,7 @@ closed=trades.copy()
 if not closed.empty and "status" in closed.columns:closed=closed[closed["status"].astype(str).str.upper()=="CLOSED"].copy()
 if not closed.empty and "pnl" in closed.columns:closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
 wins=int((closed["pnl"]>0).sum()) if not closed.empty else 0; losses=int((closed["pnl"]<0).sum()) if not closed.empty else 0
-st.markdown("<div class=\"section-title\">TODAY'S TRADING</div>",unsafe_allow_html=True)
+st.markdown('<div class="section-title">TODAY\'S TRADING</div>',unsafe_allow_html=True)
 a,b,c=st.columns(3); a.metric("Closed Trades",len(closed)); b.metric("Wins / Losses",f"{wins} / {losses}"); c.metric("Win Rate",f"{wins/len(closed)*100:.1f}%" if len(closed) else "0.0%")
 if not closed.empty:
     cols=[c for c in ["trade_id","symbol","signal","entry_time","entry","exit_time","exit_price","exit_reason","quantity","pnl"] if c in closed.columns]; st.dataframe(closed[cols].iloc[::-1].head(12),use_container_width=True,hide_index=True)
