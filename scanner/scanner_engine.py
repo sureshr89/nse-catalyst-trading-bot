@@ -58,6 +58,7 @@ class ScannerEngine:
         """
         today = self._today()
         output = Path("outputs") / "references" / f"gap_candidates_{today}.csv"
+        output.parent.mkdir(parents=True, exist_ok=True)
         required = {
             "Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection",
             "PreviousDayDirection", "PreviousDayTurnover", "LiquidityQualified",
@@ -118,8 +119,6 @@ class ScannerEngine:
             gap_direction = "GAP_UP" if today_open > pdc else "GAP_DOWN" if today_open < pdc else "FLAT"
             previous_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
 
-            # Pre-filter requires yesterday's direction to agree with today's gap.
-            # BULLISH yesterday -> today's GAP_UP; BEARISH yesterday -> today's GAP_DOWN.
             if gap_direction == "GAP_UP" and previous_direction != "BULLISH":
                 continue
             if gap_direction == "GAP_DOWN" and previous_direction != "BEARISH":
