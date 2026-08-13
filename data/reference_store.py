@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
@@ -19,6 +18,7 @@ class ReferenceStore:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.batch_size = 25
         self.max_workers = 4
+        self.minimum_coverage = 0.95
 
     @property
     def date_key(self):
@@ -30,7 +30,8 @@ class ReferenceStore:
 
     @staticmethod
     def _ticker(symbol):
-        return symbol if str(symbol).endswith(".NS") else f"{symbol}.NS"
+        symbol = str(symbol).strip().upper()
+        return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
 
     def _download_batch(self, tickers):
         try:
@@ -48,14 +49,21 @@ class ReferenceStore:
             print(f"Reference batch download failed ({len(tickers)}):", error)
             return pd.DataFrame()
 
+    def _coverage_ok(self, df):
+        if df is None or df.empty or self.universe.empty:
+            return False
+        required = max(1, int(len(self.universe) * self.minimum_coverage))
+        return len(df["Symbol"].astype(str).str.upper().unique()) >= required
+
     def prepare(self):
         if self.path.exists():
             try:
                 saved = pd.read_csv(self.path)
-                if len(saved) >= max(1, int(len(self.universe) * 0.8)):
+                if self._coverage_ok(saved):
                     return saved
-            except Exception:
-                pass
+                print("Ignoring incomplete saved reference data:", len(saved), "of", len(self.universe))
+            except Exception as error:
+                print("Saved reference data could not be loaded:", error)
 
         symbols = self.universe["Symbol"].astype(str).str.upper().tolist()
         tickers = [self._ticker(s) for s in symbols]
@@ -98,10 +106,15 @@ class ReferenceStore:
                         data = data.dropna(subset=["Open", "Close"])
                         if data.empty:
                             continue
-                        dates = pd.to_datetime(data.index, errors="coerce").date
+
+                        index_dates = pd.to_datetime(data.index, errors="coerce")
+                        if getattr(index_dates, "tz", None) is not None:
+                            index_dates = index_dates.tz_convert(INDIA_TZ)
+                        dates = index_dates.date
                         completed = data[[d < today for d in dates]]
                         if completed.empty:
                             continue
+
                         prev = completed.iloc[-1]
                         pdc = float(prev["Close"])
                         prev_open = float(prev["Open"])
@@ -118,8 +131,10 @@ class ReferenceStore:
                         print("Reference error", symbol, error)
 
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
-        if result.empty:
-            return result
+        if result.empty or not self._coverage_ok(result):
+            print("Reference data incomplete:", len(result) if not result.empty else 0, "of", len(self.universe), "— refusing to save partial references")
+            return pd.DataFrame()
+
         result = result.merge(self.universe[["Symbol", "Industry"]], on="Symbol", how="left")
         result = result.rename(columns={"Industry": "SectorFallback"})
         result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
@@ -130,6 +145,7 @@ class ReferenceStore:
         if not self.path.exists():
             return self.prepare()
         try:
-            return pd.read_csv(self.path)
+            saved = pd.read_csv(self.path)
+            return saved if self._coverage_ok(saved) else self.prepare()
         except Exception:
             return self.prepare()
