@@ -6,6 +6,8 @@ import requests
 
 
 class StockUniverse:
+    MIN_EXPECTED_STOCKS = 95
+
     def __init__(self):
         self.url = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
         self.data_folder = Path("data")
@@ -39,15 +41,18 @@ class StockUniverse:
         df = df[df[symbol_col].ne("")].drop_duplicates(symbol_col)
         if symbol_col != "Symbol":
             df = df.rename(columns={symbol_col: "Symbol"})
-        # Nifty constituent CSV exposes an Industry column. Keep it as a
-        # stable fallback grouping; the sector cache may replace it with the
-        # broker/Yahoo sector classification when available.
         if "Industry" not in df.columns:
             df["Industry"] = "UNKNOWN"
+        if len(df) < self.MIN_EXPECTED_STOCKS:
+            print(
+                "NIFTY 100 universe rejected: only",
+                len(df), "stocks; expected at least", self.MIN_EXPECTED_STOCKS,
+            )
+            return None
         return df.reset_index(drop=True)
 
     def save(self, df):
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < self.MIN_EXPECTED_STOCKS:
             return False
         df.to_csv(self.output_file, index=False)
         return True
@@ -63,7 +68,14 @@ class StockUniverse:
             df["Symbol"] = df["Symbol"].astype(str).str.strip().str.upper()
             if "Industry" not in df.columns:
                 df["Industry"] = "UNKNOWN"
-            return df.drop_duplicates("Symbol").reset_index(drop=True)
+            df = df.drop_duplicates("Symbol").reset_index(drop=True)
+            if len(df) < self.MIN_EXPECTED_STOCKS:
+                print(
+                    "Local NIFTY 100 universe rejected: only",
+                    len(df), "stocks; expected at least", self.MIN_EXPECTED_STOCKS,
+                )
+                return None
+            return df
         except Exception:
             return None
 
