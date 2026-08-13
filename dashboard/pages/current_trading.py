@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+from dashboard.nav import render_nav
 ROOT=Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Current Trading",page_icon="📌",layout="wide")
 st.markdown("""
@@ -9,26 +10,12 @@ st.markdown("""
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
 [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important}
 [data-testid="stColumn"]{min-width:0!important;flex:1 1 0!important}
-[data-testid="stPageLink"] a{display:flex!important;justify-content:center!important;align-items:center!important;min-height:38px!important;margin-bottom:7px!important;border:1px solid #2b3b57!important;border-radius:10px!important;background:#142036!important;color:#e9f0f8!important;font-size:.60rem!important;font-weight:700!important;width:100%!important}
 .metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.metric-card{background:#111b2d;border:1px solid #26344d;border-radius:10px;padding:8px;min-height:52px}.metric-label{font-size:.58rem;color:#9fb0c7}.metric-value{font-size:.84rem;color:#f4f7fb;font-weight:750;margin-top:3px}
-.st-key-main_nav [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.55rem!important}
-.st-key-main_nav [data-testid="stColumn"]{width:calc(25% - .42rem)!important;flex:0 0 calc(25% - .42rem)!important;min-width:0!important}
-.st-key-main_nav [data-testid="stPageLink"]{width:100%!important}
-@media(max-width:768px){
- .st-key-main_nav [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.35rem!important}
- .st-key-main_nav [data-testid="stColumn"]{width:calc(50% - .175rem)!important;flex:0 0 calc(50% - .175rem)!important}
-}
 </style>
 """,unsafe_allow_html=True)
-with st.container(key="main_nav"):
-    n1,n2,n3,n4=st.columns(4,gap="small")
-    n1.page_link("app.py",label="🟢 BOT STATUS",width="stretch")
-    n2.page_link("pages/current_trading.py",label="📌 CURRENT TRADING",width="stretch")
-    n3.page_link("pages/analysis.py",label="📊 ANALYSIS",width="stretch")
-    n4.page_link("pages/downloads.py",label="⬇️ DOWNLOADS",width="stretch")
+render_nav()
 def read(p,kind):
-    try:
-        return json.loads(p.read_text()) if kind=="json" else pd.read_csv(p)
+    try:return json.loads(p.read_text()) if kind=="json" else pd.read_csv(p)
     except Exception:return {} if kind=="json" else pd.DataFrame()
 s=read(ROOT/"outputs/bot_status.json","json"); state=read(ROOT/"outputs/paper_engine_state.json","json"); pos=state.get("open_positions",{}) or {}; trades=read(ROOT/"outputs/trades.csv","csv"); signals=read(ROOT/"outputs/signals.csv","csv")
 closed=trades[trades.get("status",pd.Series(dtype=str)).astype(str).str.upper().eq("CLOSED")].copy() if not trades.empty and "status" in trades.columns else pd.DataFrame()
