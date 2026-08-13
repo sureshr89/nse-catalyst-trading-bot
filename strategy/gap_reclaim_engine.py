@@ -70,14 +70,18 @@ class GapReclaimEngine:
             return None
 
         pdc_breached = False
-        for i in range(1, len(completed)):
-            prior = completed.iloc[i - 1]
+        for i in range(len(completed)):
             cur = completed.iloc[i]
 
-            if side == "BUY" and float(prior["Low"]) < pdc:
+            # The first completed candle is allowed to establish the PDC
+            # failure. Entry still requires a later completed candle.
+            if side == "BUY" and float(cur["Low"]) < pdc:
                 pdc_breached = True
-            elif side == "SELL" and float(prior["High"]) > pdc:
+            elif side == "SELL" and float(cur["High"]) > pdc:
                 pdc_breached = True
+
+            if i == 0:
+                continue
 
             cur_time = cur["Datetime"].time()
             if cur_time < self.start:
