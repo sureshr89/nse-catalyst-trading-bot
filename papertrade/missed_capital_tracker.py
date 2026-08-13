@@ -34,6 +34,14 @@ class MissedCapitalTracker:
         except Exception:
             return None
 
+    @staticmethod
+    def _timestamp(value):
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            return None if pd.isna(parsed) else parsed
+        except Exception:
+            return None
+
     def record(self, signal, risk_result, reason):
         symbol = str(signal.get("symbol", "")).strip().upper()
         if not symbol:
@@ -50,9 +58,8 @@ class MissedCapitalTracker:
             symbol,
         )
         existing = self.journal.get_trades()
-        if not existing.empty and "trade_id" in existing.columns:
-            if trade_id in existing["trade_id"].astype(str).values:
-                return
+        if not existing.empty and "trade_id" in existing.columns and trade_id in existing["trade_id"].astype(str).values:
+            return
         row = dict(signal)
         row.update({
             "trade_id": trade_id,
@@ -84,6 +91,67 @@ class MissedCapitalTracker:
             return pd.DataFrame()
         return df[df["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN"].copy()
 
+    def _close_from_candles(self, trade, candles):
+        if candles is None or candles.empty:
+            return None
+        frame = candles.copy()
+        if "Datetime" not in frame.columns:
+            return None
+        frame["Datetime"] = pd.to_datetime(frame["Datetime"], errors="coerce")
+        frame = frame.dropna(subset=["Datetime"]).sort_values("Datetime")
+        entry_time = self._timestamp(trade.get("entry_time"))
+        if entry_time is not None:
+            frame = frame[frame["Datetime"] > entry_time]
+        if frame.empty:
+            return None
+
+        entry = self._number(trade.get("entry"))
+        stop = self._number(trade.get("stop_loss"))
+        target = self._number(trade.get("target"))
+        quantity = self._number(trade.get("quantity"))
+        if None in (entry, stop, target, quantity) or quantity <= 0:
+            return None
+
+        side = str(trade.get("signal", "")).upper()
+        for _, candle in frame.iterrows():
+            high = self._number(candle.get("High"))
+            low = self._number(candle.get("Low"))
+            close = self._number(candle.get("Close"))
+            if None in (high, low, close):
+                continue
+            candle_time = candle.get("Datetime")
+            reason = None
+            exit_price = None
+
+            if side == "BUY":
+                sl_hit, target_hit = low <= stop, high >= target
+            elif side == "SELL":
+                sl_hit, target_hit = high >= stop, low <= target
+            else:
+                continue
+
+            # OHLC cannot reveal intrabar order. Keep the same conservative
+            # stop-first rule used by the real paper execution engine.
+            if sl_hit:
+                reason, exit_price = "MISSED_CAPITAL_STOP_LOSS", stop
+            elif target_hit:
+                reason, exit_price = "MISSED_CAPITAL_TARGET", target
+            elif self._hhmm(candle_time) and self._hhmm(candle_time) >= SQUARE_OFF_TIME:
+                reason, exit_price = "MISSED_CAPITAL_SQUARE_OFF", close
+
+            if reason is None:
+                continue
+
+            pnl = (exit_price - entry) * quantity if side == "BUY" else (entry - exit_price) * quantity
+            return {
+                "status": "MISSED_CAPITAL_CLOSED",
+                "exit_time": candle_time,
+                "exit_price": round(exit_price, 4),
+                "exit_reason": reason,
+                "pnl": round(pnl, 2),
+            }
+        return None
+
     def monitor(self):
         rows = self._open_rows()
         if rows.empty:
@@ -94,58 +162,16 @@ class MissedCapitalTracker:
                 continue
             try:
                 candles = self.price_data.get_1m(symbol)
-            except Exception:
-                continue
-            if candles is None or candles.empty:
-                continue
-            try:
                 candles = self.price_data.today_only(candles)
             except Exception:
-                pass
+                continue
             if candles is None or candles.empty:
                 continue
-            candle = candles.iloc[-1]
-            entry = self._number(trade.get("entry"))
-            stop = self._number(trade.get("stop_loss"))
-            target = self._number(trade.get("target"))
-            quantity = self._number(trade.get("quantity"))
-            if None in (entry, stop, target, quantity) or quantity <= 0:
-                continue
-            high = self._number(candle.get("High"))
-            low = self._number(candle.get("Low"))
-            close = self._number(candle.get("Close"))
-            if None in (high, low, close):
-                continue
-            side = str(trade.get("signal", "")).upper()
-            reason = None
-            exit_price = None
-            candle_time = candle.get("Datetime", datetime.now().astimezone().isoformat())
-            if side == "BUY":
-                if low <= stop:
-                    reason, exit_price = "MISSED_CAPITAL_STOP_LOSS", stop
-                elif high >= target:
-                    reason, exit_price = "MISSED_CAPITAL_TARGET", target
-            elif side == "SELL":
-                if high >= stop:
-                    reason, exit_price = "MISSED_CAPITAL_STOP_LOSS", stop
-                elif low <= target:
-                    reason, exit_price = "MISSED_CAPITAL_TARGET", target
 
-            # If neither level was hit, the missed opportunity is closed at the
-            # same mandatory 15:00 square-off used by the real paper position.
-            if reason is None and self._hhmm(candle_time) and self._hhmm(candle_time) >= SQUARE_OFF_TIME:
-                reason, exit_price = "MISSED_CAPITAL_SQUARE_OFF", close
-            if reason is None:
+            outcome = self._close_from_candles(trade, candles)
+            if outcome is None:
                 continue
-
-            pnl = (exit_price - entry) * quantity if side == "BUY" else (entry - exit_price) * quantity
             updated = trade.to_dict()
-            updated.update({
-                "status": "MISSED_CAPITAL_CLOSED",
-                "exit_time": candle_time,
-                "exit_price": round(exit_price, 4),
-                "exit_reason": reason,
-                "pnl": round(pnl, 2),
-            })
+            updated.update(outcome)
             self.journal.upsert_trade(updated)
-            print("MISSED CAPITAL CLOSED:", symbol, reason, "P&L=", round(pnl, 2))
+            print("MISSED CAPITAL CLOSED:", symbol, outcome["exit_reason"], "P&L=", outcome["pnl"])
