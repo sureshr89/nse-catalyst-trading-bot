@@ -11,32 +11,34 @@ st.markdown("""
 [data-testid="stAppViewContainer"]{background:#0b1220}
 .block-container{max-width:1420px!important;padding:.45rem .55rem 1.5rem!important}
 
-/* NAVIGATION: always two columns per row, including mobile */
-.st-key-nav_row_1,.st-key-nav_row_2{width:100%!important}
-.st-key-nav_row_1 [data-testid="stHorizontalBlock"],
-.st-key-nav_row_2 [data-testid="stHorizontalBlock"]{
-    display:flex!important;
-    flex-direction:row!important;
-    flex-wrap:nowrap!important;
+/* SINGLE STICKY 2x2 NAVIGATION. It stays together and remains visible. */
+.st-key-main_nav{
+    position:sticky!important;
+    top:0!important;
+    z-index:99999!important;
     width:100%!important;
+    background:#0b1220!important;
+    padding:.35rem 0 .55rem!important;
+    margin:0 0 .25rem!important;
+}
+.st-key-main_nav [data-testid="stHorizontalBlock"]{
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;
     gap:.45rem!important;
-}
-.st-key-nav_row_1 [data-testid="stColumn"],
-.st-key-nav_row_2 [data-testid="stColumn"]{
-    min-width:0!important;
-    width:50%!important;
-    flex:1 1 50%!important;
-}
-.st-key-nav_row_1 [data-testid="stPageLink"],
-.st-key-nav_row_2 [data-testid="stPageLink"]{width:100%!important}
-.st-key-nav_row_1 [data-testid="stPageLink"] a,
-.st-key-nav_row_2 [data-testid="stPageLink"] a{
-    display:flex!important;
-    align-items:center!important;
-    justify-content:center!important;
     width:100%!important;
-    min-height:42px!important;
-    padding:.4rem .2rem!important;
+    margin:0!important;
+}
+.st-key-main_nav [data-testid="stColumn"]{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    flex:none!important;
+}
+.st-key-main_nav [data-testid="stButton"]{width:100%!important;margin:0!important}
+.st-key-main_nav [data-testid="stButton"] button{
+    width:100%!important;
+    min-height:44px!important;
+    padding:.35rem .15rem!important;
     box-sizing:border-box!important;
     border:1px solid #2b3b57!important;
     border-radius:11px!important;
@@ -44,31 +46,39 @@ st.markdown("""
     color:#e9f0f8!important;
     font-size:.64rem!important;
     font-weight:700!important;
-    text-decoration:none!important;
 }
-
 [data-testid="stDownloadButton"] button{width:100%!important;min-height:48px!important;border:1px solid #2b3b57!important;border-radius:10px!important;font-weight:700!important}
 .js-plotly-plot,.js-plotly-plot *{pointer-events:none!important;touch-action:none!important}
 @media(max-width:768px){
-    .block-container{padding:.35rem .35rem 1rem!important}
-    .st-key-nav_row_1 [data-testid="stHorizontalBlock"],
-    .st-key-nav_row_2 [data-testid="stHorizontalBlock"]{gap:.35rem!important}
-    .st-key-nav_row_1 [data-testid="stPageLink"] a,
-    .st-key-nav_row_2 [data-testid="stPageLink"] a{min-height:44px!important;font-size:.60rem!important}
+    .block-container{padding:.2rem .35rem 1rem!important}
+    .st-key-main_nav{padding:.25rem 0 .5rem!important}
+    .st-key-main_nav [data-testid="stHorizontalBlock"]{gap:.35rem!important}
+    .st-key-main_nav [data-testid="stButton"] button{min-height:42px!important;font-size:.60rem!important}
 }
 </style>
 """, unsafe_allow_html=True)
 
-# Fixed 2 x 2 navigation. The main app is the entrypoint, so app.py is the
-# correct Streamlit page-link target for BOT STATUS.
-with st.container(key="nav_row_1"):
+# Exactly four navigation buttons, always rendered as a 2 x 2 block.
+def go_bot_status():
+    st.switch_page("app.py")
+def go_current_trading():
+    st.switch_page("pages/current_trading.py")
+def go_analysis():
+    st.switch_page("pages/analysis.py")
+def go_downloads():
+    st.switch_page("pages/downloads.py")
+
+with st.container(key="main_nav"):
     a, b = st.columns(2, gap="small")
-    a.page_link("app.py", label="🟢 BOT STATUS", width="stretch")
-    b.page_link("pages/current_trading.py", label="📌 CURRENT TRADING", width="stretch")
-with st.container(key="nav_row_2"):
+    with a:
+        st.button("🟢 BOT STATUS", key="nav_bot_status", on_click=go_bot_status, width="stretch")
+    with b:
+        st.button("📌 CURRENT TRADING", key="nav_current_trading", on_click=go_current_trading, width="stretch")
     c, d = st.columns(2, gap="small")
-    c.page_link("pages/analysis.py", label="📊 ANALYSIS", width="stretch")
-    d.page_link("pages/downloads.py", label="⬇️ DOWNLOADS", width="stretch")
+    with c:
+        st.button("📊 ANALYSIS", key="nav_analysis", on_click=go_analysis, width="stretch")
+    with d:
+        st.button("⬇️ DOWNLOADS", key="nav_downloads", on_click=go_downloads, width="stretch")
 
 def existing_bytes(name):
     p = ROOT / "outputs" / name
