@@ -52,9 +52,15 @@ if not closed.empty:
         numeric(closed, column)
 
     missing_risk = closed["risk"] <= 0
-    closed.loc[missing_risk, "risk"] = (closed.loc[missing_risk, "entry"] - closed.loc[missing_risk, "stop_loss"]).abs()
+    closed.loc[missing_risk, "risk"] = (
+        (closed.loc[missing_risk, "entry"] - closed.loc[missing_risk, "stop_loss"]).abs()
+        * closed.loc[missing_risk, "quantity"]
+    )
     missing_reward = closed["reward"] <= 0
-    closed.loc[missing_reward, "reward"] = (closed.loc[missing_reward, "target"] - closed.loc[missing_reward, "entry"]).abs()
+    closed.loc[missing_reward, "reward"] = (
+        (closed.loc[missing_reward, "target"] - closed.loc[missing_reward, "entry"]).abs()
+        * closed.loc[missing_reward, "quantity"]
+    )
     valid_risk = closed["risk"] > 0
     closed.loc[valid_risk, "rr"] = closed.loc[valid_risk, "reward"] / closed.loc[valid_risk, "risk"]
 
@@ -86,26 +92,21 @@ if not closed.empty:
     st.metric("Realized P&L", f"₹{pnl:,.2f}")
 
     st.subheader("1. Win vs Loss")
-    st.bar_chart(pd.DataFrame({"Trades": [wins, losses]}, index=["Win", "Loss"]), use_container_width=True)
+    st.bar_chart(pd.DataFrame({"Trades": [wins, losses, flat]}, index=["Win", "Loss", "Flat"]), use_container_width=True)
 
     st.subheader("2. Stock-wise Win/Loss")
-    stock_result = closed.assign(
-        Result=closed["pnl"].apply(lambda value: "Win" if value > 0 else "Loss" if value < 0 else "Flat")
-    )
+    stock_result = closed.assign(Result=closed["pnl"].apply(lambda value: "Win" if value > 0 else "Loss" if value < 0 else "Flat"))
     stock_wl = pd.crosstab(stock_result["symbol"], stock_result["Result"])
     for column in ["Win", "Loss", "Flat"]:
         if column not in stock_wl.columns:
             stock_wl[column] = 0
-    stock_wl = stock_wl[["Win", "Loss", "Flat"]]
-    st.bar_chart(stock_wl, use_container_width=True)
+    st.bar_chart(stock_wl[["Win", "Loss", "Flat"]], use_container_width=True)
 
     st.subheader("3. P&L by Stock")
-    stock_pnl = closed.groupby("symbol")["pnl"].sum().sort_values(ascending=False)
-    st.bar_chart(stock_pnl, use_container_width=True)
+    st.bar_chart(closed.groupby("symbol")["pnl"].sum().sort_values(ascending=False), use_container_width=True)
 
     st.subheader("4. Trades by Stock")
-    trades_by_stock = closed["symbol"].value_counts().sort_values(ascending=False)
-    st.bar_chart(trades_by_stock, use_container_width=True)
+    st.bar_chart(closed["symbol"].value_counts().sort_values(ascending=False), use_container_width=True)
 
     st.subheader("5. Cumulative P&L")
     pnl_series = closed.copy()
@@ -145,7 +146,8 @@ if not closed.empty:
     quality_cols = [column for column in [
         "symbol", "signal", "pnl", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr",
         "pdc", "today_open", "today_low", "today_high", "nifty100_direction", "sector", "sector_direction",
-        "stock_today_direction", "previous_day_direction", "setup_type", "exit_reason", "status",
+        "stock_today_direction", "previous_day_direction", "setup_type", "entry_candle_open", "entry_candle_close",
+        "exit_reason", "status",
     ] if column in closed.columns]
     st.dataframe(closed[quality_cols].iloc[::-1], use_container_width=True, hide_index=True)
 else:
@@ -157,7 +159,7 @@ if signals.empty:
     st.info("No scanner signals have been recorded yet.")
 else:
     sig = signals.copy()
-    for column in ["entry", "stop_loss", "target", "risk_reward", "actual_risk"]:
+    for column in ["entry", "stop_loss", "target", "risk_reward", "risk_per_share", "actual_risk", "position_value"]:
         numeric(sig, column)
     approved_series = sig["approved"].astype(str).str.upper().eq("TRUE") if "approved" in sig.columns else pd.Series(False, index=sig.index)
     a, b, c = st.columns(3)
@@ -165,9 +167,10 @@ else:
     b.metric("Risk Approved", int(approved_series.sum()))
     c.metric("Rejected", int((~approved_series).sum()))
     preferred = [
-        "timestamp", "symbol", "signal", "entry", "stop_loss", "target", "risk_reward", "actual_risk",
-        "pdc", "today_open", "today_low", "today_high", "nifty100_direction", "sector", "sector_direction",
-        "stock_today_direction", "previous_day_direction", "setup_type", "approved", "reason",
+        "timestamp", "symbol", "signal", "entry", "stop_loss", "target", "risk_reward", "risk_per_share",
+        "actual_risk", "position_value", "pdc", "today_open", "today_low", "today_high", "nifty100_direction",
+        "sector", "sector_direction", "stock_today_direction", "previous_day_direction", "setup_type",
+        "entry_candle_open", "entry_candle_close", "approved", "reason",
     ]
     columns = [column for column in preferred if column in sig.columns]
     st.dataframe(sig[columns].iloc[::-1], use_container_width=True, hide_index=True)
