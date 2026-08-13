@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
+a = ZoneInfo("Asia/Kolkata")
+INDIA_TZ = a
 
 class PriceData:
     def __init__(self):
@@ -114,60 +115,61 @@ class PriceData:
             print(f"Yahoo batch failed ({len(tickers)} tickers): {error}")
             return pd.DataFrame()
 
+    def _extract_batch(self, batch, raw):
+        result = {}
+        tickers = [f"{s}.NS" for s in batch]
+        if raw is None or raw.empty:
+            return result
+        if isinstance(raw.columns, pd.MultiIndex):
+            level0 = set(raw.columns.get_level_values(0))
+            level1 = set(raw.columns.get_level_values(1))
+            for symbol, ticker in zip(batch, tickers):
+                try:
+                    if ticker in level0:
+                        data = raw[ticker]
+                    elif ticker in level1:
+                        data = raw.xs(ticker, axis=1, level=1)
+                    else:
+                        data = pd.DataFrame()
+                    cleaned = self._completed_1m(self._clean_data(data))
+                    if not cleaned.empty:
+                        result[symbol] = cleaned
+                except Exception:
+                    continue
+        elif len(batch) == 1:
+            cleaned = self._completed_1m(self._clean_data(raw))
+            if not cleaned.empty:
+                result[batch[0]] = cleaned
+        return result
+
     def get_multi_1m(self, symbols):
         symbols = [str(s).upper().replace(".NS", "") for s in symbols]
         symbols = list(dict.fromkeys(s for s in symbols if s))
         if not symbols:
             return {}
         batches = list(self._chunks(symbols, self.batch_size))
-        raw_frames = []
+        result = {}
+
+        def download_with_retry(batch):
+            tickers = [f"{s}.NS" for s in batch]
+            raw = self._download_multi_batch(tickers, "1m", "1d")
+            extracted = self._extract_batch(batch, raw)
+            missing = [s for s in batch if s not in extracted]
+            if missing:
+                print("Retrying missing Yahoo symbols:", len(missing))
+                retry_raw = self._download_multi_batch([f"{s}.NS" for s in missing], "1m", "1d")
+                extracted.update(self._extract_batch(missing, retry_raw))
+            return extracted
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_map = {
-                executor.submit(self._download_multi_batch, [f"{s}.NS" for s in batch], "1m", "1d"): batch
-                for batch in batches
-            }
-            for future in as_completed(future_map):
-                batch = future_map[future]
+            futures = {executor.submit(download_with_retry, batch): batch for batch in batches}
+            for future in as_completed(futures):
+                batch = futures[future]
                 try:
-                    raw = future.result()
+                    result.update(future.result())
                 except Exception as error:
                     print("Yahoo batch worker failed:", error)
-                    raw = pd.DataFrame()
 
-                # A transient Yahoo failure used to discard the entire 25-stock
-                # batch for that scan. Retry the failed batch once before giving
-                # up so one temporary request failure does not hide valid setups.
-                if raw is None or raw.empty:
-                    for attempt in range(self.batch_retries):
-                        print("Retrying Yahoo batch", len(batch), "stocks", "attempt", attempt + 1)
-                        raw = self._download_multi_batch(
-                            [f"{s}.NS" for s in batch], "1m", "1d"
-                        )
-                        if raw is not None and not raw.empty:
-                            break
-
-                if raw is not None and not raw.empty:
-                    raw_frames.append((batch, raw))
-
-        result = {}
-        for batch, raw in raw_frames:
-            tickers = [f"{s}.NS" for s in batch]
-            if isinstance(raw.columns, pd.MultiIndex):
-                level0 = set(raw.columns.get_level_values(0))
-                level1 = set(raw.columns.get_level_values(1))
-                for symbol, ticker in zip(batch, tickers):
-                    try:
-                        if ticker in level0:
-                            data = raw[ticker]
-                        elif ticker in level1:
-                            data = raw.xs(ticker, axis=1, level=1)
-                        else:
-                            data = pd.DataFrame()
-                        result[symbol] = self._completed_1m(self._clean_data(data))
-                    except Exception:
-                        result[symbol] = pd.DataFrame()
-            elif len(batch) == 1:
-                result[batch[0]] = self._completed_1m(self._clean_data(raw))
         for symbol in symbols:
             result.setdefault(symbol, pd.DataFrame())
         return result
