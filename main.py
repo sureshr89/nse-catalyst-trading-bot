@@ -309,17 +309,18 @@ class TradingBot:
                 continue
             candle = self.latest_1m_candle(symbol)
             if candle is None:
-                print(symbol, "square-off skipped: no completed 1-minute candle")
+                print(symbol, "square-off retry pending: no completed 1-minute candle")
                 continue
             exit_price = candle.get("Close", candle.get("close"))
             exit_time = candle.get("Datetime", candle.get("datetime")) or self._now().replace(tzinfo=None)
             try:
                 exit_price = float(exit_price)
             except (TypeError, ValueError):
-                print(symbol, "square-off skipped: invalid completed close")
+                print(symbol, "square-off retry pending: invalid completed close")
                 continue
             closed_trade = self.paper_engine.close_position(symbol, exit_price, exit_time, "SQUARE_OFF")
             if closed_trade is None:
+                print(symbol, "square-off retry pending: position could not be closed")
                 continue
             pnl = float(closed_trade.get("pnl", 0) or 0)
             self.daily_pnl = round(self.daily_pnl + pnl, 2)
@@ -345,7 +346,19 @@ class TradingBot:
         if now >= SQUARE_OFF_TIME:
             if not self.square_off_done:
                 self.force_square_off()
-                self.square_off_done = True
+                if not self.paper_engine.open_positions:
+                    self.square_off_done = True
+                else:
+                    self.square_off_done = False
+                    print("MANDATORY SQUARE-OFF INCOMPLETE — will retry on next cycle.")
+            else:
+                # Defensive recovery: if an unexpected state leaves a position
+                # open after square_off_done, immediately re-enter the retry path.
+                if self.paper_engine.open_positions:
+                    self.square_off_done = False
+                    self.force_square_off()
+                    if not self.paper_engine.open_positions:
+                        self.square_off_done = True
             self.display_status()
             return
         self.monitor_open_positions()
@@ -369,11 +382,15 @@ class TradingBot:
         except KeyboardInterrupt:
             print("Bot stopped manually.")
         except Exception as error:
-            print(f"FATAL BOT ERROR: {type(error).__name__}: {error}")
+            print(f"Bot fatal error: {type(error).__name__}: {error}")
             raise
-        finally:
-            print("FINAL JOURNAL SUMMARY:", self.journal.summary())
+
+
+def ensure_bot_running():
+    """Start the persistent paper bot when imported by the worker."""
+    bot = TradingBot()
+    bot.run()
 
 
 if __name__ == "__main__":
-    TradingBot().run()
+    ensure_bot_running()
