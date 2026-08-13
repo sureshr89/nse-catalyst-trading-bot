@@ -1,11 +1,28 @@
 from pathlib import Path
 import runpy
+import pandas as pd
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[2]
+SIGNALS = ROOT / "outputs" / "signals.csv"
+
+# Clean legacy duplicate scanner rows before the page reads the journal.
+try:
+    df = pd.read_csv(SIGNALS)
+    if not df.empty:
+        dates = pd.to_datetime(df.get("timestamp", pd.Series(index=df.index)), errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        for col in ["symbol", "signal", "setup_type"]:
+            if col not in df.columns:
+                df[col] = ""
+        key = dates + "|" + df["symbol"].astype(str).str.upper().str.strip() + "|" + df["signal"].astype(str).str.upper().str.strip() + "|" + df["setup_type"].astype(str).str.upper().str.strip()
+        cleaned = df.loc[~key.duplicated(keep="first")].copy()
+        if len(cleaned) != len(df):
+            cleaned.to_csv(SIGNALS, index=False)
+except Exception:
+    pass
+
 runpy.run_path(str(ROOT / "pages" / "current.py"), run_name="__main__")
 
-# Final visual layer: compact cards, readable tables and mobile-friendly spacing.
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"]{background:#0b1220}
