@@ -11,13 +11,18 @@ def read_csv(p):
     try:return pd.read_csv(p)
     except Exception:return pd.DataFrame()
 s=read_json(ROOT/"outputs/bot_status.json"); state=read_json(ROOT/"outputs/paper_engine_state.json"); pos=state.get("open_positions",{}) or {}; trades=read_csv(ROOT/"outputs/trades.csv"); signals=read_csv(ROOT/"outputs/signals.csv")
-worker_alive=bool(s.get("worker_alive"))
-if not worker_alive and s.get("heartbeat"): worker_alive=True
-bot_status=str(s.get("status") or "WAITING" if worker_alive else "UNKNOWN").upper()
+worker_alive=bool(s.get("worker_alive")) or bool(s.get("heartbeat"))
+bot_status=str((s.get("status") or "WAITING") if worker_alive else "UNKNOWN").upper()
 closed=trades.copy()
 if not closed.empty and "status" in closed.columns: closed=closed[closed["status"].astype(str).str.upper().eq("CLOSED")].copy()
 if not closed.empty and "pnl" in closed.columns: closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
 realized_pnl=float(closed["pnl"].sum()) if not closed.empty and "pnl" in closed.columns else 0.0
+last_signal="—"
+if not signals.empty and "timestamp" in signals.columns:
+    ts=pd.to_datetime(signals["timestamp"],errors="coerce").dropna()
+    if not ts.empty:last_signal=str(ts.max()).replace("T"," ")[:19]
+scan_count=s.get("scan_count") if s.get("scan_count") is not None else len(signals)
+last_signal_count=s.get("last_signal_count") if s.get("last_signal_count") is not None else len(signals)
 st.markdown("""
 <style>
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
@@ -47,4 +52,7 @@ else: st.info("No trades recorded yet.")
 st.subheader("Latest Scanner Signals")
 if not signals.empty: st.dataframe(signals.iloc[::-1].head(30),use_container_width=True,hide_index=True)
 else: st.info("No scanner signals yet.")
-with st.expander("Diagnostics",expanded=False): st.json({k:s.get(k) for k in ["last_cycle","last_scan","last_scan_completed","scan_count","last_signal_count","scan_duration_seconds","heartbeat","cycle_count","message","error"]})
+with st.expander("Diagnostics",expanded=False):
+    diag={"Worker":"ALIVE" if worker_alive else "OFFLINE","Status":bot_status,"Heartbeat":s.get("heartbeat") or "—","Last Scan":s.get("last_scan") or last_signal,"Scan Count":scan_count,"Last Signal Count":last_signal_count,"Last Completed":s.get("last_scan_completed") or last_signal,"Message":s.get("message") or "—"}
+    if s.get("error"):diag["Error"]=s.get("error")
+    st.json(diag)
