@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+from dashboard.nav import render_nav
 ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
 st.set_page_config(page_title="NSE Catalyst | Bot Status",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
@@ -24,23 +25,12 @@ st.markdown("""
 .metric-card small{display:block;color:#9fb0c7;font-size:.58rem}.metric-card b{display:block;color:#f4f7fb;font-size:.82rem;margin-top:3px}
 [data-testid="stPageLink"] a{min-height:38px!important;margin-bottom:7px!important;border:1px solid #2b3b57!important;border-radius:10px!important;background:#142036!important;color:#e9f0f8!important;justify-content:center!important;font-size:.60rem!important;font-weight:700!important}
 [data-testid="stPlotlyChart"],[data-testid="stPlotlyChart"] *{pointer-events:none!important;touch-action:none!important}
-/* Navigation is one four-column row on desktop and a forced 2x2 grid on phones. */
-.st-key-nav [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.55rem!important}
-.st-key-nav [data-testid="stColumn"]{width:calc(25% - .42rem)!important;flex:0 0 calc(25% - .42rem)!important;min-width:0!important}
-.st-key-nav [data-testid="stPageLink"]{width:100%!important}
-.st-key-nav [data-testid="stPageLink"] a{width:100%!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important}
-@media(max-width:768px){
-  .block-container{padding:.35rem .35rem 1rem!important}
-  .st-key-nav [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.35rem!important}
-  .st-key-nav [data-testid="stColumn"]{width:calc(50% - .175rem)!important;flex:0 0 calc(50% - .175rem)!important}
-}
 </style>""",unsafe_allow_html=True)
-with st.container(key="nav"):
-    n1,n2,n3,n4=st.columns(4,gap="small")
-    n1.page_link("app.py",label="🟢 BOT STATUS",width="stretch")
-    n2.page_link("pages/current_trading.py",label="📌 CURRENT TRADING",width="stretch")
-    n3.page_link("pages/analysis.py",label="📊 ANALYSIS",width="stretch")
-    n4.page_link("pages/downloads.py",label="⬇️ DOWNLOADS",width="stretch")
+
+# One shared navigation is used on every page. It is fixed as a 2x2 block,
+# so all four destinations remain visible together even while scrolling.
+render_nav()
+
 status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json");trades=load(ROOT/"outputs/trades.csv","csv");signals=load(ROOT/"outputs/signals.csv","csv")
 try:
     spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);mod.ensure_bot_running();live=mod.get_status();status.update(live if isinstance(live,dict) else {})
