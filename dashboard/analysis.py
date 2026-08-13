@@ -40,48 +40,61 @@ trades = load_csv(TRADES_FILE)
 signals = load_csv(SIGNALS_FILE)
 state = load_state()
 
-if not trades.empty:
-    closed = trades.copy()
-    if "status" in closed.columns:
-        closed = closed[closed["status"].astype(str).str.upper() == "CLOSED"].copy()
+# Split the persistent journal into real executed trades and qualified trades
+# that were blocked specifically because available capital was insufficient.
+actual = trades.copy()
+missed = trades.copy()
+if not trades.empty and "status" in trades.columns:
+    statuses = trades["status"].astype(str).str.upper()
+    actual = trades[statuses == "CLOSED"].copy()
+    missed = trades[statuses.isin(["MISSED_CAPITAL_OPEN", "MISSED_CAPITAL_CLOSED"])].copy()
 else:
-    closed = pd.DataFrame()
+    actual = pd.DataFrame()
+    missed = pd.DataFrame()
 
-if not closed.empty:
+# Resolve any remaining capital-missed positions at the latest available state
+# only through the tracker; this page itself remains read-only.
+missed_closed = missed[missed.get("status", pd.Series(dtype=str)).astype(str).str.upper().eq("MISSED_CAPITAL_CLOSED")].copy() if not missed.empty else pd.DataFrame()
+
+
+def prepare_trade_frame(frame):
+    frame = frame.copy()
+    if frame.empty:
+        return frame
     for column in ["entry", "stop_loss", "target", "quantity", "pnl", "actual_risk", "risk", "reward", "rr"]:
-        numeric(closed, column)
+        numeric(frame, column)
+    missing_risk = frame["risk"] <= 0
+    frame.loc[missing_risk, "risk"] = (frame.loc[missing_risk, "entry"] - frame.loc[missing_risk, "stop_loss"]).abs() * frame.loc[missing_risk, "quantity"]
+    missing_reward = frame["reward"] <= 0
+    frame.loc[missing_reward, "reward"] = (frame.loc[missing_reward, "target"] - frame.loc[missing_reward, "entry"]).abs() * frame.loc[missing_reward, "quantity"]
+    valid_risk = frame["risk"] > 0
+    frame.loc[valid_risk, "rr"] = frame.loc[valid_risk, "reward"] / frame.loc[valid_risk, "risk"]
+    if "symbol" not in frame.columns:
+        frame["symbol"] = "UNKNOWN"
+    frame["symbol"] = frame["symbol"].fillna("UNKNOWN").astype(str)
+    if "signal" not in frame.columns:
+        frame["signal"] = "UNKNOWN"
+    frame["signal"] = frame["signal"].fillna("UNKNOWN").astype(str).str.upper()
+    frame["Result"] = frame["pnl"].apply(lambda value: "Win" if value > 0 else "Loss" if value < 0 else "Flat")
+    return frame
 
-    missing_risk = closed["risk"] <= 0
-    closed.loc[missing_risk, "risk"] = (
-        (closed.loc[missing_risk, "entry"] - closed.loc[missing_risk, "stop_loss"]).abs()
-        * closed.loc[missing_risk, "quantity"]
-    )
-    missing_reward = closed["reward"] <= 0
-    closed.loc[missing_reward, "reward"] = (
-        (closed.loc[missing_reward, "target"] - closed.loc[missing_reward, "entry"]).abs()
-        * closed.loc[missing_reward, "quantity"]
-    )
-    valid_risk = closed["risk"] > 0
-    closed.loc[valid_risk, "rr"] = closed.loc[valid_risk, "reward"] / closed.loc[valid_risk, "risk"]
 
-    if "symbol" not in closed.columns:
-        closed["symbol"] = "UNKNOWN"
-    closed["symbol"] = closed["symbol"].fillna("UNKNOWN").astype(str)
-    if "signal" not in closed.columns:
-        closed["signal"] = "UNKNOWN"
-    closed["signal"] = closed["signal"].fillna("UNKNOWN").astype(str).str.upper()
+actual = prepare_trade_frame(actual)
+missed_closed = prepare_trade_frame(missed_closed)
 
-    total = len(closed)
-    wins = int((closed["pnl"] > 0).sum())
-    losses = int((closed["pnl"] < 0).sum())
-    flat = int((closed["pnl"] == 0).sum())
-    pnl = float(closed["pnl"].sum())
+# ------------------------- ACTUAL TRADES -------------------------
+st.header("1. Actual Trades Taken")
+if not actual.empty:
+    total = len(actual)
+    wins = int((actual["pnl"] > 0).sum())
+    losses = int((actual["pnl"] < 0).sum())
+    flat = int((actual["pnl"] == 0).sum())
+    pnl = float(actual["pnl"].sum())
     win_rate = wins / total * 100.0 if total else 0.0
-    gross_profit = float(closed.loc[closed["pnl"] > 0, "pnl"].sum())
-    gross_loss = abs(float(closed.loc[closed["pnl"] < 0, "pnl"].sum()))
+    gross_profit = float(actual.loc[actual["pnl"] > 0, "pnl"].sum())
+    gross_loss = abs(float(actual.loc[actual["pnl"] < 0, "pnl"].sum()))
     profit_factor = gross_profit / gross_loss if gross_loss else 0.0
     open_count = len(state.get("open_positions", {}) or {})
-
     a, b, c, d, e, f = st.columns(6)
     a.metric("Closed Trades", total)
     b.metric("Wins", wins)
@@ -91,25 +104,14 @@ if not closed.empty:
     f.metric("Open Positions", open_count)
     st.metric("Realized P&L", f"₹{pnl:,.2f}")
 
-    st.subheader("1. Win vs Loss")
+    st.subheader("Actual Trade Win/Loss")
     st.bar_chart(pd.DataFrame({"Trades": [wins, losses, flat]}, index=["Win", "Loss", "Flat"]), use_container_width=True)
 
-    st.subheader("2. Stock-wise Win/Loss")
-    stock_result = closed.assign(Result=closed["pnl"].apply(lambda value: "Win" if value > 0 else "Loss" if value < 0 else "Flat"))
-    stock_wl = pd.crosstab(stock_result["symbol"], stock_result["Result"])
-    for column in ["Win", "Loss", "Flat"]:
-        if column not in stock_wl.columns:
-            stock_wl[column] = 0
-    st.bar_chart(stock_wl[["Win", "Loss", "Flat"]], use_container_width=True)
+    st.subheader("Actual P&L")
+    st.bar_chart(actual.groupby("symbol")["pnl"].sum().sort_values(ascending=False), use_container_width=True)
 
-    st.subheader("3. P&L by Stock")
-    st.bar_chart(closed.groupby("symbol")["pnl"].sum().sort_values(ascending=False), use_container_width=True)
-
-    st.subheader("4. Trades by Stock")
-    st.bar_chart(closed["symbol"].value_counts().sort_values(ascending=False), use_container_width=True)
-
-    st.subheader("5. Cumulative P&L")
-    pnl_series = closed.copy()
+    st.subheader("Actual Cumulative P&L")
+    pnl_series = actual.copy()
     time_col = next((column for column in ["exit_time", "entry_time"] if column in pnl_series.columns), None)
     if time_col:
         pnl_series["_time"] = pd.to_datetime(pnl_series[time_col], errors="coerce")
@@ -118,43 +120,59 @@ if not closed.empty:
     pnl_series.index = range(1, len(pnl_series) + 1)
     st.line_chart(pnl_series["pnl"].cumsum(), use_container_width=True)
 
-    st.subheader("6. Risk / Reward")
-    rr_plot = pnl_series[["risk", "reward"]].copy()
-    rr_plot.index = [f"Trade {index}" for index in range(1, len(rr_plot) + 1)]
-    st.line_chart(rr_plot, use_container_width=True)
-    valid_rr = pnl_series["rr"].replace([float("inf"), -float("inf")], pd.NA).dropna()
-    avg_rr = float(valid_rr.mean()) if not valid_rr.empty else 0.0
-    st.caption(f"Average recorded R:R: {avg_rr:.2f}. Strategy minimum: 1:1.5.")
-
-    st.subheader("7. Exit Reason")
-    if "exit_reason" in closed.columns:
-        st.bar_chart(closed["exit_reason"].fillna("UNKNOWN").astype(str).value_counts(), use_container_width=True)
-
-    st.subheader("8. BUY vs SELL")
-    side_counts = pd.crosstab(stock_result["signal"], stock_result["Result"])
-    for column in ["Win", "Loss", "Flat"]:
-        if column not in side_counts.columns:
-            side_counts[column] = 0
-    st.bar_chart(side_counts[["Win", "Loss", "Flat"]], use_container_width=True)
-
-    st.subheader("9. Sector Performance")
-    sector_col = "sector" if "sector" in closed.columns else "industry" if "industry" in closed.columns else None
-    if sector_col:
-        st.bar_chart(closed.groupby(sector_col)["pnl"].sum().sort_values(ascending=False), use_container_width=True)
-
-    st.subheader("10. Setup Quality")
-    quality_cols = [column for column in [
-        "symbol", "signal", "pnl", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr",
-        "pdc", "today_open", "today_low", "today_high", "nifty100_direction", "sector", "sector_direction",
-        "stock_today_direction", "previous_day_direction", "setup_type", "entry_candle_open", "entry_candle_close",
-        "exit_reason", "status",
-    ] if column in closed.columns]
-    st.dataframe(closed[quality_cols].iloc[::-1], use_container_width=True, hide_index=True)
+    st.subheader("Actual Trade Details")
+    preferred = ["symbol", "signal", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr", "pnl", "exit_reason", "entry_time", "exit_time", "status"]
+    columns = [column for column in preferred if column in actual.columns]
+    st.dataframe(actual[columns].iloc[::-1], use_container_width=True, hide_index=True)
 else:
-    st.info("No closed trades are available for analysis yet.")
+    st.info("No closed actual trades are available yet.")
+
+# ------------------- MISSED DUE TO CAPITAL ----------------------
+st.header("2. Qualified Trades Missed Due to Capital")
+if not missed.empty:
+    open_missed = missed[missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN"].copy()
+    closed_missed = missed_closed.copy()
+    resolved = len(closed_missed)
+    mwins = int((closed_missed["pnl"] > 0).sum()) if not closed_missed.empty else 0
+    mlosses = int((closed_missed["pnl"] < 0).sum()) if not closed_missed.empty else 0
+    mflat = int((closed_missed["pnl"] == 0).sum()) if not closed_missed.empty else 0
+    hypothetical_pnl = float(closed_missed["pnl"].sum()) if not closed_missed.empty else 0.0
+    mwin_rate = mwins / resolved * 100.0 if resolved else 0.0
+
+    a, b, c, d, e = st.columns(5)
+    a.metric("Missed Due to Capital", len(missed))
+    b.metric("Resolved", resolved)
+    c.metric("Hypothetical Wins", mwins)
+    d.metric("Hypothetical Losses", mlosses)
+    e.metric("Hypothetical Win Rate", f"{mwin_rate:.1f}%")
+    st.metric("Hypothetical P&L", f"₹{hypothetical_pnl:,.2f}")
+    st.caption(f"Currently being tracked: {len(open_missed)} capital-blocked opportunities still open.")
+
+    if resolved:
+        st.subheader("Missed Trade Win/Loss")
+        st.bar_chart(pd.DataFrame({"Trades": [mwins, mlosses, mflat]}, index=["Win", "Loss", "Flat"]), use_container_width=True)
+
+        st.subheader("Missed Trade Cumulative Hypothetical P&L")
+        mp = closed_missed.copy()
+        time_col = next((column for column in ["exit_time", "entry_time"] if column in mp.columns), None)
+        if time_col:
+            mp["_time"] = pd.to_datetime(mp[time_col], errors="coerce")
+            if mp["_time"].notna().any():
+                mp = mp.sort_values("_time", na_position="last")
+        mp.index = range(1, len(mp) + 1)
+        st.line_chart(mp["pnl"].cumsum(), use_container_width=True)
+
+    st.subheader("Capital-Missed Trade Details")
+    preferred = ["symbol", "signal", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr", "pnl", "exit_reason", "entry_time", "exit_time", "status"]
+    columns = [column for column in preferred if column in missed.columns]
+    st.dataframe(missed[columns].iloc[::-1], use_container_width=True, hide_index=True)
+else:
+    st.info("No qualified trades have been missed because of insufficient capital yet.")
 
 st.divider()
-st.header("📡 Scanner Signal Analysis")
+
+# --------------------- SCANNER SIGNAL ANALYSIS -------------------
+st.header("3. Scanner Signal Analysis")
 if signals.empty:
     st.info("No scanner signals have been recorded yet.")
 else:
