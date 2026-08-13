@@ -57,7 +57,11 @@ class TradeJournal:
                 for column in missing:
                     df[column] = ""
                 df = df.reindex(columns=columns)
+                if path == self.signal_file:
+                    df = self._deduplicate_signal_history(df)
                 df.to_csv(path, index=False)
+                if path == self.signal_file:
+                    sync(path, path.replace(os.sep, "/"), "Clean duplicate scanner signals")
             except (FileNotFoundError, pd.errors.EmptyDataError):
                 with open(path, "w", newline="", encoding="utf-8") as file:
                     csv.DictWriter(file, fieldnames=columns).writeheader()
@@ -97,8 +101,33 @@ class TradeJournal:
         except Exception:
             return ""
 
+    def _daily_setup_key(self, signal):
+        """One scanner setup per stock/direction/setup per trading day."""
+        return (
+            self._signal_date(signal),
+            self._normalise_signal_value(signal.get("symbol", "")),
+            self._normalise_signal_value(signal.get("signal", "")),
+            self._normalise_signal_value(signal.get("setup_type", "")),
+        )
+
+    def _deduplicate_signal_history(self, df):
+        """Remove legacy/restarted-worker duplicate signals while keeping the first record.
+
+        A 30-second scan must never create a second copy of the same stock/direction/setup
+        on the same trading day. Different symbols, opposite directions, or different
+        strategy setup types remain separate records.
+        """
+        if df.empty:
+            return df
+        keys = df.apply(self._daily_setup_key, axis=1)
+        duplicate_mask = keys.duplicated(keep="first")
+        removed = int(duplicate_mask.sum())
+        if removed:
+            print("REMOVED DUPLICATE SCANNER SIGNALS:", removed)
+        return df.loc[~duplicate_mask].reset_index(drop=True)
+
     def signal_key(self, signal):
-        """Identify one setup within one trading day and market context."""
+        """Identify one exact setup within one trading day and market context."""
         fields = (
             "symbol", "signal", "entry", "stop_loss", "target", "quantity",
             "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
@@ -108,22 +137,20 @@ class TradeJournal:
         return (self._signal_date(signal),) + values
 
     def signal_exists(self, signal):
-        """Check persistent signal history so 30-second scans/restarts cannot duplicate a setup."""
+        """Check persistent history so repeated scans/restarts cannot duplicate a setup."""
         try:
             df = pd.read_csv(self.signal_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             return False
         if df.empty:
             return False
-        key = self.signal_key(signal)
-        for column in [
-            "symbol", "signal", "entry", "stop_loss", "target", "quantity",
-            "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
-            "gap_direction", "nifty100_direction", "previous_day_direction", "timestamp",
-        ]:
-            if column not in df.columns:
-                df[column] = ""
-        return any(self.signal_key(row.to_dict()) == key for _, row in df.iterrows())
+        # Strong daily setup guard: even if live candle fields change between scans,
+        # the same stock/direction/setup is recorded only once per trading day.
+        daily_key = self._daily_setup_key(signal)
+        existing_keys = {self._daily_setup_key(row.to_dict()) for _, row in df.iterrows()}
+        if daily_key in existing_keys:
+            return True
+        return False
 
     def trade_exists(self, trade_id):
         if not trade_id:
