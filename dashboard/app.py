@@ -25,7 +25,6 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 st.set_page_config(page_title="NSE Catalyst | Live", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=5000, limit=None, key="nse_live_refresh")
 
-# Minimal visual system: the live page is an operations screen, not a research page.
 st.markdown("""
 <style>
 .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
@@ -158,7 +157,6 @@ open_positions = state.get("open_positions", {}) or {}
 trades = read_csv(TRADES_FILE)
 signals = read_csv(SIGNALS_FILE)
 
-# ------------------------------- SIDEBAR -------------------------------
 st.sidebar.markdown("## NSE Catalyst")
 st.sidebar.caption("Live paper-trading operations")
 st.sidebar.divider()
@@ -170,7 +168,6 @@ st.sidebar.divider()
 st.sidebar.page_link("pages/analysis.py", label="📊 Strategy Analysis")
 st.sidebar.caption(f"Auto refresh: 5 seconds • {now.strftime('%H:%M:%S IST')}")
 
-# ------------------------------- HEADER --------------------------------
 st.markdown('<div class="live-title">📈 NSE Catalyst Trading Bot</div>', unsafe_allow_html=True)
 st.markdown(f'<div class="live-subtitle">NIFTY 100 • Gap-Failure + Open-Reclaim • Paper Trading • {TRADING_START}–{LAST_ENTRY_TIME} IST • Square-off {SQUARE_OFF_TIME} IST</div>', unsafe_allow_html=True)
 
@@ -187,7 +184,6 @@ elif worker_alive:
 else:
     st.warning("🟠 WORKER NOT CONFIRMED ALIVE")
 
-# ----------------------------- LIVE STATUS -----------------------------
 st.markdown('<div class="section-title">Live Status</div>', unsafe_allow_html=True)
 a, b, c, d, e, f = st.columns(6)
 a.metric("India Time", now.strftime("%H:%M:%S"))
@@ -197,7 +193,6 @@ d.metric("Scanner", scanner_status)
 e.metric("Open Positions", len(open_positions))
 f.metric("Daily P&L", fmt_money(number(bot_status, "daily_pnl")))
 
-# ------------------------------ CAPITAL --------------------------------
 st.markdown('<div class="section-title">Capital & Risk</div>', unsafe_allow_html=True)
 a, b, c, d, e = st.columns(5)
 a.metric("Starting Capital", fmt_money(TOTAL_CAPITAL))
@@ -206,7 +201,6 @@ c.metric("Used", fmt_money(number(bot_status, "used_capital")))
 d.metric("Risk / Trade", f"₹{MIN_REQUIRED_RISK:,.0f}–₹{MAX_RISK_PER_TRADE:,.0f}")
 e.metric("R:R", f"1:{RISK_REWARD_RATIO:g}")
 
-# --------------------------- OPEN POSITIONS ----------------------------
 st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
 if open_positions:
     rows = []
@@ -231,7 +225,6 @@ if open_positions:
 else:
     st.info("No open paper positions.")
 
-# ---------------------------- TRADE SUMMARY ---------------------------
 closed = trades.copy()
 if not closed.empty and "status" in closed.columns:
     closed = closed[closed["status"].astype(str).str.upper() == "CLOSED"].copy()
@@ -240,7 +233,7 @@ if not closed.empty and "pnl" in closed.columns:
 wins = int((closed["pnl"] > 0).sum()) if not closed.empty else 0
 losses = int((closed["pnl"] < 0).sum()) if not closed.empty else 0
 
-st.markdown('<div class="section-title">Today's Trading</div>', unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Today's Trading</div>", unsafe_allow_html=True)
 a, b, c, d, e = st.columns(5)
 a.metric("Closed Trades", len(closed))
 b.metric("Wins", wins)
@@ -255,7 +248,6 @@ if not closed.empty:
 else:
     st.info("No closed trades recorded yet.")
 
-# ---------------------------- SCANNER ---------------------------------
 st.markdown('<div class="section-title">Scanner Activity</div>', unsafe_allow_html=True)
 a, b, c, d, e = st.columns(5)
 a.metric("Total Scans", int(number(bot_status, "scan_count")))
@@ -273,7 +265,6 @@ if not signals.empty:
 else:
     st.info("No scanner signals recorded yet.")
 
-# --------------------------- DIAGNOSTICS ------------------------------
 with st.expander("System Diagnostics", expanded=False):
     a, b, c, d = st.columns(4)
     a.write(f"**Last bot cycle:** {fmt_time(bot_status.get('last_cycle'))}")
