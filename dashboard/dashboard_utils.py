@@ -1,164 +1,107 @@
-"""
-Dashboard Utility Functions
-"""
+"""Dashboard utility functions for the paper-trading journal."""
 
-import pandas as pd
 import os
 
+import pandas as pd
 
-# ============================================================
-# LOAD CSV
-# ============================================================
 
 def load_csv(path):
-
     if not os.path.exists(path):
         return pd.DataFrame()
-
     try:
-
         return pd.read_csv(path)
-
     except Exception:
-
         return pd.DataFrame()
 
 
-# ============================================================
-# FORMAT RUPEE
-# ============================================================
-
 def format_money(value):
-
     try:
-
-        return f"₹{value:,.2f}"
-
+        return f"₹{float(value):,.2f}"
     except Exception:
-
         return "₹0.00"
 
 
-# ============================================================
-# FORMAT PERCENTAGE
-# ============================================================
-
 def format_percent(value):
-
     try:
-
-        return f"{value:.2f}%"
-
+        return f"{float(value):.2f}%"
     except Exception:
-
         return "0.00%"
 
 
-# ============================================================
-# GREEN / RED COLOR
-# ============================================================
-
 def pnl_color(value):
-
+    try:
+        value = float(value)
+    except Exception:
+        value = 0.0
     if value > 0:
         return "green"
-
-    elif value < 0:
+    if value < 0:
         return "red"
-
     return "white"
 
 
-# ============================================================
-# OPEN POSITIONS
-# ============================================================
-
 def open_positions(trades):
-
-    if trades.empty:
+    if trades is None or trades.empty or "status" not in trades.columns:
         return pd.DataFrame()
+    return trades[trades["status"].astype(str).str.upper() == "OPEN"].copy()
 
-    if "status" not in trades.columns:
-        return pd.DataFrame()
-
-    return trades[
-        trades["status"] == "OPEN"
-    ]
-
-
-# ============================================================
-# CLOSED POSITIONS
-# ============================================================
 
 def closed_positions(trades):
-
-    if trades.empty:
+    if trades is None or trades.empty or "status" not in trades.columns:
         return pd.DataFrame()
+    return trades[trades["status"].astype(str).str.upper() == "CLOSED"].copy()
 
-    if "status" not in trades.columns:
-        return pd.DataFrame()
-
-    return trades[
-        trades["status"] == "CLOSED"
-    ]
-
-
-# ============================================================
-# WINNING TRADES
-# ============================================================
 
 def winning_trades(trades):
-
-    if trades.empty:
+    if trades is None or trades.empty or "pnl" not in trades.columns:
         return pd.DataFrame()
+    frame = trades.copy()
+    if "status" in frame.columns:
+        frame = frame[frame["status"].astype(str).str.upper() == "CLOSED"]
+    frame["pnl"] = pd.to_numeric(frame["pnl"], errors="coerce")
+    return frame[frame["pnl"] > 0].copy()
 
-    return trades[
-        trades["pnl"] > 0
-    ]
-
-
-# ============================================================
-# LOSING TRADES
-# ============================================================
 
 def losing_trades(trades):
-
-    if trades.empty:
+    if trades is None or trades.empty or "pnl" not in trades.columns:
         return pd.DataFrame()
+    frame = trades.copy()
+    if "status" in frame.columns:
+        frame = frame[frame["status"].astype(str).str.upper() == "CLOSED"]
+    frame["pnl"] = pd.to_numeric(frame["pnl"], errors="coerce")
+    return frame[frame["pnl"] < 0].copy()
 
-    return trades[
-        trades["pnl"] < 0
-    ]
-
-
-# ============================================================
-# LAST N TRADES
-# ============================================================
 
 def last_trades(trades, n=10):
-
-    if trades.empty:
+    if trades is None or trades.empty:
         return pd.DataFrame()
+    return trades.tail(max(0, int(n))).copy()
 
-    return trades.tail(n)
 
-
-# ============================================================
-# TODAY'S PNL
-# ============================================================
-
-def todays_pnl(trades):
-
-    if trades.empty:
+def todays_pnl(trades, date=None):
+    """Return realized P&L for one IST calendar date; default is today."""
+    if trades is None or trades.empty or "pnl" not in trades.columns:
         return 0.0
 
-    return float(
-        trades["pnl"].sum()
-    )
+    frame = trades.copy()
+    if "status" in frame.columns:
+        frame = frame[frame["status"].astype(str).str.upper() == "CLOSED"].copy()
+    if frame.empty:
+        return 0.0
 
+    time_col = "exit_time" if "exit_time" in frame.columns else "entry_time" if "entry_time" in frame.columns else None
+    if time_col is None:
+        return 0.0
 
-# ============================================================
-# AUTO REFRESH
-# ============================================================
+    timestamps = pd.to_datetime(frame[time_col], errors="coerce")
+    if timestamps.dt.tz is None:
+        dates = timestamps.dt.date
+    else:
+        dates = timestamps.dt.tz_convert("Asia/Kolkata").dt.date
+
+    target_date = pd.Timestamp(date).date() if date is not None else pd.Timestamp.now(tz="Asia/Kolkata").date()
+    pnl = pd.to_numeric(frame.loc[dates == target_date, "pnl"], errors="coerce").fillna(0.0)
+    return float(pnl.sum())
+
 
 REFRESH_SECONDS = 5
