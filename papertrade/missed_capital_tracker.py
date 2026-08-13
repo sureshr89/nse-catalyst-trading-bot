@@ -1,11 +1,10 @@
-"""Track strategy-qualified paper trades that were missed only because of capital."""
+"""Track strategy-qualified trades missed only because of capital."""
 
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
-from config.settings import TRADE_LOG_FILE
+from config.settings import SQUARE_OFF_TIME
 
 
 class MissedCapitalTracker:
@@ -21,6 +20,18 @@ class MissedCapitalTracker:
             number = float(value)
             return number if number == number else None
         except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _hhmm(value):
+        if value is None:
+            return None
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return None
+            return parsed.strftime("%H:%M")
+        except Exception:
             return None
 
     def record(self, signal, risk_result, reason):
@@ -61,11 +72,10 @@ class MissedCapitalTracker:
             "status": "MISSED_CAPITAL_OPEN",
             "exit_time": None,
             "exit_price": None,
-            "exit_reason": None,
+            "exit_reason": f"MISSED_CAPITAL: {reason}",
             "pnl": None,
             "setup_type": signal.get("setup_type", ""),
         })
-        row["exit_reason"] = f"MISSED_CAPITAL: {reason}"
         self.journal.upsert_trade(row)
 
     def _open_rows(self):
@@ -109,6 +119,7 @@ class MissedCapitalTracker:
             side = str(trade.get("signal", "")).upper()
             reason = None
             exit_price = None
+            candle_time = candle.get("Datetime", datetime.now().astimezone().isoformat())
             if side == "BUY":
                 if low <= stop:
                     reason, exit_price = "MISSED_CAPITAL_STOP_LOSS", stop
@@ -119,15 +130,22 @@ class MissedCapitalTracker:
                     reason, exit_price = "MISSED_CAPITAL_STOP_LOSS", stop
                 elif low <= target:
                     reason, exit_price = "MISSED_CAPITAL_TARGET", target
+
+            # If neither level was hit, the missed opportunity is closed at the
+            # same mandatory 15:00 square-off used by the real paper position.
+            if reason is None and self._hhmm(candle_time) and self._hhmm(candle_time) >= SQUARE_OFF_TIME:
+                reason, exit_price = "MISSED_CAPITAL_SQUARE_OFF", close
             if reason is None:
                 continue
+
             pnl = (exit_price - entry) * quantity if side == "BUY" else (entry - exit_price) * quantity
             updated = trade.to_dict()
             updated.update({
                 "status": "MISSED_CAPITAL_CLOSED",
-                "exit_time": candle.get("Datetime", datetime.now().astimezone().isoformat()),
+                "exit_time": candle_time,
                 "exit_price": round(exit_price, 4),
                 "exit_reason": reason,
                 "pnl": round(pnl, 2),
             })
             self.journal.upsert_trade(updated)
+            print("MISSED CAPITAL CLOSED:", symbol, reason, "P&L=", round(pnl, 2))
