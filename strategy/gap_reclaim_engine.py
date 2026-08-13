@@ -21,21 +21,14 @@ class GapReclaimEngine:
         h, m = map(int, str(value).split(":"))
         return time(h, m)
 
-    @staticmethod
-    def _to_ist(value):
-        ts = pd.Timestamp(value)
-        if ts.tzinfo is None:
-            return ts.tz_localize(INDIA_TZ)
-        return ts.tz_convert(INDIA_TZ)
-
     @classmethod
     def _clean(cls, df):
         if df is None or df.empty:
             return pd.DataFrame()
         data = df.copy()
-        for c in ["Datetime", "Open", "High", "Low", "Close"]:
-            if c not in data.columns:
-                return pd.DataFrame()
+        required = ["Datetime", "Open", "High", "Low", "Close"]
+        if any(c not in data.columns for c in required):
+            return pd.DataFrame()
         data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
         try:
             if getattr(data["Datetime"].dt, "tz", None) is None:
@@ -47,14 +40,14 @@ class GapReclaimEngine:
         for c in ["Open", "High", "Low", "Close"]:
             data[c] = pd.to_numeric(data[c], errors="coerce")
         return (
-            data.dropna(subset=["Datetime", "Open", "High", "Low", "Close"])
+            data.dropna(subset=required)
             .sort_values("Datetime")
             .drop_duplicates("Datetime")
             .reset_index(drop=True)
         )
 
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first completed 1m candle reclaiming today's open after an earlier PDC failure."""
+        """Return the first completed candle whose body reclaims today's open after PDC failure."""
         data = self._clean(df)
         if len(data) < 2:
             return None
@@ -65,9 +58,6 @@ class GapReclaimEngine:
             return None
 
         pdc_breached = False
-        # A PDC failure may happen on the first completed candle. That candle
-        # establishes the failure; a later completed candle must reclaim the
-        # open, preventing the same candle from being both failure and entry.
         for i in range(1, len(completed)):
             prior = completed.iloc[i - 1]
             cur = completed.iloc[i]
@@ -85,12 +75,17 @@ class GapReclaimEngine:
             if not pdc_breached:
                 continue
 
-            prev_close = float(prior["Close"])
-            close = float(cur["Close"])
-            if side == "BUY" and prev_close <= today_open and close > today_open:
+            candle_open = float(cur["Open"])
+            candle_close = float(cur["Close"])
+
+            # BUY: entry candle must open below today's open and close above it.
+            if side == "BUY" and candle_open < today_open and candle_close > today_open:
                 return cur
-            if side == "SELL" and prev_close >= today_open and close < today_open:
+
+            # SELL: entry candle must open above today's open and close below it.
+            if side == "SELL" and candle_open > today_open and candle_close < today_open:
                 return cur
+
         return None
 
     def build(self, symbol, candles, pdc, previous_day_open, sector_direction, nifty_direction):
@@ -100,9 +95,11 @@ class GapReclaimEngine:
 
         pdc = float(pdc)
         previous_day_open = float(previous_day_open)
-        today_data = data[data["Datetime"].dt.date == data["Datetime"].dt.date.max()].copy()
+        latest_date = data["Datetime"].dt.date.max()
+        today_data = data[data["Datetime"].dt.date == latest_date].copy()
         if today_data.empty:
             return None
+
         today_open = float(today_data.iloc[0]["Open"])
         today_low = float(today_data["Low"].min())
         today_high = float(today_data["High"].max())
@@ -166,5 +163,6 @@ class GapReclaimEngine:
             "previous_day_aligned": bool(previous_aligned),
             "previous_day_direction": "BULLISH" if previous_aligned and side == "BUY" else "BEARISH" if previous_aligned and side == "SELL" else "NEUTRAL",
             "setup_type": "GAP_FAILURE_OPEN_RECLAIM",
+            "entry_candle_open": round(float(candle["Open"]), 2),
             "entry_candle_close": round(float(candle["Close"]), 2),
         }
