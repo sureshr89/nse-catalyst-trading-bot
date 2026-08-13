@@ -58,7 +58,7 @@ st.markdown("""
 TOTAL_CAPITAL=250000; MAX_RISK_PER_TRADE=1500; MIN_REQUIRED_RISK=1400; RISK_REWARD_RATIO=1.25
 MAX_OPEN_POSITIONS=2; PAPER_TRADING=True; LIVE_TRADING=False; TRADING_START="09:45"; LAST_ENTRY_TIME="14:00"; SQUARE_OFF_TIME="15:00"; SCAN_INTERVAL_SECONDS=30
 try:
-    spec=importlib.util.spec_from_file_location("nse_current_settings_final",SETTINGS_FILE)
+    spec=importlib.util.spec_from_file_location("nse_current_settings_final_v2",SETTINGS_FILE)
     if spec is None or spec.loader is None: raise ImportError("Could not load config/settings.py")
     settings=importlib.util.module_from_spec(spec); spec.loader.exec_module(settings)
     TOTAL_CAPITAL=int(settings.TOTAL_CAPITAL); MAX_RISK_PER_TRADE=float(settings.MAX_RISK_PER_TRADE); MIN_REQUIRED_RISK=float(settings.MIN_REQUIRED_RISK)
@@ -85,8 +85,7 @@ def dedupe_signals(df):
     for col in ["symbol","signal","setup_type"]:
         if col not in out.columns:out[col]=""
     out["_dedupe_key"]=dates+"|"+out["symbol"].astype(str).str.upper().str.strip()+"|"+out["signal"].astype(str).str.upper().str.strip()+"|"+out["setup_type"].astype(str).str.upper().str.strip()
-    out=out.drop_duplicates("_dedupe_key",keep="first").drop(columns=["_dedupe_key"])
-    return out
+    return out.drop_duplicates("_dedupe_key",keep="first").drop(columns=["_dedupe_key"])
 
 def number(data,key,default=0.0):
     try:return float(data.get(key,default) or default)
@@ -98,7 +97,7 @@ def fmt_time(value):return "—" if not value else str(value).replace("T"," ")[:
 @st.cache_resource(show_spinner=False)
 def load_worker():
     if not BOT_RUNNER_FILE.exists():raise FileNotFoundError(f"Missing worker file: {BOT_RUNNER_FILE}")
-    spec=importlib.util.spec_from_file_location("nse_paper_bot_runner_final",BOT_RUNNER_FILE)
+    spec=importlib.util.spec_from_file_location("nse_paper_bot_runner_final_v2",BOT_RUNNER_FILE)
     if spec is None or spec.loader is None:raise ImportError("Could not load bot_runner.py")
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     starter=getattr(module,"ensure_bot_running",None)
@@ -118,7 +117,6 @@ worker_alive=bool(bot_status.get("worker_alive",False)) if worker_module is not 
 status=str(bot_status.get("status","STARTING")).upper(); scanner_status=str(bot_status.get("scanner_status","IDLE")).upper()
 state=read_json(STATE_FILE); open_positions=state.get("open_positions",{}) or {}; trades=read_csv(TRADES_FILE); signals=dedupe_signals(read_csv(SIGNALS_FILE))
 
-# ----------------------------- NAVIGATION ------------------------------
 st.sidebar.markdown("### NSE CATALYST")
 st.sidebar.caption("LIVE PAPER-TRADING OPERATIONS")
 st.sidebar.divider()
@@ -158,7 +156,7 @@ if open_positions:
     rows=[]
     for symbol,p in open_positions.items():
         entry=float(p.get("entry",0) or 0); stop=float(p.get("stop_loss",0) or 0); qty=int(float(p.get("quantity",0) or 0))
-        rows.append({"Stock":symbol,"Side":str(p.get("signal","")).upper(),"Entry":entry,"SL":stop,"Target":float(p.get("target",0) or 0),"Qty":qty,"Risk":round(abs(entry-stop)*qty,2),"R:R":p.get("risk_reward",RISK_REWARD_RATIO),"Entry":fmt_time(p.get("entry_time"))})
+        rows.append({"Stock":symbol,"Side":str(p.get("signal","")).upper(),"Entry":entry,"SL":stop,"Target":float(p.get("target",0) or 0),"Qty":qty,"Risk":round(abs(entry-stop)*qty,2),"R:R":p.get("risk_reward",RISK_REWARD_RATIO),"Entry Time":fmt_time(p.get("entry_time"))})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 else:st.info("No open paper positions.")
 
@@ -166,14 +164,14 @@ closed=trades.copy()
 if not closed.empty and "status" in closed.columns:closed=closed[closed["status"].astype(str).str.upper()=="CLOSED"].copy()
 if not closed.empty and "pnl" in closed.columns:closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
 wins=int((closed["pnl"]>0).sum()) if not closed.empty else 0; losses=int((closed["pnl"]<0).sum()) if not closed.empty else 0
-st.markdown('<div class="section-title">TODAY'S TRADING</div>',unsafe_allow_html=True)
+st.markdown("<div class=\"section-title\">TODAY'S TRADING</div>",unsafe_allow_html=True)
 a,b,c=st.columns(3); a.metric("Closed Trades",len(closed)); b.metric("Wins / Losses",f"{wins} / {losses}"); c.metric("Win Rate",f"{wins/len(closed)*100:.1f}%" if len(closed) else "0.0%")
 if not closed.empty:
     cols=[c for c in ["trade_id","symbol","signal","entry_time","entry","exit_time","exit_price","exit_reason","quantity","pnl"] if c in closed.columns]; st.dataframe(closed[cols].iloc[::-1].head(12),use_container_width=True,hide_index=True)
 else:st.info("No closed trades recorded yet.")
 
 st.markdown('<div class="section-title">SCANNER ACTIVITY</div>',unsafe_allow_html=True)
-a,b,c=st.columns(3); a.metric("Total Scans",int(number(bot_status,"scan_count"))); b.metric("Last Signals",len(signals.tail(20)) if not signals.empty else 0); c.metric("Cycle Count",int(number(bot_status,"cycle_count")))
+a,b,c=st.columns(3); a.metric("Total Scans",int(number(bot_status,"scan_count"))); b.metric("Unique Signals",len(signals.tail(20)) if not signals.empty else 0); c.metric("Cycle Count",int(number(bot_status,"cycle_count")))
 a,b,c=st.columns(3); a.metric("Last Scan",fmt_time(bot_status.get("last_scan"))); b.metric("Scan Duration",f'{number(bot_status,"scan_duration_seconds"):.2f}s'); c.metric("Last Completed",fmt_time(bot_status.get("last_scan_completed")))
 if not signals.empty:
     display_cols=[c for c in ["timestamp","symbol","signal","entry","stop_loss","target","approved","reason"] if c in signals.columns]
