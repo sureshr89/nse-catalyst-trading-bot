@@ -18,10 +18,16 @@ try:
 except ImportError:
     fcntl = None
 
-from config.settings import (
-    PREMARKET_PREP_TIME, TRADING_START, LAST_ENTRY_TIME,
-    SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS,
-)
+# Import the settings module first, then read values defensively. This avoids
+# taking the entire worker down if a deployment has a temporarily stale module
+# cache while the source file already contains the setting.
+from config import settings as _settings
+
+PREMARKET_PREP_TIME = str(getattr(_settings, "PREMARKET_PREP_TIME", "09:25"))
+TRADING_START = str(getattr(_settings, "TRADING_START", "09:45"))
+LAST_ENTRY_TIME = str(getattr(_settings, "LAST_ENTRY_TIME", "14:00"))
+SQUARE_OFF_TIME = str(getattr(_settings, "SQUARE_OFF_TIME", "15:00"))
+SCAN_INTERVAL_SECONDS = int(getattr(_settings, "SCAN_INTERVAL_SECONDS", 30))
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parent
