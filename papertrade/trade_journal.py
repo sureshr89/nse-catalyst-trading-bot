@@ -11,8 +11,6 @@ from papertrade.persistent_storage import restore, sync
 
 
 class TradeJournal:
-    # Keep both the legacy names and the current strategy fields so old CSVs
-    # migrate safely while new trades retain the complete setup context.
     TRADE_COLUMNS = [
         "trade_id", "symbol", "stock", "industry", "sector", "signal", "buy_sell",
         "entry_time", "entry", "stop_loss", "target", "quantity",
@@ -21,7 +19,7 @@ class TradeJournal:
         "breakout_level", "pdc", "today_open", "today_low", "today_high",
         "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
         "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
-        "setup_type", "entry_candle_close", "status",
+        "setup_type", "entry_candle_open", "entry_candle_close", "status",
     ]
 
     SIGNAL_COLUMNS = [
@@ -29,9 +27,12 @@ class TradeJournal:
         "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
         "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
         "breakout_level", "pdc", "today_open", "today_low", "today_high",
-        "entry", "stop_loss", "target", "quantity", "risk_reward", "setup_type",
-        "entry_candle_close", "approved", "reason",
+        "entry", "stop_loss", "target", "quantity", "risk_reward", "risk_per_share",
+        "actual_risk", "position_value", "setup_type", "entry_candle_open", "entry_candle_close",
+        "approved", "reason",
     ]
+
+    EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status"}
 
     def __init__(self, trade_file=TRADE_LOG_FILE, signal_file=SIGNAL_LOG_FILE):
         self.trade_file = trade_file
@@ -56,17 +57,10 @@ class TradeJournal:
             try:
                 df = pd.read_csv(path)
                 missing = [column for column in columns if column not in df.columns]
-                if missing:
-                    for column in missing:
-                        df[column] = ""
-                    df = df.reindex(columns=columns)
-                    df.to_csv(path, index=False)
-                else:
-                    # Also normalize column order after older journal versions.
-                    extra = [c for c in df.columns if c not in columns]
-                    if extra or list(df.columns) != columns:
-                        df = df.reindex(columns=columns)
-                        df.to_csv(path, index=False)
+                for column in missing:
+                    df[column] = ""
+                df = df.reindex(columns=columns)
+                df.to_csv(path, index=False)
             except (FileNotFoundError, pd.errors.EmptyDataError):
                 with open(path, "w", newline="", encoding="utf-8") as file:
                     csv.DictWriter(file, fieldnames=columns).writeheader()
@@ -99,14 +93,17 @@ class TradeJournal:
         trade_id = str(trade.get("trade_id", "")).strip()
         if not trade_id:
             return {"saved": False, "reason": "Missing trade_id"}
+
         row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}
         try:
             df = pd.read_csv(self.trade_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             df = pd.DataFrame(columns=self.TRADE_COLUMNS)
+
         for column in self.TRADE_COLUMNS:
             if column not in df.columns:
                 df[column] = ""
+
         mask = (
             df["trade_id"].astype(str).str.strip() == trade_id
             if not df.empty else pd.Series(dtype=bool)
@@ -114,11 +111,14 @@ class TradeJournal:
         if not df.empty and bool(mask.any()):
             idx = df.index[mask][0]
             for column in self.TRADE_COLUMNS:
-                # Do not erase exit data during an OPEN refresh.
-                if row[column] != "" or column not in {"exit_time", "exit_price", "exit_reason", "pnl"}:
-                    df.at[idx, column] = row[column]
+                new_value = row[column]
+                # Never erase already-recorded strategy context when a later
+                # OPEN/CLOSED update contains only execution fields.
+                if new_value != "" or column in self.EXIT_FIELDS:
+                    df.at[idx, column] = new_value
         else:
             df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
         df = df.reindex(columns=self.TRADE_COLUMNS)
         df.to_csv(self.trade_file, index=False)
         sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")
@@ -167,8 +167,6 @@ class TradeJournal:
                 "total_pnl": 0.0, "average_pnl": 0.0,
             }
 
-        # Journal summary means completed trades. Open entries must not count
-        # as wins/losses or distort the win rate.
         if "status" in df.columns:
             closed = df[df["status"].astype(str).str.upper() == "CLOSED"].copy()
         else:
