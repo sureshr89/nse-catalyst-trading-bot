@@ -13,7 +13,7 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 class GapReclaimEngine:
     """Build BUY/SELL signals from PDC, today's OHLC and alignment."""
 
-    def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.5):
+    def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
         self.end = self._time(last_entry_time)
         self.rr = float(rr)
@@ -75,8 +75,6 @@ class GapReclaimEngine:
         for i in range(len(completed)):
             cur = completed.iloc[i]
 
-            # A PDC failure must be established before the reclaim candle.
-            # The same candle is not used as both failure and confirmation.
             if i == 0:
                 if side == "BUY" and float(cur["Low"]) < pdc:
                     pdc_breached = True
@@ -135,10 +133,7 @@ class GapReclaimEngine:
         today_high = float(today_data["High"].max())
         previous_day_green = pdc > previous_day_open
         previous_day_red = pdc < previous_day_open
-        previous_day_direction = (
-            "BULLISH" if previous_day_green else
-            "BEARISH" if previous_day_red else "NEUTRAL"
-        )
+        previous_day_direction = "BULLISH" if previous_day_green else "BEARISH" if previous_day_red else "NEUTRAL"
         stock_today_direction = self._direction(today_data)
 
         if ENABLE_LONG and previous_day_green and today_open > pdc:
@@ -149,13 +144,7 @@ class GapReclaimEngine:
                     stop = today_low
                     risk = entry - stop
                     if risk > 0:
-                        return self._trade(
-                            "BUY", symbol, entry_candle, entry, stop,
-                            entry + risk * self.rr, pdc, today_open,
-                            today_low, today_high, sector_direction,
-                            nifty_direction, previous_day_direction,
-                            stock_today_direction,
-                        )
+                        return self._trade("BUY", symbol, entry_candle, entry, stop, entry + risk * self.rr, pdc, today_open, today_low, today_high, sector_direction, nifty_direction, previous_day_direction, stock_today_direction)
 
         if ENABLE_SHORT and previous_day_red and today_open < pdc:
             if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
@@ -165,18 +154,10 @@ class GapReclaimEngine:
                     stop = today_high
                     risk = stop - entry
                     if risk > 0:
-                        return self._trade(
-                            "SELL", symbol, entry_candle, entry, stop,
-                            entry - risk * self.rr, pdc, today_open,
-                            today_low, today_high, sector_direction,
-                            nifty_direction, previous_day_direction,
-                            stock_today_direction,
-                        )
+                        return self._trade("SELL", symbol, entry_candle, entry, stop, entry - risk * self.rr, pdc, today_open, today_low, today_high, sector_direction, nifty_direction, previous_day_direction, stock_today_direction)
         return None
 
-    def _trade(self, side, symbol, candle, entry, stop, target, pdc,
-               today_open, today_low, today_high, sector_direction,
-               nifty_direction, previous_day_direction, stock_today_direction):
+    def _trade(self, side, symbol, candle, entry, stop, target, pdc, today_open, today_low, today_high, sector_direction, nifty_direction, previous_day_direction, stock_today_direction):
         return {
             "symbol": symbol,
             "signal": side,
