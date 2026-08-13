@@ -21,6 +21,7 @@ from strategy.risk_engine import RiskEngine
 from market.price_data import PriceData
 from papertrade.paper_trade_engine import PaperTradeEngine
 from papertrade.trade_journal import TradeJournal
+from papertrade.missed_capital_tracker import MissedCapitalTracker
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -38,6 +39,7 @@ class TradingBot:
         self.price_data = PriceData()
         self.paper_engine = PaperTradeEngine()
         self.journal = TradeJournal()
+        self.missed_capital = MissedCapitalTracker(self.journal, self.price_data)
         self.running = True
         self.processed_signals = set()
         self.daily_pnl = self._restore_daily_pnl()
@@ -183,13 +185,17 @@ class TradingBot:
         approved_trade["approved"] = True
         open_result = self.paper_engine.open_trade(approved_trade)
         if not open_result.get("opened", False):
+            reason = str(open_result.get("reason", ""))
+            if reason == "Insufficient available capital":
+                self.missed_capital.record(signal, risk_result, reason)
+                print("QUALIFIED BUT MISSED (CAPITAL):", symbol, "position_value=", risk_result.get("position_value"))
             try:
                 count = self.risk_engine.get_trade_count(symbol)
                 if count > 0:
                     self.risk_engine.trade_counts[symbol] = count - 1
             except Exception:
                 pass
-            print("Paper trade not opened:", symbol, open_result.get("reason", ""))
+            self.processed_signals.add(key)
             return
 
         self.processed_signals.add(key)
@@ -245,7 +251,6 @@ class TradingBot:
             print(symbol, "today filter warning:", error)
         if df is None or df.empty:
             return None
-
         frame = df.copy()
         try:
             if "Datetime" in frame.columns:
@@ -324,14 +329,19 @@ class TradingBot:
     def display_status(self):
         session = self.paper_engine.summary()
         history = self.journal.summary()
+        missed = self.journal.get_trades()
+        missed_open = int((missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN").sum()) if not missed.empty and "status" in missed.columns else 0
+        missed_closed = int((missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_CLOSED").sum()) if not missed.empty and "status" in missed.columns else 0
         print(
             "STATUS", self.current_time(), "open=", session.get("open_positions", 0),
             "session_pnl=", session.get("total_pnl", 0), "daily_pnl=", round(self.daily_pnl, 2),
             "journal_trades=", history.get("total_trades", 0), "journal_pnl=", history.get("total_pnl", 0),
+            "missed_capital_open=", missed_open, "missed_capital_closed=", missed_closed,
         )
 
     def run_cycle(self):
         now = self.current_time()
+        self.missed_capital.monitor()
         if now >= SQUARE_OFF_TIME:
             if not self.square_off_done:
                 self.force_square_off()
@@ -348,6 +358,7 @@ class TradingBot:
         print("NSE CATALYST — NIFTY 100 GAP-FAILURE + OPEN-RECLAIM PAPER BOT")
         print("Strategy: pure price action | Paper: ON | Live: OFF")
         print(f"Entry: {TRADING_START}-{LAST_ENTRY_TIME} IST | Square-off: {SQUARE_OFF_TIME} IST | Scan: {SCAN_INTERVAL_SECONDS}s")
+        print("Pre-09:45 candidates: liquidity + previous-day direction + today's opening gap")
         print("=" * 90)
         try:
             while self.running:
