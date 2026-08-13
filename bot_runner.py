@@ -2,7 +2,7 @@
 
 The dashboard is only the UI. This module owns one background paper worker,
 keeps all worker time decisions in Asia/Kolkata, publishes diagnostic status,
-and guarantees that the TradingBot gets a square-off cycle at 15:00 IST.
+and prepares the day's PDC/gap candidates before the 09:45 entry window.
 """
 
 import json
@@ -15,10 +15,13 @@ from zoneinfo import ZoneInfo
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover
+except ImportError:
     fcntl = None
 
-from config.settings import TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS
+from config.settings import (
+    PREMARKET_PREP_TIME, TRADING_START, LAST_ENTRY_TIME,
+    SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS,
+)
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -39,7 +42,8 @@ _state = {
     "error": None, "worker_alive": False, "heartbeat": None,
     "cycle_count": 0, "scan_count": 0, "worker_id": None,
     "trading_start": TRADING_START, "last_entry_time": LAST_ENTRY_TIME,
-    "square_off_time": SQUARE_OFF_TIME, "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+    "premarket_prep_time": PREMARKET_PREP_TIME, "square_off_time": SQUARE_OFF_TIME,
+    "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
 }
 
 
@@ -83,7 +87,6 @@ def _release_file_lock(handle):
 
 
 def _write_status(bot=None, **updates):
-    """Publish diagnostic state without allowing a status collision to kill the worker."""
     global _state
     with _lock:
         _state.update(updates)
@@ -154,6 +157,24 @@ def _patch_bot_for_ist(bot):
     bot.cooldown_active = types.MethodType(_ist_cooldown_active, bot)
 
 
+def _prepare_pre_entry_candidates(bot):
+    """Prepare PDC, today's Open and persisted gap lists before 09:45."""
+    try:
+        _write_status(bot, status="PREPARING", message="Preparing PDC and today's Open / gap candidates before entry time.", scanner_status="PREPARING")
+        references = bot.scanner.prepare_reference_data()
+        candidates = bot.scanner.prepare_gap_candidates()
+        if references.empty or candidates.empty:
+            _write_status(bot, status="WAITING", message="Pre-entry candidate preparation incomplete; retrying before 09:45.", scanner_status="ERROR", error="PDC/today-open gap candidate coverage unavailable")
+            return False
+        up = int((candidates["GapDirection"].astype(str).str.upper() == "GAP_UP").sum())
+        down = int((candidates["GapDirection"].astype(str).str.upper() == "GAP_DOWN").sum())
+        _write_status(bot, status="WAITING", message=f"PDC and gap candidates ready: {len(candidates)} stocks ({up} gap-up / {down} gap-down). Waiting for {TRADING_START} IST.", scanner_status="IDLE", error=None)
+        return True
+    except Exception as error:
+        _write_status(bot, status="WAITING", message="Pre-entry candidate preparation failed; worker will retry.", scanner_status="ERROR", error=f"{type(error).__name__}: {error}")
+        return False
+
+
 def _run_one_trading_day():
     from main import TradingBot
 
@@ -165,7 +186,10 @@ def _run_one_trading_day():
     while True:
         current = _now().strftime("%H:%M")
         if current < TRADING_START:
-            _write_status(bot, status="WAITING", message=f"Waiting for trading start at {TRADING_START} IST.", scanner_status="IDLE")
+            if current >= PREMARKET_PREP_TIME:
+                _prepare_pre_entry_candidates(bot)
+            else:
+                _write_status(bot, status="WAITING", message=f"Waiting for pre-entry preparation at {PREMARKET_PREP_TIME} IST.", scanner_status="IDLE")
             time.sleep(10)
             continue
 
@@ -201,8 +225,6 @@ def _run_one_trading_day():
                               scanner_status="ERROR", error=f"{type(error).__name__}: {error}")
             finally:
                 bot.scanner.scan = original_scan
-                # Do not overwrite scan_duration_seconds here: monitored_scan
-                # owns that metric. The cycle timestamp remains last_cycle.
                 _write_status(bot, scanner_status="IDLE")
             time.sleep(SCAN_INTERVAL_SECONDS)
             continue
@@ -292,9 +314,9 @@ def get_status():
         alive = _thread is not None and _thread.is_alive()
     current.update(disk_state)
     current["worker_alive"] = alive
-    if alive and current.get("status") not in {"ERROR", "WAITING", "SCANNING"}:
+    if alive and current.get("status") not in {"ERROR", "WAITING", "SCANNING", "PREPARING"}:
         current["status"] = "RUNNING"
-    if not alive and current.get("status") in {"RUNNING", "SCANNING", "STARTING"}:
+    if not alive and current.get("status") in {"RUNNING", "SCANNING", "STARTING", "PREPARING"}:
         current["status"] = "STOPPED"
         current["message"] = "Paper bot worker is not running. Dashboard watchdog will restart it."
         current["error"] = current.get("error") or "Worker thread is not alive."
