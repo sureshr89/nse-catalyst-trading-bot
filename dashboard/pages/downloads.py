@@ -11,25 +11,41 @@ st.markdown("""
 [data-testid="stAppViewContainer"]{background:#0b1220}
 .block-container{max-width:1420px!important;padding:.45rem .55rem 1.5rem!important}
 .nav-row [data-testid="stColumn"]{min-width:0!important;flex:1 1 0!important}
-.nav-row [data-testid="stPageLink"]{width:100%!important}
-.nav-row [data-testid="stPageLink"] a{display:flex!important;align-items:center!important;justify-content:center!important;min-height:42px!important;padding:.4rem .2rem!important;border:1px solid #2b3b57!important;border-radius:11px!important;background:#142036!important;color:#e9f0f8!important;font-size:.64rem!important;font-weight:700!important;text-decoration:none!important;width:100%!important;box-sizing:border-box!important}
+.nav-row [data-testid="stButton"]{width:100%!important}
+.nav-row [data-testid="stButton"] button{width:100%!important;min-height:42px!important;padding:.4rem .2rem!important;border:1px solid #2b3b57!important;border-radius:11px!important;background:#142036!important;color:#e9f0f8!important;font-size:.64rem!important;font-weight:700!important}
 [data-testid="stDownloadButton"] button{width:100%!important;min-height:48px!important;border:1px solid #2b3b57!important;border-radius:10px!important;font-weight:700!important}
 .js-plotly-plot,.js-plotly-plot *{pointer-events:none!important;touch-action:none!important}
-@media(max-width:768px){.block-container{padding:.35rem .35rem 1rem!important}.nav-row [data-testid="stHorizontalBlock"]{gap:.35rem!important}.nav-row [data-testid="stPageLink"] a{min-height:40px!important;font-size:.60rem!important}}
+@media(max-width:768px){.block-container{padding:.35rem .35rem 1rem!important}.nav-row [data-testid="stHorizontalBlock"]{gap:.35rem!important}.nav-row [data-testid="stButton"] button{min-height:40px!important;font-size:.60rem!important}}
 </style>
 """, unsafe_allow_html=True)
 
-# Explicit 2 x 2 navigation. Do NOT use four columns here: Streamlit mobile
-# can horizontally clip a four-column block. Two separate rows guarantee that
-# all four buttons are visible on a phone.
+# Explicit 2 x 2 navigation using real Streamlit buttons.
+# st.page_link can disappear for the root app page on some Streamlit mobile
+# builds, so use st.switch_page callbacks to guarantee all four buttons render.
+def go_bot_status():
+    st.switch_page("app.py")
+
+def go_current_trading():
+    st.switch_page("pages/current_trading.py")
+
+def go_analysis():
+    st.switch_page("pages/analysis.py")
+
+def go_downloads():
+    st.switch_page("pages/downloads.py")
+
 with st.container(key="nav_row_1"):
     a, b = st.columns(2, gap="small")
-    a.page_link("app.py", label="🟢 BOT STATUS", width="stretch")
-    b.page_link("pages/current_trading.py", label="📌 CURRENT TRADING", width="stretch")
+    with a:
+        st.button("🟢 BOT STATUS", key="nav_bot_status", on_click=go_bot_status, width="stretch")
+    with b:
+        st.button("📌 CURRENT TRADING", key="nav_current_trading", on_click=go_current_trading, width="stretch")
 with st.container(key="nav_row_2"):
     c, d = st.columns(2, gap="small")
-    c.page_link("pages/analysis.py", label="📊 ANALYSIS", width="stretch")
-    d.page_link("pages/downloads.py", label="⬇️ DOWNLOADS", width="stretch")
+    with c:
+        st.button("📊 ANALYSIS", key="nav_analysis", on_click=go_analysis, width="stretch")
+    with d:
+        st.button("⬇️ DOWNLOADS", key="nav_downloads", on_click=go_downloads, width="stretch")
 
 def existing_bytes(name):
     p = ROOT / "outputs" / name
