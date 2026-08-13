@@ -85,8 +85,7 @@ class TradeJournal:
             return f"{value:.8f}"
         text = str(value).strip()
         try:
-            number = float(text)
-            return f"{number:.8f}"
+            return f"{float(text):.8f}"
         except (TypeError, ValueError):
             return text.upper()
 
@@ -95,14 +94,11 @@ class TradeJournal:
         value = signal.get("timestamp") or signal.get("entry_time") or ""
         try:
             parsed = pd.to_datetime(value, errors="coerce")
-            if pd.isna(parsed):
-                return ""
-            return parsed.strftime("%Y-%m-%d")
+            return "" if pd.isna(parsed) else parsed.strftime("%Y-%m-%d")
         except Exception:
             return ""
 
     def _daily_setup_key(self, signal):
-        """One scanner setup per stock/direction/setup per trading day."""
         return (
             self._signal_date(signal),
             self._normalise_signal_value(signal.get("symbol", "")),
@@ -111,12 +107,6 @@ class TradeJournal:
         )
 
     def _deduplicate_signal_history(self, df):
-        """Remove legacy/restarted-worker duplicate signals while keeping the first record.
-
-        A 30-second scan must never create a second copy of the same stock/direction/setup
-        on the same trading day. Different symbols, opposite directions, or different
-        strategy setup types remain separate records.
-        """
         if df.empty:
             return df
         keys = df.apply(self._daily_setup_key, axis=1)
@@ -127,7 +117,6 @@ class TradeJournal:
         return df.loc[~duplicate_mask].reset_index(drop=True)
 
     def signal_key(self, signal):
-        """Identify one exact setup within one trading day and market context."""
         fields = (
             "symbol", "signal", "entry", "stop_loss", "target", "quantity",
             "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
@@ -137,20 +126,13 @@ class TradeJournal:
         return (self._signal_date(signal),) + values
 
     def signal_exists(self, signal):
-        """Check persistent history so repeated scans/restarts cannot duplicate a setup."""
         try:
             df = pd.read_csv(self.signal_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             return False
         if df.empty:
             return False
-        # Strong daily setup guard: even if live candle fields change between scans,
-        # the same stock/direction/setup is recorded only once per trading day.
-        daily_key = self._daily_setup_key(signal)
-        existing_keys = {self._daily_setup_key(row.to_dict()) for _, row in df.iterrows()}
-        if daily_key in existing_keys:
-            return True
-        return False
+        return self._daily_setup_key(signal) in {self._daily_setup_key(row.to_dict()) for _, row in df.iterrows()}
 
     def trade_exists(self, trade_id):
         if not trade_id:
@@ -159,9 +141,7 @@ class TradeJournal:
             df = pd.read_csv(self.trade_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             return False
-        if df.empty or "trade_id" not in df.columns:
-            return False
-        return str(trade_id).strip() in df["trade_id"].astype(str).str.strip().values
+        return not df.empty and "trade_id" in df.columns and str(trade_id).strip() in df["trade_id"].astype(str).str.strip().values
 
     def upsert_trade(self, trade):
         if not isinstance(trade, dict):
@@ -205,6 +185,11 @@ class TradeJournal:
     def log_signal(self, signal):
         if not isinstance(signal, dict):
             return {"saved": False, "reason": "Signal must be a dictionary"}
+        # Scanner candidates that fail risk checks are not useful trade records.
+        # Only approved setups are retained: these are either actually traded or
+        # can become a capital-missed trade when the paper engine has insufficient cash.
+        if not bool(signal.get("approved", False)):
+            return {"saved": False, "reason": "Rejected risk candidate is not journaled"}
         if self.signal_exists(signal):
             return {"saved": False, "duplicate": True, "reason": "Duplicate scanner setup"}
         row = {column: self._value(signal.get(column, "")) for column in self.SIGNAL_COLUMNS}
@@ -212,7 +197,7 @@ class TradeJournal:
             row["timestamp"] = datetime.now().isoformat()
         with open(self.signal_file, "a", newline="", encoding="utf-8") as file:
             csv.DictWriter(file, fieldnames=self.SIGNAL_COLUMNS).writerow(row)
-        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save scanner signal")
+        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save approved trade signal")
         return {"saved": True, "duplicate": False, "file": self.signal_file}
 
     def get_trades(self):
