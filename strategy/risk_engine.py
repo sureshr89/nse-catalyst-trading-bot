@@ -10,7 +10,6 @@ from config.settings import (
     TOTAL_CAPITAL,
     MAX_RISK_PER_TRADE,
     MIN_REQUIRED_RISK,
-    RISK_PERCENT,
     MAX_TRADES_PER_STOCK,
     MIN_RR_RATIO,
     TRADE_LOG_FILE,
@@ -26,7 +25,6 @@ class RiskEngine:
         self.total_capital = float(TOTAL_CAPITAL)
         self.max_risk_per_trade = float(MAX_RISK_PER_TRADE)
         self.min_required_risk = float(MIN_REQUIRED_RISK)
-        self.risk_percent = float(RISK_PERCENT)
         self.max_trades_per_stock = int(MAX_TRADES_PER_STOCK)
         self.trade_counts = {}
         self.restore_today_trade_counts()
