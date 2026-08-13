@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from config.settings import ENABLE_LONG, ENABLE_SHORT
+
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
@@ -59,7 +61,7 @@ class GapReclaimEngine:
         return "NEUTRAL"
 
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first completed candle that crosses and closes beyond today's open after PDC failure."""
+        """Return the first later completed candle that reclaims today's open after a PDC failure."""
         data = self._clean(df)
         if len(data) < 2:
             return None
@@ -73,36 +75,46 @@ class GapReclaimEngine:
         for i in range(len(completed)):
             cur = completed.iloc[i]
 
-            # The first completed candle is allowed to establish the PDC
-            # failure. Entry still requires a later completed candle.
-            if side == "BUY" and float(cur["Low"]) < pdc:
-                pdc_breached = True
-            elif side == "SELL" and float(cur["High"]) > pdc:
-                pdc_breached = True
-
+            # A PDC failure must be established before the reclaim candle.
+            # The same candle is not used as both failure and confirmation.
             if i == 0:
+                if side == "BUY" and float(cur["Low"]) < pdc:
+                    pdc_breached = True
+                elif side == "SELL" and float(cur["High"]) > pdc:
+                    pdc_breached = True
                 continue
 
             cur_time = cur["Datetime"].time()
             if cur_time < self.start:
+                if side == "BUY" and float(cur["Low"]) < pdc:
+                    pdc_breached = True
+                elif side == "SELL" and float(cur["High"]) > pdc:
+                    pdc_breached = True
                 continue
             if cur_time > self.end:
                 break
+
             if not pdc_breached:
+                if side == "BUY" and float(cur["Low"]) < pdc:
+                    pdc_breached = True
+                elif side == "SELL" and float(cur["High"]) > pdc:
+                    pdc_breached = True
                 continue
 
-            candle_close = float(cur["Close"])
             candle_low = float(cur["Low"])
             candle_high = float(cur["High"])
+            candle_close = float(cur["Close"])
 
-            # Price-action reclaim: the candle must trade through today's open
-            # and finish beyond it. The candle's own opening price is not used
-            # as a restriction, so a valid intrabar cross is not missed.
-            if side == "BUY" and candle_low <= today_open < candle_close:
+            if side == "BUY" and candle_low < today_open and candle_close > today_open:
                 return cur
 
-            if side == "SELL" and candle_high >= today_open > candle_close:
+            if side == "SELL" and candle_high > today_open and candle_close < today_open:
                 return cur
+
+            if side == "BUY" and candle_low < pdc:
+                pdc_breached = True
+            elif side == "SELL" and candle_high > pdc:
+                pdc_breached = True
 
         return None
 
@@ -129,7 +141,7 @@ class GapReclaimEngine:
         )
         stock_today_direction = self._direction(today_data)
 
-        if previous_day_green and today_open > pdc:
+        if ENABLE_LONG and previous_day_green and today_open > pdc:
             if today_low < pdc and sector_direction == "BULLISH" and nifty_direction == "BULLISH":
                 entry_candle = self._entry_candle(today_data, today_open, pdc, "BUY")
                 if entry_candle is not None and stock_today_direction == "BULLISH":
@@ -145,7 +157,7 @@ class GapReclaimEngine:
                             stock_today_direction,
                         )
 
-        if previous_day_red and today_open < pdc:
+        if ENABLE_SHORT and previous_day_red and today_open < pdc:
             if today_high > pdc and sector_direction == "BEARISH" and nifty_direction == "BEARISH":
                 entry_candle = self._entry_candle(today_data, today_open, pdc, "SELL")
                 if entry_candle is not None and stock_today_direction == "BEARISH":
