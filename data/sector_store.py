@@ -9,6 +9,7 @@ import yfinance as yf
 
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+MIN_COVERAGE = 0.95
 
 
 class SectorStore:
@@ -36,13 +37,18 @@ class SectorStore:
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
 
         today = self._today_key()
+        required = {"Symbol", "Sector", "SectorSource", "PreparedAtIST"}
+        minimum_rows = max(1, int(len(self.universe) * MIN_COVERAGE))
+
         if not force and self.path.exists():
             try:
                 cached = pd.read_csv(self.path)
-                required = {"Symbol", "Sector", "PreparedAtIST"}
-                prepared_dates = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce") if "PreparedAtIST" in cached.columns else pd.Series(dtype="datetime64[ns]")
-                cache_is_today = bool(not prepared_dates.empty and prepared_dates.dt.strftime("%Y-%m-%d").eq(today).any())
-                if required.issubset(cached.columns) and cache_is_today and len(cached) >= max(1, int(len(self.universe) * 0.8)):
+                prepared = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce")
+                cache_is_today = bool(
+                    not prepared.empty
+                    and prepared.dt.strftime("%Y-%m-%d").eq(today).any()
+                )
+                if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows:
                     return cached
             except Exception:
                 pass
@@ -67,12 +73,18 @@ class SectorStore:
 
         result["Sector"] = result["Symbol"].map(sectors)
         result["Sector"] = result["Sector"].fillna(result["Industry"])
-        result.loc[result["Sector"].eq(""), "Sector"] = "UNKNOWN"
+        result.loc[result["Sector"] == "", "Sector"] = "UNKNOWN"
         result["SectorSource"] = result["Symbol"].map(
             lambda symbol: "YAHOO_SECTOR" if sectors.get(symbol) else "NIFTY_INDUSTRY_FALLBACK"
         )
         result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         result = result[["Symbol", "Sector", "SectorSource", "PreparedAtIST"]].drop_duplicates("Symbol").reset_index(drop=True)
+
+        # Never replace a good cache with a materially incomplete mapping.
+        if len(result) < minimum_rows:
+            print(f"Sector mapping incomplete: {len(result)}/{len(self.universe)}. No cache written.")
+            return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource", "PreparedAtIST"])
+
         result.to_csv(self.path, index=False)
         return result
 
