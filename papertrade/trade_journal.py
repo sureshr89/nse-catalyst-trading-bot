@@ -76,6 +76,49 @@ class TradeJournal:
                 pass
         return value
 
+    @staticmethod
+    def _normalise_signal_value(value):
+        """Create a stable comparison value for signal de-duplication."""
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.8f}"
+        text = str(value).strip()
+        try:
+            number = float(text)
+            return f"{number:.8f}"
+        except (TypeError, ValueError):
+            return text.upper()
+
+    def signal_key(self, signal):
+        """Return the setup identity, deliberately excluding scan timestamp."""
+        fields = (
+            "symbol", "signal", "entry", "stop_loss", "target", "quantity",
+            "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
+        )
+        return tuple(self._normalise_signal_value(signal.get(field, "")) for field in fields)
+
+    def signal_exists(self, signal):
+        """Check persistent signal history so restarts cannot create duplicates."""
+        try:
+            df = pd.read_csv(self.signal_file)
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            return False
+        if df.empty:
+            return False
+        key = self.signal_key(signal)
+        available = [
+            "symbol", "signal", "entry", "stop_loss", "target", "quantity",
+            "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
+        ]
+        for column in available:
+            if column not in df.columns:
+                df[column] = ""
+        existing_keys = set()
+        for _, row in df.iterrows():
+            existing_keys.add(self.signal_key(row.to_dict()))
+        return key in existing_keys
+
     def trade_exists(self, trade_id):
         if not trade_id:
             return False
@@ -112,8 +155,6 @@ class TradeJournal:
             idx = df.index[mask][0]
             for column in self.TRADE_COLUMNS:
                 new_value = row[column]
-                # Never erase already-recorded strategy context when a later
-                # OPEN/CLOSED update contains only execution fields.
                 if new_value != "" or column in self.EXIT_FIELDS:
                     df.at[idx, column] = new_value
         else:
@@ -138,13 +179,15 @@ class TradeJournal:
     def log_signal(self, signal):
         if not isinstance(signal, dict):
             return {"saved": False, "reason": "Signal must be a dictionary"}
+        if self.signal_exists(signal):
+            return {"saved": False, "duplicate": True, "reason": "Duplicate scanner setup"}
         row = {column: self._value(signal.get(column, "")) for column in self.SIGNAL_COLUMNS}
         if not row["timestamp"]:
             row["timestamp"] = datetime.now().isoformat()
         with open(self.signal_file, "a", newline="", encoding="utf-8") as file:
             csv.DictWriter(file, fieldnames=self.SIGNAL_COLUMNS).writerow(row)
         sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save scanner signal")
-        return {"saved": True, "file": self.signal_file}
+        return {"saved": True, "duplicate": False, "file": self.signal_file}
 
     def get_trades(self):
         try:
