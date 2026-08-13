@@ -1,8 +1,10 @@
-"""Read-only numerical analysis for the active NIFTY 100 paper strategy."""
+"""Read-only visual strategy research dashboard."""
 from pathlib import Path
 import json
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -10,9 +12,17 @@ TRADES_FILE = PROJECT_ROOT / "outputs" / "trades.csv"
 SIGNALS_FILE = PROJECT_ROOT / "outputs" / "signals.csv"
 STATE_FILE = PROJECT_ROOT / "outputs" / "paper_engine_state.json"
 
-st.set_page_config(page_title="NSE Catalyst - Analysis", page_icon="📊", layout="wide")
-st.title("📊 Trading Analysis")
-st.caption("Read-only numerical analysis of persistent scanner signals and trade journal. No charts or graphs. This page never starts the worker or changes trading state.")
+st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
+
+st.markdown("""
+<style>
+.block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
+.analysis-title {font-size:2rem; font-weight:700; margin-bottom:.1rem;}
+.analysis-subtitle {opacity:.72; margin-bottom:1rem;}
+.section-title {font-size:1.1rem; font-weight:650; margin-top:1.35rem; margin-bottom:.55rem;}
+[data-testid="stMetric"] {padding:.65rem .8rem; border:1px solid rgba(128,128,128,.18); border-radius:10px;}
+</style>
+""", unsafe_allow_html=True)
 
 
 def load_csv(path):
@@ -22,205 +32,279 @@ def load_csv(path):
         return pd.DataFrame()
 
 
-def load_state():
+def load_json(path):
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as file:
+        with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
     except Exception:
         return {}
 
 
-def numeric(frame, column, default=0.0):
-    if column not in frame.columns:
-        frame[column] = default
-    frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(default)
+def numeric(df, column, default=0.0):
+    if column not in df.columns:
+        df[column] = default
+    df[column] = pd.to_numeric(df[column], errors="coerce").fillna(default)
 
 
-def prepare_trade_frame(frame):
-    frame = frame.copy()
-    if frame.empty:
-        return frame
-    for column in ["entry", "stop_loss", "target", "quantity", "pnl", "actual_risk", "risk", "reward", "rr", "position_value"]:
-        numeric(frame, column)
-    missing_risk = frame["risk"] <= 0
-    frame.loc[missing_risk, "risk"] = (frame.loc[missing_risk, "entry"] - frame.loc[missing_risk, "stop_loss"]).abs() * frame.loc[missing_risk, "quantity"]
-    missing_reward = frame["reward"] <= 0
-    frame.loc[missing_reward, "reward"] = (frame.loc[missing_reward, "target"] - frame.loc[missing_reward, "entry"]).abs() * frame.loc[missing_reward, "quantity"]
-    valid_risk = frame["risk"] > 0
-    frame.loc[valid_risk, "rr"] = frame.loc[valid_risk, "reward"] / frame.loc[valid_risk, "risk"]
-    frame["Result"] = frame["pnl"].apply(lambda value: "WIN" if value > 0 else "LOSS" if value < 0 else "FLAT")
-    return frame
+def prepare(df):
+    df = df.copy()
+    if df.empty:
+        return df
+    for col in ["entry", "stop_loss", "target", "quantity", "risk", "reward", "rr", "pnl", "actual_risk", "position_value", "risk_reward"]:
+        numeric(df, col)
+    if "risk" in df.columns and "entry" in df.columns and "stop_loss" in df.columns and "quantity" in df.columns:
+        mask = df["risk"] <= 0
+        df.loc[mask, "risk"] = (df.loc[mask, "entry"] - df.loc[mask, "stop_loss"]).abs() * df.loc[mask, "quantity"]
+    if "reward" in df.columns:
+        mask = df["reward"] <= 0
+        df.loc[mask, "reward"] = (df.loc[mask, "target"] - df.loc[mask, "entry"]).abs() * df.loc[mask, "quantity"]
+    mask = df["risk"] > 0
+    df.loc[mask, "rr"] = df.loc[mask, "reward"] / df.loc[mask, "risk"]
+    df["Result"] = df["pnl"].apply(lambda x: "WIN" if x > 0 else "LOSS" if x < 0 else "FLAT")
+    return df
 
 
-def outcome_stats(frame, label):
-    if frame.empty:
-        return {"Category": label, "Trades": 0, "Wins": 0, "Losses": 0, "Flat": 0, "Win %": 0.0, "Total P&L": 0.0, "Avg P&L": 0.0, "Avg Risk": 0.0, "Avg R:R": 0.0, "Profit Factor": 0.0}
-    pnl = pd.to_numeric(frame["pnl"], errors="coerce").fillna(0.0)
-    wins = int((pnl > 0).sum())
-    losses = int((pnl < 0).sum())
-    flat = int((pnl == 0).sum())
-    gross_profit = float(pnl[pnl > 0].sum())
-    gross_loss = abs(float(pnl[pnl < 0].sum()))
+def stats(df):
+    if df.empty:
+        return {"Trades":0,"Wins":0,"Losses":0,"Flat":0,"Win Rate %":0.0,"P&L":0.0,"Avg P&L":0.0,"Avg Win":0.0,"Avg Loss":0.0,"Expectancy":0.0,"Profit Factor":0.0,"Avg Risk":0.0,"Avg R:R":0.0}
+    pnl = df["pnl"].astype(float)
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0]
+    gp = float(wins.sum())
+    gl = abs(float(losses.sum()))
     return {
-        "Category": label,
-        "Trades": len(frame),
-        "Wins": wins,
-        "Losses": losses,
-        "Flat": flat,
-        "Win %": round(wins / len(frame) * 100, 2),
-        "Total P&L": round(float(pnl.sum()), 2),
-        "Avg P&L": round(float(pnl.mean()), 2),
-        "Avg Risk": round(float(frame["risk"].mean()), 2),
-        "Avg R:R": round(float(frame["rr"].mean()), 3),
-        "Profit Factor": round(gross_profit / gross_loss, 3) if gross_loss else 0.0,
+        "Trades": len(df), "Wins": int((pnl > 0).sum()), "Losses": int((pnl < 0).sum()), "Flat": int((pnl == 0).sum()),
+        "Win Rate %": round(float((pnl > 0).mean() * 100), 2), "P&L": round(float(pnl.sum()), 2),
+        "Avg P&L": round(float(pnl.mean()), 2), "Avg Win": round(float(wins.mean()), 2) if not wins.empty else 0.0,
+        "Avg Loss": round(float(losses.mean()), 2) if not losses.empty else 0.0,
+        "Expectancy": round(float(pnl.mean()), 2), "Profit Factor": round(gp / gl, 3) if gl else 0.0,
+        "Avg Risk": round(float(df["risk"].mean()), 2), "Avg R:R": round(float(df["rr"].mean()), 3),
     }
 
 
-def group_analysis(frame, group_column):
-    if frame.empty or group_column not in frame.columns:
+def group_stats(df, column):
+    if df.empty or column not in df.columns:
         return pd.DataFrame()
     rows = []
-    for value, group in frame.groupby(group_column, dropna=False):
-        rows.append(outcome_stats(group, str(value) if str(value) else "UNKNOWN"))
-    return pd.DataFrame(rows).sort_values(["Total P&L", "Trades"], ascending=[False, False]) if rows else pd.DataFrame()
+    for value, group in df.groupby(column, dropna=False):
+        row = stats(group)
+        row[column] = str(value) if pd.notna(value) and str(value) else "UNKNOWN"
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("P&L", ascending=False) if rows else pd.DataFrame()
 
 
-trades = load_csv(TRADES_FILE)
+def make_pie(df, column, title):
+    if df.empty or column not in df.columns:
+        return
+    counts = df[column].fillna("UNKNOWN").astype(str).value_counts().reset_index()
+    counts.columns = [column, "Count"]
+    fig = px.pie(counts, names=column, values="Count", hole=.45, title=title)
+    fig.update_layout(height=340, margin=dict(l=10,r=10,t=55,b=10), legend_title_text="")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+trades = prepare(load_csv(TRADES_FILE))
 signals = load_csv(SIGNALS_FILE)
-state = load_state()
+state = load_json(STATE_FILE)
 
-actual = pd.DataFrame()
-missed = pd.DataFrame()
 if not trades.empty and "status" in trades.columns:
-    statuses = trades["status"].astype(str).str.upper()
-    actual = trades[statuses == "CLOSED"].copy()
-    missed = trades[statuses.isin(["MISSED_CAPITAL_OPEN", "MISSED_CAPITAL_CLOSED"])].copy()
+    status_col = trades["status"].astype(str).str.upper()
+    actual = trades[status_col == "CLOSED"].copy()
+    missed = trades[status_col.isin(["MISSED_CAPITAL_OPEN", "MISSED_CAPITAL_CLOSED"])].copy()
+else:
+    actual = pd.DataFrame()
+    missed = pd.DataFrame()
 
-actual = prepare_trade_frame(actual)
-missed_closed = prepare_trade_frame(missed[missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_CLOSED"].copy()) if not missed.empty else pd.DataFrame()
+actual = prepare(actual)
+missed = prepare(missed)
+missed_closed = missed[missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_CLOSED"].copy() if not missed.empty else pd.DataFrame()
 
-# ------------------------- ACTUAL TRADES -------------------------
-st.header("1. Actual Trades Taken")
+st.markdown('<div class="analysis-title">📊 Strategy Analysis</div>', unsafe_allow_html=True)
+st.markdown('<div class="analysis-subtitle">NIFTY 100 Gap-Failure + Open-Reclaim • read-only research • actual trades and capital-missed opportunities are analysed separately</div>', unsafe_allow_html=True)
+
+# ------------------------------ TOP KPIs -------------------------------
+a = stats(actual)
+m = stats(missed_closed)
+qualified = len(actual) + len(missed_closed)
+combined_pnl = a["P&L"] + m["P&L"]
+
+c1,c2,c3,c4,c5,c6 = st.columns(6)
+c1.metric("Actual Trades", a["Trades"])
+c2.metric("Actual Win Rate", f'{a["Win Rate %"]:.1f}%')
+c3.metric("Actual P&L", f'₹{a["P&L"]:,.2f}')
+c4.metric("Missed Capital", len(missed))
+c5.metric("Missed Hyp. P&L", f'₹{m["P&L"]:,.2f}')
+c6.metric("Qualified Outcomes", qualified)
+
+# -------------------------- PERFORMANCE CURVES -------------------------
+st.markdown('<div class="section-title">Performance & P&L</div>', unsafe_allow_html=True)
 if actual.empty:
-    st.info("No closed actual trades are available yet.")
+    st.info("No closed actual trades yet. Performance charts will populate automatically after trades close.")
 else:
-    stats = outcome_stats(actual, "Actual trades")
-    a, b, c, d, e = st.columns(5)
-    a.metric("Closed Trades", stats["Trades"])
-    b.metric("Win Rate", f'{stats["Win %"]:.2f}%')
-    c.metric("Total P&L", f'₹{stats["Total P&L"]:,.2f}')
-    d.metric("Avg P&L", f'₹{stats["Avg P&L"]:,.2f}')
-    e.metric("Profit Factor", f'{stats["Profit Factor"]:.3f}')
+    curve = actual.copy()
+    time_col = next((x for x in ["exit_time", "entry_time"] if x in curve.columns), None)
+    if time_col:
+        curve["_time"] = pd.to_datetime(curve[time_col], errors="coerce")
+        curve = curve.sort_values("_time", na_position="last")
+    curve["Trade #"] = range(1, len(curve)+1)
+    curve["Cumulative P&L"] = curve["pnl"].cumsum()
+    curve["Drawdown"] = curve["Cumulative P&L"] - curve["Cumulative P&L"].cummax()
+    left, right = st.columns(2)
+    with left:
+        fig = px.line(curve, x="Trade #", y="Cumulative P&L", markers=True, title="Cumulative Actual P&L")
+        fig.update_layout(height=360, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+        st.plotly_chart(fig, use_container_width=True)
+    with right:
+        fig = px.bar(curve, x="Trade #", y="pnl", title="Individual Trade P&L Spikes")
+        fig.update_layout(height=360, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+        st.plotly_chart(fig, use_container_width=True)
+    fig = px.line(curve, x="Trade #", y="Drawdown", markers=True, title="Drawdown")
+    fig.update_layout(height=320, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+    st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Actual Performance Summary")
-    st.dataframe(pd.DataFrame([stats]), use_container_width=True, hide_index=True)
-
-    st.subheader("Actual Outcome by Side")
-    side_table = group_analysis(actual, "signal")
-    st.dataframe(side_table, use_container_width=True, hide_index=True) if not side_table.empty else st.info("No side-level data available.")
-
-    st.subheader("Actual Outcome by Exit Reason")
-    exit_table = group_analysis(actual, "exit_reason")
-    st.dataframe(exit_table, use_container_width=True, hide_index=True) if not exit_table.empty else st.info("No exit-reason data available.")
-
-    st.subheader("Actual Outcome by Stock")
-    stock_table = group_analysis(actual, "symbol")
-    st.dataframe(stock_table, use_container_width=True, hide_index=True) if not stock_table.empty else st.info("No stock-level data available.")
-
-    st.subheader("Actual Trade Details")
-    preferred = ["trade_id", "symbol", "signal", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr", "pnl", "exit_reason", "entry_time", "exit_time", "status"]
-    columns = [column for column in preferred if column in actual.columns]
-    st.dataframe(actual[columns].sort_values("exit_time", ascending=False, na_position="last"), use_container_width=True, hide_index=True)
-
-# ------------------- MISSED DUE TO CAPITAL ----------------------
-st.header("2. Qualified Trades Missed Due to Capital")
-if missed.empty:
-    st.info("No qualified trades have been missed because of insufficient capital yet.")
+# ----------------------------- OUTCOMES --------------------------------
+st.markdown('<div class="section-title">Outcome Analysis</div>', unsafe_allow_html=True)
+if actual.empty:
+    st.info("No actual trade outcomes available yet.")
 else:
-    open_missed = missed[missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN"].copy()
-    resolved = len(missed_closed)
-    stats = outcome_stats(missed_closed, "Capital-missed resolved")
-    st.subheader("Capital-Missed Summary")
-    st.dataframe(pd.DataFrame([{
-        "Qualified but blocked": len(missed),
-        "Still being tracked": len(open_missed),
-        "Resolved": resolved,
-        "Wins": stats["Wins"],
-        "Losses": stats["Losses"],
-        "Flat": stats["Flat"],
-        "Hypothetical Win %": stats["Win %"],
-        "Hypothetical P&L": stats["Total P&L"],
-        "Average Hypothetical P&L": stats["Avg P&L"],
-        "Profit Factor": stats["Profit Factor"],
-    }]), use_container_width=True, hide_index=True)
+    left, right = st.columns(2)
+    with left:
+        make_pie(actual.assign(Outcome=actual["Result"]), "Outcome", "Actual Win / Loss / Flat")
+    with right:
+        make_pie(actual, "exit_reason", "Actual Exit Reasons")
 
-    if not missed_closed.empty:
-        st.subheader("Capital-Missed Outcome by Side")
-        side_table = group_analysis(missed_closed, "signal")
-        st.dataframe(side_table, use_container_width=True, hide_index=True)
+    outcome = pd.DataFrame([{
+        "Trades": a["Trades"], "Wins": a["Wins"], "Losses": a["Losses"], "Flat": a["Flat"],
+        "Win Rate %": a["Win Rate %"], "Average P&L": a["Avg P&L"], "Average Win": a["Avg Win"],
+        "Average Loss": a["Avg Loss"], "Expectancy": a["Expectancy"], "Profit Factor": a["Profit Factor"],
+        "Average Risk": a["Avg Risk"], "Average R:R": a["Avg R:R"],
+    }])
+    st.dataframe(outcome, use_container_width=True, hide_index=True)
 
-        st.subheader("Capital-Missed Outcome by Exit Reason")
-        exit_table = group_analysis(missed_closed, "exit_reason")
-        st.dataframe(exit_table, use_container_width=True, hide_index=True)
+# ------------------------- SIDE / EXIT / STOCK -------------------------
+st.markdown('<div class="section-title">Where the Strategy Works</div>', unsafe_allow_html=True)
+if not actual.empty:
+    left, right = st.columns(2)
+    with left:
+        side = group_stats(actual, "signal")
+        if not side.empty:
+            fig = px.bar(side, x="signal", y="P&L", text="Trades", title="P&L by BUY / SELL")
+            fig.update_layout(height=350, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+            st.plotly_chart(fig, use_container_width=True)
+    with right:
+        exit_stats = group_stats(actual, "exit_reason")
+        if not exit_stats.empty:
+            fig = px.bar(exit_stats, x="exit_reason", y="P&L", text="Trades", title="P&L by Exit Reason")
+            fig.update_layout(height=350, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("All Capital-Missed Opportunities")
-    preferred = ["trade_id", "symbol", "signal", "entry", "stop_loss", "target", "quantity", "risk", "reward", "rr", "pnl", "exit_reason", "entry_time", "exit_time", "status"]
-    columns = [column for column in preferred if column in missed.columns]
-    st.dataframe(missed[columns].sort_values("entry_time", ascending=False, na_position="last"), use_container_width=True, hide_index=True)
+    stock_stats = group_stats(actual, "symbol")
+    if not stock_stats.empty:
+        st.subheader("Stock-Level Performance")
+        fig = px.bar(stock_stats.head(20), x="symbol", y="P&L", text="Trades", title="Top 20 Stocks by Actual P&L")
+        fig.update_layout(height=390, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(stock_stats, use_container_width=True, hide_index=True)
 
-# --------------------- STRATEGY CAPABILITY ----------------------
-st.header("3. Strategy Capability — Actual vs Capital-Missed")
-actual_stats = outcome_stats(actual, "Actual trades")
-missed_stats = outcome_stats(missed_closed, "Qualified but missed due to capital")
-comparison = pd.DataFrame([actual_stats, missed_stats])
-st.dataframe(comparison, use_container_width=True, hide_index=True)
+# ------------------------------- RISK ---------------------------------
+st.markdown('<div class="section-title">Risk & R:R Analysis</div>', unsafe_allow_html=True)
+if not actual.empty:
+    risk_df = actual.copy()
+    left, right = st.columns(2)
+    with left:
+        fig = px.scatter(risk_df, x="risk", y="pnl", size="quantity" if "quantity" in risk_df else None, hover_name="symbol", hover_data=["signal","rr"], title="Risk vs Actual P&L")
+        fig.update_layout(height=370, margin=dict(l=10,r=10,t=55,b=10), xaxis_title="Risk (₹)", yaxis_title="P&L (₹)")
+        st.plotly_chart(fig, use_container_width=True)
+    with right:
+        fig = px.scatter(risk_df, x="rr", y="pnl", hover_name="symbol", hover_data=["signal","risk"], title="R:R vs Actual P&L")
+        fig.update_layout(height=370, margin=dict(l=10,r=10,t=55,b=10), xaxis_title="R:R", yaxis_title="P&L (₹)")
+        st.plotly_chart(fig, use_container_width=True)
 
-if not actual.empty or not missed_closed.empty:
-    actual_total = float(actual["pnl"].sum()) if not actual.empty else 0.0
-    missed_total = float(missed_closed["pnl"].sum()) if not missed_closed.empty else 0.0
-    combined_count = len(actual) + len(missed_closed)
-    combined_wins = int((actual["pnl"] > 0).sum()) + int((missed_closed["pnl"] > 0).sum())
-    st.subheader("Capability Interpretation")
-    st.dataframe(pd.DataFrame([{
-        "Actual realized P&L": round(actual_total, 2),
-        "Missed hypothetical P&L": round(missed_total, 2),
-        "Combined qualified outcomes": combined_count,
-        "Combined wins": combined_wins,
-        "Combined win %": round(combined_wins / combined_count * 100, 2) if combined_count else 0.0,
-        "Open capital-missed opportunities": int((missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN").sum()) if not missed.empty else 0,
-    }]), use_container_width=True, hide_index=True)
-    st.caption("Missed-capital results are hypothetical and are never included in actual P&L.")
-
-# --------------------- SCANNER SIGNAL ANALYSIS -------------------
-st.header("4. Scanner Signal Analysis")
+# ------------------------------ TIMING --------------------------------
+st.markdown('<div class="section-title">Signal & Trade Timing</div>', unsafe_allow_html=True)
 if signals.empty:
-    st.info("No scanner signals have been recorded yet.")
+    st.info("No scanner signals available for timing analysis yet.")
 else:
     sig = signals.copy()
-    for column in ["entry", "stop_loss", "target", "risk_reward", "risk_per_share", "actual_risk", "position_value"]:
-        numeric(sig, column)
-    approved_series = sig["approved"].astype(str).str.upper().isin(["TRUE", "1", "YES"]) if "approved" in sig.columns else pd.Series(False, index=sig.index)
-    st.dataframe(pd.DataFrame([{
-        "Recorded unique signals": len(sig),
-        "Risk approved": int(approved_series.sum()),
-        "Risk rejected": int((~approved_series).sum()),
-        "Approval %": round(approved_series.mean() * 100, 2) if len(sig) else 0.0,
-    }]), use_container_width=True, hide_index=True)
+    if "timestamp" in sig.columns:
+        sig["_time"] = pd.to_datetime(sig["timestamp"], errors="coerce")
+        sig = sig[sig["_time"].notna()].copy()
+        if not sig.empty:
+            sig["Minute"] = sig["_time"].dt.strftime("%H:%M")
+            counts = sig.groupby("Minute").size().reset_index(name="Signals")
+            fig = px.bar(counts, x="Minute", y="Signals", title="Scanner Signal Spikes by Time")
+            fig.update_layout(height=350, margin=dict(l=10,r=10,t=55,b=10), xaxis_title="IST")
+            st.plotly_chart(fig, use_container_width=True)
 
-    if "reason" in sig.columns:
-        reasons = sig.assign(_reason=sig["reason"].fillna("").astype(str)).groupby("_reason", dropna=False).size().reset_index(name="Count").rename(columns={"_reason": "Reason"}).sort_values("Count", ascending=False)
-        st.subheader("Signal Approval / Rejection Reasons")
-        st.dataframe(reasons, use_container_width=True, hide_index=True)
+    if "approved" in sig.columns:
+        approved = sig["approved"].astype(str).str.upper().isin(["TRUE","1","YES"])
+        left, right = st.columns(2)
+        with left:
+            fig = px.pie(pd.DataFrame({"Status":["Approved","Rejected"],"Count":[int(approved.sum()),int((~approved).sum())]}), names="Status", values="Count", hole=.45, title="Signal Approval")
+            fig.update_layout(height=330, margin=dict(l=10,r=10,t=55,b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            if "reason" in sig.columns:
+                reason_counts = sig["reason"].fillna("No reason").astype(str).value_counts().head(12).reset_index()
+                reason_counts.columns = ["Reason","Count"]
+                fig = px.bar(reason_counts, x="Count", y="Reason", orientation="h", title="Top Signal Reasons")
+                fig.update_layout(height=330, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="")
+                st.plotly_chart(fig, use_container_width=True)
 
-    preferred = [
-        "timestamp", "symbol", "signal", "entry", "stop_loss", "target", "risk_reward", "risk_per_share",
-        "actual_risk", "position_value", "pdc", "today_open", "today_low", "today_high", "nifty100_direction",
-        "sector", "sector_direction", "stock_today_direction", "previous_day_direction", "setup_type",
-        "entry_candle_open", "entry_candle_close", "approved", "reason",
-    ]
-    columns = [column for column in preferred if column in sig.columns]
-    st.subheader("Unique Scanner Signal Records")
-    st.dataframe(sig[columns].iloc[::-1], use_container_width=True, hide_index=True)
+# ------------------------ MARKET ALIGNMENT -----------------------------
+st.markdown('<div class="section-title">Market / Sector / Setup Analysis</div>', unsafe_allow_html=True)
+if not actual.empty:
+    for col in ["nifty100_direction", "sector_direction", "stock_today_direction", "previous_day_direction", "setup_type"]:
+        if col in actual.columns and actual[col].notna().any():
+            table = group_stats(actual, col)
+            if not table.empty:
+                fig = px.bar(table, x=col, y="P&L", text="Trades", title=f"Actual P&L by {col.replace('_',' ').title()}")
+                fig.update_layout(height=330, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+                st.plotly_chart(fig, use_container_width=True)
+
+# --------------------- ACTUAL VS MISSED CAPITAL ------------------------
+st.markdown('<div class="section-title">Strategy Capability: Actual vs Capital-Missed</div>', unsafe_allow_html=True)
+comparison = pd.DataFrame([
+    {"Category":"Actual trades", **a},
+    {"Category":"Capital-missed resolved", **m},
+])
+st.dataframe(comparison, use_container_width=True, hide_index=True)
+if not missed.empty:
+    left, right = st.columns(2)
+    with left:
+        resolved = missed_closed.copy()
+        if not resolved.empty:
+            fig = px.bar(pd.DataFrame({"Category":["Actual","Missed due to capital"],"P&L":[a["P&L"],m["P&L"]]}), x="Category", y="P&L", title="Realized vs Hypothetical P&L")
+            fig.update_layout(height=340, margin=dict(l=10,r=10,t=55,b=10), yaxis_title="₹")
+            st.plotly_chart(fig, use_container_width=True)
+    with right:
+        make_pie(pd.DataFrame({"Category":["Actual","Missed due to capital"],"Count":[len(actual),len(missed_closed)]}), "Category", "Actual vs Resolved Capital-Missed")
+    st.caption("Capital-missed results are hypothetical. They never change actual trading P&L.")
+
+# ----------------------------- TABLES ----------------------------------
+st.markdown('<div class="section-title">Detailed Research Data</div>', unsafe_allow_html=True)
+tab1, tab2, tab3 = st.tabs(["Actual Trades", "Capital-Missed", "Scanner Signals"])
+with tab1:
+    if actual.empty:
+        st.info("No actual trades yet.")
+    else:
+        preferred = ["trade_id","symbol","signal","entry_time","entry","stop_loss","target","quantity","risk","reward","rr","exit_time","exit_price","exit_reason","pnl","nifty100_direction","sector","sector_direction","stock_today_direction","previous_day_direction","setup_type","status"]
+        cols = [c for c in preferred if c in actual.columns]
+        st.dataframe(actual[cols].iloc[::-1], use_container_width=True, hide_index=True)
+with tab2:
+    if missed.empty:
+        st.info("No capital-missed opportunities yet.")
+    else:
+        preferred = ["trade_id","symbol","signal","entry_time","entry","stop_loss","target","quantity","risk","reward","rr","exit_time","exit_price","exit_reason","pnl","status"]
+        cols = [c for c in preferred if c in missed.columns]
+        st.dataframe(missed[cols].iloc[::-1], use_container_width=True, hide_index=True)
+with tab3:
+    if signals.empty:
+        st.info("No scanner signals yet.")
+    else:
+        preferred = ["timestamp","symbol","signal","entry","stop_loss","target","risk_reward","actual_risk","position_value","pdc","today_open","today_low","today_high","nifty100_direction","sector","sector_direction","stock_today_direction","previous_day_direction","setup_type","approved","reason"]
+        cols = [c for c in preferred if c in signals.columns]
+        st.dataframe(signals[cols].iloc[::-1], use_container_width=True, hide_index=True)
 
 st.divider()
-st.caption("Analysis is read-only. Execution remains in main.py through the persistent bot worker. No charts or graphs are used.")
+st.caption("Read-only analysis. The page never starts the worker and never changes trading state. Actual P&L and hypothetical capital-missed P&L remain separate.")
