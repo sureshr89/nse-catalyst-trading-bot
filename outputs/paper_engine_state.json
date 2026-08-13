@@ -1,6 +1,7 @@
 {
-  "open_positions": {
-    "TATACAP": {
+  "open_positions": {},
+  "closed_positions": [
+    {
       "trade_id": "PAPER-0001",
       "symbol": "TATACAP",
       "stock": "TATACAP",
@@ -14,11 +15,11 @@
       "risk": 1499.9,
       "reward": 2252.68,
       "rr": 1.5019,
-      "status": "OPEN",
-      "exit_time": null,
-      "exit_price": null,
-      "exit_reason": null,
-      "pnl": null,
+      "status": "CLOSED",
+      "exit_time": "2026-08-13 14:59:00+05:30",
+      "exit_price": 364.55,
+      "exit_reason": "SQUARE_OFF",
+      "pnl": 141.51,
       "breakout_level": 365.25,
       "risk_reward": 1.5,
       "pdc": 367.05,
@@ -43,11 +44,10 @@
       "actual_risk": 1499.9,
       "position_value": 206476.8
     }
-  },
-  "closed_positions": [],
+  ],
   "trade_counter": 1,
   "total_capital": 250000.0,
-  "available_capital": 43523.2,
-  "used_capital": 206476.8,
-  "saved_at": "2026-08-13T09:48:05.446754"
+  "available_capital": 250000.0,
+  "used_capital": 0.0,
+  "saved_at": "2026-08-13T15:00:20.138472"
 }
