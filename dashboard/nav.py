@@ -2,18 +2,18 @@ import streamlit as st
 
 
 def render_nav():
-    """Render the same always-visible 2x2 navigation on every dashboard page."""
+    """Render one shared fixed 2x2 navigation on every dashboard page."""
     st.markdown(
         """
         <style>
-        /* Hide every older per-page navigation. The shared nav below is the only nav. */
+        /* Remove all older page-specific navigation blocks. */
         .st-key-nav,
         .st-key-main_nav,
         .st-key-nav_grid,
         .st-key-nav_row_1,
         .st-key-nav_row_2 { display:none!important; }
 
-        /* Shared navigation: fixed, so all four buttons remain visible together. */
+        /* ONE navigation only: fixed so all four buttons stay visible together. */
         .st-key-global_nav {
             position:fixed!important;
             top:64px!important;
@@ -45,10 +45,7 @@ def render_nav():
             padding:0!important;
         }
         .st-key-global_nav [data-testid="stPageLink"],
-        .st-key-global_nav [data-testid="stPageLink"] a {
-            width:100%!important;
-            box-sizing:border-box!important;
-        }
+        .st-key-global_nav [data-testid="stPageLink"] a {width:100%!important;box-sizing:border-box!important}
         .st-key-global_nav [data-testid="stPageLink"] a {
             min-height:43px!important;
             display:flex!important;
@@ -64,8 +61,16 @@ def render_nav():
             text-decoration:none!important;
             white-space:nowrap!important;
         }
-        /* Reserve space below Streamlit's header so content never sits underneath nav. */
+        /* Keep page content below the fixed navigation. */
         .st-key-global_nav + div { min-height:104px!important; }
+
+        /* All Plotly charts are display-only: no pinch, zoom, pan or drag. */
+        .js-plotly-plot,
+        [data-testid="stPlotlyChart"],
+        [data-testid="stPlotlyChart"] * {
+            pointer-events:none!important;
+            touch-action:none!important;
+        }
 
         @media(max-width:768px){
             .st-key-global_nav{top:64px!important;padding:7px 7px 8px!important}
