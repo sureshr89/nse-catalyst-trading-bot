@@ -59,7 +59,7 @@ class GapReclaimEngine:
         return "NEUTRAL"
 
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first completed candle whose body reclaims today's open after PDC failure."""
+        """Return the first completed candle that crosses and closes beyond today's open after PDC failure."""
         data = self._clean(df)
         if len(data) < 2:
             return None
@@ -91,13 +91,17 @@ class GapReclaimEngine:
             if not pdc_breached:
                 continue
 
-            candle_open = float(cur["Open"])
             candle_close = float(cur["Close"])
+            candle_low = float(cur["Low"])
+            candle_high = float(cur["High"])
 
-            if side == "BUY" and candle_open < today_open and candle_close > today_open:
+            # Price-action reclaim: the candle must trade through today's open
+            # and finish beyond it. The candle's own opening price is not used
+            # as a restriction, so a valid intrabar cross is not missed.
+            if side == "BUY" and candle_low <= today_open < candle_close:
                 return cur
 
-            if side == "SELL" and candle_open > today_open and candle_close < today_open:
+            if side == "SELL" and candle_high >= today_open > candle_close:
                 return cur
 
         return None
