@@ -13,7 +13,7 @@ st.markdown("""
 .metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.metric-card{background:#111b2d;border:1px solid #26344d;border-radius:10px;padding:8px;min-height:52px}.metric-label{font-size:.58rem;color:#9fb0c7}.metric-value{font-size:.84rem;color:#f4f7fb;font-weight:750;margin-top:3px}
 </style>
 """,unsafe_allow_html=True)
-render_nav(24)
+render_nav(8)
 def read(p,kind):
     try:return json.loads(p.read_text()) if kind=="json" else pd.read_csv(p)
     except Exception:return {} if kind=="json" else pd.DataFrame()
