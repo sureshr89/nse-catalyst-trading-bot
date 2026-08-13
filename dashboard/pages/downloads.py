@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import streamlit as st
 import pandas as pd
+from dashboard.nav import render_nav
 
 ROOT = Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Downloads", page_icon="⬇️", layout="wide")
@@ -10,75 +11,11 @@ st.markdown("""
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
 [data-testid="stAppViewContainer"]{background:#0b1220}
 .block-container{max-width:1420px!important;padding:.45rem .55rem 1.5rem!important}
-
-/* SINGLE STICKY 2x2 NAVIGATION. It stays together and remains visible. */
-.st-key-main_nav{
-    position:sticky!important;
-    top:0!important;
-    z-index:99999!important;
-    width:100%!important;
-    background:#0b1220!important;
-    padding:.35rem 0 .55rem!important;
-    margin:0 0 .25rem!important;
-}
-.st-key-main_nav [data-testid="stHorizontalBlock"]{
-    display:grid!important;
-    grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;
-    gap:.45rem!important;
-    width:100%!important;
-    margin:0!important;
-}
-.st-key-main_nav [data-testid="stColumn"]{
-    width:100%!important;
-    min-width:0!important;
-    max-width:none!important;
-    flex:none!important;
-}
-.st-key-main_nav [data-testid="stButton"]{width:100%!important;margin:0!important}
-.st-key-main_nav [data-testid="stButton"] button{
-    width:100%!important;
-    min-height:44px!important;
-    padding:.35rem .15rem!important;
-    box-sizing:border-box!important;
-    border:1px solid #2b3b57!important;
-    border-radius:11px!important;
-    background:#142036!important;
-    color:#e9f0f8!important;
-    font-size:.64rem!important;
-    font-weight:700!important;
-}
 [data-testid="stDownloadButton"] button{width:100%!important;min-height:48px!important;border:1px solid #2b3b57!important;border-radius:10px!important;font-weight:700!important}
 .js-plotly-plot,.js-plotly-plot *{pointer-events:none!important;touch-action:none!important}
-@media(max-width:768px){
-    .block-container{padding:.2rem .35rem 1rem!important}
-    .st-key-main_nav{padding:.25rem 0 .5rem!important}
-    .st-key-main_nav [data-testid="stHorizontalBlock"]{gap:.35rem!important}
-    .st-key-main_nav [data-testid="stButton"] button{min-height:42px!important;font-size:.60rem!important}
-}
 </style>
 """, unsafe_allow_html=True)
-
-# Exactly four navigation buttons, always rendered as a 2 x 2 block.
-def go_bot_status():
-    st.switch_page("app.py")
-def go_current_trading():
-    st.switch_page("pages/current_trading.py")
-def go_analysis():
-    st.switch_page("pages/analysis.py")
-def go_downloads():
-    st.switch_page("pages/downloads.py")
-
-with st.container(key="main_nav"):
-    a, b = st.columns(2, gap="small")
-    with a:
-        st.button("🟢 BOT STATUS", key="nav_bot_status", on_click=go_bot_status, width="stretch")
-    with b:
-        st.button("📌 CURRENT TRADING", key="nav_current_trading", on_click=go_current_trading, width="stretch")
-    c, d = st.columns(2, gap="small")
-    with c:
-        st.button("📊 ANALYSIS", key="nav_analysis", on_click=go_analysis, width="stretch")
-    with d:
-        st.button("⬇️ DOWNLOADS", key="nav_downloads", on_click=go_downloads, width="stretch")
+render_nav()
 
 def existing_bytes(name):
     p = ROOT / "outputs" / name
