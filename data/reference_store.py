@@ -1,4 +1,4 @@
-"""Daily pre-market reference data: PDC and previous-day direction."""
+"""Daily pre-market reference data: PDC, previous-day direction and liquidity."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -59,9 +59,13 @@ class ReferenceStore:
         if self.path.exists():
             try:
                 saved = pd.read_csv(self.path)
-                if self._coverage_ok(saved):
+                required_columns = {
+                    "Symbol", "PDC", "PreviousDayOpen", "PreviousDayDirection",
+                    "PreviousDayVolume", "PreviousDayTurnover",
+                }
+                if self._coverage_ok(saved) and required_columns.issubset(saved.columns):
                     return saved
-                print("Ignoring incomplete saved reference data:", len(saved), "of", len(self.universe))
+                print("Ignoring incomplete/old saved reference data:", len(saved), "of", len(self.universe))
             except Exception as error:
                 print("Saved reference data could not be loaded:", error)
 
@@ -118,6 +122,8 @@ class ReferenceStore:
                         prev = completed.iloc[-1]
                         pdc = float(prev["Close"])
                         prev_open = float(prev["Open"])
+                        volume = float(prev.get("Volume", 0) or 0)
+                        turnover = round(pdc * volume, 2)
                         rows.append({
                             "Symbol": symbol,
                             "PDC": round(pdc, 4),
@@ -126,6 +132,8 @@ class ReferenceStore:
                                 "BULLISH" if pdc > prev_open else
                                 "BEARISH" if pdc < prev_open else "NEUTRAL"
                             ),
+                            "PreviousDayVolume": volume,
+                            "PreviousDayTurnover": turnover,
                         })
                     except Exception as error:
                         print("Reference error", symbol, error)
@@ -146,6 +154,7 @@ class ReferenceStore:
             return self.prepare()
         try:
             saved = pd.read_csv(self.path)
-            return saved if self._coverage_ok(saved) else self.prepare()
+            required = {"Symbol", "PDC", "PreviousDayVolume", "PreviousDayTurnover"}
+            return saved if self._coverage_ok(saved) and required.issubset(saved.columns) else self.prepare()
         except Exception:
             return self.prepare()
