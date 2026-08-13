@@ -1,7 +1,7 @@
 import streamlit as st
 
 
-def render_nav(top_offset=0):
+def render_nav(top_offset=18):
     """Render one shared 2x2 navigation that scrolls away with page content."""
     st.markdown(
         f"""
