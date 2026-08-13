@@ -1,5 +1,5 @@
 """Analysis page wrapper."""
-import importlib
+import runpy
 import sys
 from pathlib import Path
 import streamlit as st
@@ -16,7 +16,7 @@ from nav import render_nav
 st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
 render_nav(24)
 
-# Match the Analysis page cards to the compact 2x2 cards used by Current Trading.
+# Match the Analysis page cards/typography to Current Trading.
 st.markdown("""
 <style>
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
@@ -71,16 +71,18 @@ st.markdown("""
 }
 [data-testid="stAppViewContainer"] p,
 [data-testid="stAppViewContainer"] .stMarkdown{
-    font-size:1rem;
-    line-height:1.5;
+    font-size:1rem!important;
+    line-height:1.5!important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+# dashboard/analysis.py is a complete rendering script, not an importable component.
+# Execute it fresh on every Streamlit page run.  The previous import + reload approach
+# rendered the same Plotly elements twice and caused StreamlitDuplicateElementKey.
 _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
 try:
-    from dashboard import analysis as _full_analysis
-    importlib.reload(_full_analysis)
+    runpy.run_path(str(DASHBOARD_DIR / "analysis.py"), run_name="__analysis_page__")
 finally:
     st.set_page_config = _original_set_page_config
