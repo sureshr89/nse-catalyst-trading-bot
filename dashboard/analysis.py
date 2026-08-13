@@ -8,7 +8,6 @@ TRADES=ROOT/"outputs"/"trades.csv"; SIGNALS=ROOT/"outputs"/"signals.csv"; STARTI
 st.set_page_config(page_title="NSE Catalyst | Analysis",page_icon="📊",layout="wide")
 st.markdown('''<style>
 .block-container{padding-top:.7rem;padding-bottom:2rem;max-width:1500px}
-/* Plotly charts are display-only: block mouse, pointer, wheel and touch gestures. */
 [data-testid="stPlotlyChart"],.js-plotly-plot,.plot-container,.svg-container{pointer-events:none!important;touch-action:none!important;user-select:none!important;-webkit-user-select:none!important}
 [data-testid="stPlotlyChart"] canvas,[data-testid="stPlotlyChart"] svg{pointer-events:none!important;touch-action:none!important}
 </style>''',unsafe_allow_html=True)
@@ -36,9 +35,15 @@ def grouped(df,col):
     for v,g in df.groupby(col,dropna=False):
         r=stats(g);r[col]=str(v) if pd.notna(v) and str(v) else "UNKNOWN";rows.append(r)
     return pd.DataFrame(rows).sort_values("P&L",ascending=False) if rows else pd.DataFrame()
+# Use an explicit monotonically increasing key. Python id(fig) can be reused after
+# a Plotly figure is released, which caused StreamlitDuplicateElementKey and stopped
+# the entire analysis page before the remaining charts could render.
+CHART_COUNTER=0
 def chart(fig,height=340):
+    global CHART_COUNTER
+    CHART_COUNTER+=1
     fig.update_layout(height=height,margin=dict(l=10,r=10,t=55,b=12),font=dict(size=12),title_font=dict(size=16))
-    st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False,"responsive":True,"scrollZoom":False,"doubleClick":False,"dragmode":False,"staticPlot":True},key=f"static_{id(fig)}")
+    st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False,"responsive":True,"scrollZoom":False,"doubleClick":False,"dragmode":False,"staticPlot":True},key=f"analysis_chart_{CHART_COUNTER}")
 def pie(df,col,title,height=330):
     if df.empty or col not in df:return
     x=df[col].fillna("UNKNOWN").astype(str).value_counts().reset_index();x.columns=[col,"Count"];chart(px.pie(x,names=col,values="Count",hole=.45,title=title),height)
@@ -67,7 +72,6 @@ if not ledger.empty:
     st.dataframe(ledger.rename(columns={"pnl":"Daily P&L"})[["Date","Daily P&L","Cumulative P&L","Equity","Result"]].iloc[::-1],use_container_width=True,hide_index=True)
 else:st.info("No dated closed actual trades yet.")
 st.subheader("📌 Trade & Strategy KPIs");c1,c2,c3,c4=st.columns(4);c1.metric("Actual Trades",a["Trades"]);c2.metric("Win Rate",f'{a["Win Rate %"]:.1f}%');c3.metric("Average P&L / Trade",f'₹{a["Avg P&L"]:,.2f}');c4.metric("Profit Factor",f'{a["Profit Factor"]:.2f}');c1,c2,c3,c4=st.columns(4);c1.metric("Wins",a["Wins"]);c2.metric("Losses",a["Losses"]);c3.metric("Average Win",f'₹{a["Avg Win"]:,.2f}');c4.metric("Average Loss",f'₹{a["Avg Loss"]:,.2f}')
-# Remaining research charts use the same chart() function, so every chart receives staticPlot and touch-blocking CSS.
 st.subheader("📈 Trade-Level Performance")
 if not actual.empty:
     curve=actual.copy();tc=next((c for c in ["exit_time","entry_time"] if c in curve),None)
