@@ -29,7 +29,7 @@ class TradeJournal:
         "breakout_level", "pdc", "today_open", "today_low", "today_high",
         "entry", "stop_loss", "target", "quantity", "risk_reward", "risk_per_share",
         "actual_risk", "position_value", "setup_type", "entry_candle_open", "entry_candle_close",
-        "approved", "reason",
+        "gap_direction", "liquidity_qualified", "approved", "reason",
     ]
 
     EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status"}
@@ -43,10 +43,7 @@ class TradeJournal:
         self._prepare_files()
 
     def _prepare_files(self):
-        for path, columns in (
-            (self.trade_file, self.TRADE_COLUMNS),
-            (self.signal_file, self.SIGNAL_COLUMNS),
-        ):
+        for path, columns in ((self.trade_file, self.TRADE_COLUMNS), (self.signal_file, self.SIGNAL_COLUMNS)):
             directory = os.path.dirname(path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
@@ -78,7 +75,6 @@ class TradeJournal:
 
     @staticmethod
     def _normalise_signal_value(value):
-        """Create a stable comparison value for signal de-duplication."""
         if value is None:
             return ""
         if isinstance(value, float):
@@ -90,16 +86,29 @@ class TradeJournal:
         except (TypeError, ValueError):
             return text.upper()
 
+    @staticmethod
+    def _signal_date(signal):
+        value = signal.get("timestamp") or signal.get("entry_time") or ""
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return ""
+            return parsed.strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+
     def signal_key(self, signal):
-        """Return the setup identity, deliberately excluding scan timestamp."""
+        """Identify one setup within one trading day and market context."""
         fields = (
             "symbol", "signal", "entry", "stop_loss", "target", "quantity",
             "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
+            "gap_direction", "nifty100_direction", "previous_day_direction",
         )
-        return tuple(self._normalise_signal_value(signal.get(field, "")) for field in fields)
+        values = tuple(self._normalise_signal_value(signal.get(field, "")) for field in fields)
+        return (self._signal_date(signal),) + values
 
     def signal_exists(self, signal):
-        """Check persistent signal history so restarts cannot create duplicates."""
+        """Check persistent signal history so 30-second scans/restarts cannot duplicate a setup."""
         try:
             df = pd.read_csv(self.signal_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
@@ -107,17 +116,14 @@ class TradeJournal:
         if df.empty:
             return False
         key = self.signal_key(signal)
-        available = [
+        for column in [
             "symbol", "signal", "entry", "stop_loss", "target", "quantity",
             "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
-        ]
-        for column in available:
+            "gap_direction", "nifty100_direction", "previous_day_direction", "timestamp",
+        ]:
             if column not in df.columns:
                 df[column] = ""
-        existing_keys = set()
-        for _, row in df.iterrows():
-            existing_keys.add(self.signal_key(row.to_dict()))
-        return key in existing_keys
+        return any(self.signal_key(row.to_dict()) == key for _, row in df.iterrows())
 
     def trade_exists(self, trade_id):
         if not trade_id:
@@ -136,21 +142,15 @@ class TradeJournal:
         trade_id = str(trade.get("trade_id", "")).strip()
         if not trade_id:
             return {"saved": False, "reason": "Missing trade_id"}
-
         row = {column: self._value(trade.get(column, "")) for column in self.TRADE_COLUMNS}
         try:
             df = pd.read_csv(self.trade_file)
         except (FileNotFoundError, pd.errors.EmptyDataError):
             df = pd.DataFrame(columns=self.TRADE_COLUMNS)
-
         for column in self.TRADE_COLUMNS:
             if column not in df.columns:
                 df[column] = ""
-
-        mask = (
-            df["trade_id"].astype(str).str.strip() == trade_id
-            if not df.empty else pd.Series(dtype=bool)
-        )
+        mask = df["trade_id"].astype(str).str.strip() == trade_id if not df.empty else pd.Series(dtype=bool)
         if not df.empty and bool(mask.any()):
             idx = df.index[mask][0]
             for column in self.TRADE_COLUMNS:
@@ -159,7 +159,6 @@ class TradeJournal:
                     df.at[idx, column] = new_value
         else:
             df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-
         df = df.reindex(columns=self.TRADE_COLUMNS)
         df.to_csv(self.trade_file, index=False)
         sync(self.trade_file, self.trade_file.replace(os.sep, "/"), f"Save paper trade {trade_id}")
@@ -204,23 +203,10 @@ class TradeJournal:
     def summary(self):
         df = self.get_trades()
         if df.empty:
-            return {
-                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
-                "breakeven_trades": 0, "win_rate": 0.0,
-                "total_pnl": 0.0, "average_pnl": 0.0,
-            }
-
-        if "status" in df.columns:
-            closed = df[df["status"].astype(str).str.upper() == "CLOSED"].copy()
-        else:
-            closed = df.copy()
+            return {"total_trades": 0, "winning_trades": 0, "losing_trades": 0, "breakeven_trades": 0, "win_rate": 0.0, "total_pnl": 0.0, "average_pnl": 0.0}
+        closed = df[df["status"].astype(str).str.upper() == "CLOSED"].copy() if "status" in df.columns else df.copy()
         if closed.empty:
-            return {
-                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
-                "breakeven_trades": 0, "win_rate": 0.0,
-                "total_pnl": 0.0, "average_pnl": 0.0,
-            }
-
+            return {"total_trades": 0, "winning_trades": 0, "losing_trades": 0, "breakeven_trades": 0, "win_rate": 0.0, "total_pnl": 0.0, "average_pnl": 0.0}
         pnl = pd.to_numeric(closed["pnl"], errors="coerce").fillna(0.0)
         total = len(pnl)
         winning = int((pnl > 0).sum())
