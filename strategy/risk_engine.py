@@ -55,7 +55,7 @@ class RiskEngine:
             return None
 
     def restore_today_trade_counts(self):
-        """Restore today's accepted entries so a restart cannot reset stock limits."""
+        """Restore today's executed entries; hypothetical capital-missed rows do not consume the stock limit."""
         self.trade_counts = {}
         path = Path(TRADE_LOG_FILE)
         if not path.exists():
@@ -65,11 +65,15 @@ class RiskEngine:
             if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
                 return
             today = self._today_ist()
-            for symbol, entry_time in zip(df["symbol"], df["entry_time"]):
+            for row in df.itertuples(index=False):
+                entry_time = getattr(row, "entry_time", "")
                 entry_date = self._entry_date_ist(entry_time)
                 if entry_date != today:
                     continue
-                key = str(symbol).strip().upper()
+                status = str(getattr(row, "status", "")).strip().upper()
+                if status.startswith("MISSED_CAPITAL"):
+                    continue
+                key = str(getattr(row, "symbol", "")).strip().upper()
                 if key:
                     self.trade_counts[key] = self.trade_counts.get(key, 0) + 1
         except Exception:
