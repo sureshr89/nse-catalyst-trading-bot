@@ -1,7 +1,9 @@
 """Persistence bridge for Streamlit's ephemeral filesystem.
 
-Runtime CSV/JSON state is stored on a dedicated Git branch so data persistence
-does not trigger a redeployment of the Streamlit app's ``main`` branch.
+Runtime data can be persisted to a dedicated Git branch, but public repositories
+are blocked by default because trading history should not become public data.
+For a durable private setup, use a private repository or a private external store
+such as Google Drive/database.
 """
 
 import base64
@@ -13,24 +15,37 @@ import urllib.request
 from pathlib import Path
 
 REPO = os.getenv("GITHUB_REPOSITORY", "sureshr89/nse-catalyst-trading-bot")
-# Data must not be written to the code/deployment branch. A separate branch
-# prevents a trade update from causing a Streamlit Cloud redeploy.
 BRANCH = os.getenv("GITHUB_DATA_BRANCH", "data")
 TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+ALLOW_PUBLIC_DATA = os.getenv("GITHUB_ALLOW_PUBLIC_DATA", "false").strip().lower() == "true"
 API_ROOT = f"https://api.github.com/repos/{REPO}/contents"
+_REPO_PRIVATE = None
 _LAST_SIGNAL_SYNC = 0.0
 
 
+def _repo_is_private():
+    global _REPO_PRIVATE
+    if _REPO_PRIVATE is not None:
+        return _REPO_PRIVATE
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO}",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "nse-catalyst-trading-bot"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        _REPO_PRIVATE = bool(payload.get("private", False))
+    except Exception:
+        _REPO_PRIVATE = False
+    return _REPO_PRIVATE
+
+
 def enabled():
-    return bool(TOKEN)
+    return bool(TOKEN) and (_repo_is_private() or ALLOW_PUBLIC_DATA)
 
 
 def _request(url, method="GET", payload=None):
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "nse-catalyst-trading-bot",
-        "X-GitHub-Api-Version": "2026-03-10",
-    }
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "nse-catalyst-trading-bot", "X-GitHub-Api-Version": "2026-03-10"}
     if TOKEN:
         headers["Authorization"] = f"Bearer {TOKEN}"
     data = None
@@ -62,11 +77,7 @@ def restore(local_path, repo_path):
 
 
 def sync(local_path, repo_path, message):
-    """Push local data to the dedicated data branch.
-
-    Scanner-signal writes are rate-limited to once/minute. Code remains on main;
-    this branch is intentionally data-only so persistence cannot redeploy the app.
-    """
+    """Push local data to the dedicated data branch when explicitly allowed."""
     global _LAST_SIGNAL_SYNC
     if not enabled():
         return False
@@ -79,8 +90,7 @@ def sync(local_path, repo_path, message):
     if not path.exists():
         return False
     try:
-        content = path.read_bytes()
-        encoded = base64.b64encode(content).decode("ascii")
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         url = f"{API_ROOT}/{repo_path}"
         try:
             current = _request(f"{url}?ref={BRANCH}")
@@ -90,11 +100,7 @@ def sync(local_path, repo_path, message):
                 sha = None
             else:
                 raise
-        payload = {
-            "message": message,
-            "content": encoded,
-            "branch": BRANCH,
-        }
+        payload = {"message": message, "content": encoded, "branch": BRANCH}
         if sha:
             payload["sha"] = sha
         _request(url, method="PUT", payload=payload)
