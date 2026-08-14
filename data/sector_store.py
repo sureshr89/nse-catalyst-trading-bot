@@ -1,4 +1,4 @@
-"""Cached sector grouping for the NIFTY 250 scanner universe."""
+"""Sector classification for the active NIFTY 500 scanner universe."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -12,11 +12,11 @@ MIN_COVERAGE = 0.95
 
 
 class SectorStore:
-    """Prepare sector buckets once per IST date for the active scanner universe."""
+    """Prepare sector buckets once per IST date for NIFTY 500."""
 
     def __init__(self, universe_df):
         self.universe = universe_df.copy()
-        self.path = Path("data") / "nifty250_sectors.csv"
+        self.path = Path("data") / "nifty500_sectors.csv"
 
     @staticmethod
     def _yahoo_sector(symbol):
@@ -43,11 +43,7 @@ class SectorStore:
             try:
                 cached = pd.read_csv(self.path)
                 prepared = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce")
-                cache_is_today = bool(
-                    not prepared.empty
-                    and prepared.notna().all()
-                    and prepared.dt.strftime("%Y-%m-%d").eq(today).all()
-                )
+                cache_is_today = bool(not prepared.empty and prepared.notna().all() and prepared.dt.strftime("%Y-%m-%d").eq(today).all())
                 symbols_match = set(cached.get("Symbol", pd.Series(dtype=str)).astype(str).str.upper()) >= set(self.universe["Symbol"].astype(str).str.upper())
                 if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows and symbols_match:
                     return cached
@@ -72,17 +68,14 @@ class SectorStore:
                 except Exception:
                     sectors[symbol] = None
 
-        result["Sector"] = result["Symbol"].map(sectors)
-        result["Sector"] = result["Sector"].fillna(result["Industry"])
+        result["Sector"] = result["Symbol"].map(sectors).fillna(result["Industry"])
         result.loc[result["Sector"] == "", "Sector"] = "UNKNOWN"
-        result["SectorSource"] = result["Symbol"].map(
-            lambda symbol: "YAHOO_SECTOR" if sectors.get(symbol) else "NIFTY_INDUSTRY_FALLBACK"
-        )
+        result["SectorSource"] = result["Symbol"].map(lambda symbol: "YAHOO_SECTOR" if sectors.get(symbol) else "NIFTY_INDUSTRY_FALLBACK")
         result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         result = result[["Symbol", "Sector", "SectorSource", "PreparedAtIST"]].drop_duplicates("Symbol").reset_index(drop=True)
 
         if len(result) < minimum_rows:
-            print(f"Sector mapping incomplete: {len(result)}/{len(self.universe)}. No cache written.")
+            print(f"Sector mapping incomplete: {len(result)}/{len(self.universe)}")
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource", "PreparedAtIST"])
 
         result.to_csv(self.path, index=False)
