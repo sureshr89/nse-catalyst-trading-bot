@@ -1,7 +1,7 @@
 import streamlit as st
 
 def render_nav(top_offset=0):
-    """Shared 2x2 navigation. Offset is used only where a page needs extra top spacing."""
+    """Shared navigation for the dashboard pages."""
     offset=max(0,int(top_offset or 0))
     st.markdown(f'''<style>
 .st-key-global_nav{{position:relative!important;margin:{offset}px 0 12px!important;padding:0!important;width:100%!important}}
@@ -22,4 +22,9 @@ def render_nav(top_offset=0):
         with r3:
             if st.button("📊 ANALYSIS",key="global_nav_analysis",use_container_width=True):st.switch_page("pages/analysis.py")
         with r4:
+            if st.button("🧠 STRATEGY INSIGHTS",key="global_nav_strategy",use_container_width=True):st.switch_page("pages/strategy_insights.py")
+        r5,r6=st.columns(2,gap="small")
+        with r5:
             if st.button("⬇️ DOWNLOADS",key="global_nav_downloads",use_container_width=True):st.switch_page("pages/downloads.py")
+        with r6:
+            st.empty()
