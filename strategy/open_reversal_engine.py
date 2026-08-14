@@ -113,20 +113,26 @@ class OpenReversalEngine:
             return None
 
         today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Open"])
-        today_low = float(today_data["Low"].min())
-        today_high = float(today_data["High"].max())
         stock_direction = self._direction(today_data)
 
         if ENABLE_SHORT and today_open > pdh:
             if sector_direction == "BEARISH" and nifty_direction == "BEARISH" and stock_direction == "BEARISH":
                 trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
                 if trigger is not None:
+                    # SL is based only on price information available through
+                    # the trigger candle, never on later candles from the scan.
+                    setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
+                    today_low = float(setup_data["Low"].min())
+                    today_high = float(setup_data["High"].max())
                     return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
 
         if ENABLE_LONG and today_open < pdl:
             if sector_direction == "BULLISH" and nifty_direction == "BULLISH" and stock_direction == "BULLISH":
                 trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
                 if trigger is not None:
+                    setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
+                    today_low = float(setup_data["Low"].min())
+                    today_high = float(setup_data["High"].max())
                     return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
         return None
 
