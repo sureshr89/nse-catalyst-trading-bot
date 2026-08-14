@@ -1,4 +1,4 @@
-"""Trade and signal journal with optional GitHub-backed persistence."""
+"""Trade and signal journal with persistent paper-trading storage."""
 
 import csv
 import os
@@ -13,23 +13,21 @@ from papertrade.persistent_storage import restore, sync
 class TradeJournal:
     TRADE_COLUMNS = [
         "trade_id", "symbol", "stock", "industry", "sector", "signal", "buy_sell",
-        "entry_time", "entry", "stop_loss", "target", "quantity",
-        "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr",
-        "pnl", "risk_per_share", "actual_risk", "position_value",
-        "breakout_level", "pdc", "today_open", "today_low", "today_high",
+        "entry_time", "entry", "stop_loss", "target", "quantity", "exit_time", "exit_price", "exit_reason",
+        "risk", "reward", "rr", "pnl", "risk_per_share", "actual_risk", "position_value",
+        "breakout_level", "pdh", "pdl", "today_open", "today_low", "today_high",
         "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
-        "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
-        "setup_type", "entry_candle_open", "entry_candle_close", "status",
+        "stock_direction", "stock_today_direction", "setup_type", "trigger_candle_open", "trigger_candle_close",
+        "trigger_close", "pdh_pdl_reached", "status",
     ]
 
     SIGNAL_COLUMNS = [
-        "timestamp", "symbol", "industry", "sector", "signal",
-        "market_direction", "nifty100_direction", "industry_direction", "sector_direction",
-        "stock_direction", "stock_today_direction", "previous_day_aligned", "previous_day_direction",
-        "breakout_level", "pdc", "today_open", "today_low", "today_high",
-        "entry", "stop_loss", "target", "quantity", "risk_reward", "risk_per_share",
-        "actual_risk", "position_value", "setup_type", "entry_candle_open", "entry_candle_close",
-        "gap_direction", "liquidity_qualified", "approved", "reason",
+        "timestamp", "symbol", "industry", "sector", "signal", "market_direction", "nifty100_direction",
+        "industry_direction", "sector_direction", "stock_direction", "stock_today_direction",
+        "pdh", "pdl", "today_open", "today_low", "today_high", "entry", "stop_loss", "target",
+        "quantity", "risk_reward", "risk_per_share", "actual_risk", "position_value", "setup_type",
+        "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached",
+        "liquidity_qualified", "nifty500_universe", "approved", "reason",
     ]
 
     EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status"}
@@ -118,9 +116,8 @@ class TradeJournal:
 
     def signal_key(self, signal):
         fields = (
-            "symbol", "signal", "entry", "stop_loss", "target", "quantity",
-            "breakout_level", "setup_type", "entry_candle_open", "entry_candle_close",
-            "gap_direction", "nifty100_direction", "previous_day_direction",
+            "symbol", "signal", "entry", "stop_loss", "target", "quantity", "breakout_level",
+            "setup_type", "trigger_candle_open", "trigger_candle_close", "pdh", "pdl",
         )
         values = tuple(self._normalise_signal_value(signal.get(field, "")) for field in fields)
         return (self._signal_date(signal),) + values
@@ -185,9 +182,6 @@ class TradeJournal:
     def log_signal(self, signal):
         if not isinstance(signal, dict):
             return {"saved": False, "reason": "Signal must be a dictionary"}
-        # Scanner candidates that fail risk checks are not useful trade records.
-        # Only approved setups are retained: these are either actually traded or
-        # can become a capital-missed trade when the paper engine has insufficient cash.
         if not bool(signal.get("approved", False)):
             return {"saved": False, "reason": "Rejected risk candidate is not journaled"}
         if self.signal_exists(signal):
@@ -224,12 +218,4 @@ class TradeJournal:
         winning = int((pnl > 0).sum())
         losing = int((pnl < 0).sum())
         breakeven = int((pnl == 0).sum())
-        return {
-            "total_trades": total,
-            "winning_trades": winning,
-            "losing_trades": losing,
-            "breakeven_trades": breakeven,
-            "win_rate": round(winning / total * 100, 2) if total else 0.0,
-            "total_pnl": round(float(pnl.sum()), 2),
-            "average_pnl": round(float(pnl.mean()), 2),
-        }
+        return {"total_trades": total, "winning_trades": winning, "losing_trades": losing, "breakeven_trades": breakeven, "win_rate": round(winning / total * 100, 2) if total else 0.0, "total_pnl": round(float(pnl.sum()), 2), "average_pnl": round(float(pnl.mean()), 2)}
