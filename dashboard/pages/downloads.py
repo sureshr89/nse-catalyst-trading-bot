@@ -102,7 +102,7 @@ def build_monthly_master_excel(month):
         for sheet_name, (frame, date_columns) in sheets.items():
             monthly = filter_month(frame, month, date_columns)
             if sheet_name == "Gap Board" and not monthly.empty:
-                gap_columns = [c for c in ["TradeDate", "Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "PreviousDayTurnover", "LiquidityQualified", "DataSnapshotIST"] if c in monthly.columns]
+                gap_columns = [c for c in ["TradeDate", "Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "GapFromPreviousClose", "GapPercentFromPreviousClose", "PreviousDayTurnover", "LiquidityQualified", "DataSnapshotIST"] if c in monthly.columns]
                 monthly = monthly[gap_columns]
             if monthly.empty:
                 monthly = pd.DataFrame({"Status": [f"No records for {month}"]})
@@ -122,6 +122,7 @@ def build_monthly_master_excel(month):
         info = pd.DataFrame([
             ["Month", month],
             ["Purpose", "NIFTY 500 paper-trading research master data"],
+            ["Strategy Gap Definition", "GAP_UP_PDH = Today's Open > PDH; GAP_DOWN_PDL = Today's Open < PDL"],
             ["Sheets", "Daily Stock Inputs, All Trades, Daily Summary, Gap Board, Signals"],
             ["Generated", pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")],
         ], columns=["Field", "Value"])
@@ -138,11 +139,11 @@ except Exception as error:
     st.warning(f"Master data refresh warning: {type(error).__name__}: {error}")
 
 st.title("⬇️ Downloads")
-st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records, premarket gap board and master research data.")
+st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records, premarket PDH/PDL gap board and master research data.")
 
 trades_data = csv_bytes("trades.csv", ["status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl", "setup_type"])
 signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type", "approved", "reason"])
-gap_data = csv_bytes("gap_analysis.csv", ["Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "PreparedAtIST"])
+gap_data = csv_bytes("gap_analysis.csv", ["Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "GapFromPreviousClose", "GapPercentFromPreviousClose", "PreparedAtIST"])
 status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive": False})
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
 diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "gap_up_count": 0, "gap_down_count": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
@@ -189,19 +190,19 @@ st.download_button("⬇️ PAPER STATE JSON", data=engine_data, file_name="nifty
 st.download_button("⬇️ SCANNER DIAGNOSTICS JSON", data=diag_data, file_name="nifty500_scanner_diagnostics.json", mime="application/json", key="download_scanner_diagnostics_json", width="stretch")
 st.download_button("⬇️ PREMARKET GAP BOARD CSV", data=gap_data, file_name="nifty500_premarket_gap_board.csv", mime="text/csv", key="download_gap_board_csv", width="stretch")
 
-st.subheader("Premarket Gap Board")
+st.subheader("Premarket Gap Board — PDH/PDL based")
 gaps = read_csv("gap_analysis.csv")
-if not gaps.empty:
+if not gaps.empty and "GapType" in gaps.columns:
     gaps["GapPercent"] = pd.to_numeric(gaps["GapPercent"], errors="coerce")
     a, b = st.columns(2)
     with a:
-        st.markdown("**🟢 Gap Ups**")
-        st.dataframe(gaps[gaps["GapType"].eq("GAP_UP")].sort_values("GapPercent", ascending=False).head(30), width="stretch", hide_index=True, height=350)
+        st.markdown("**🟢 Gap Ups — Open > PDH**")
+        st.dataframe(gaps[gaps["GapType"].eq("GAP_UP_PDH")].sort_values("GapPercent", ascending=False).head(30), width="stretch", hide_index=True, height=350)
     with b:
-        st.markdown("**🔴 Gap Downs**")
-        st.dataframe(gaps[gaps["GapType"].eq("GAP_DOWN")].sort_values("GapPercent").head(30), width="stretch", hide_index=True, height=350)
+        st.markdown("**🔴 Gap Downs — Open < PDL**")
+        st.dataframe(gaps[gaps["GapType"].eq("GAP_DOWN_PDL")].sort_values("GapPercent").head(30), width="stretch", hide_index=True, height=350)
 else:
-    st.info("The gap board is created automatically from the first market data after 09:15 and prepared before the 09:45 entry window.")
+    st.info("The PDH/PDL gap board is created automatically from the first market data after 09:15 and prepared before the 09:45 entry window.")
 
 st.subheader("NIFTY 500 Sector Classification")
 try:
