@@ -1,6 +1,6 @@
 from pathlib import Path
 import json,sys
-from datetime import datetime
+from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -32,8 +32,15 @@ try:
     live=ensure_bot_running()
     if isinstance(live,dict):status.update(live)
 except Exception as error:
-    status["error"]=f"Worker startup/status error: {type(error).__name__}: {error}"
-worker=bool(status.get("worker_alive",False)); bot=str(status.get("status","STARTING")).upper()
+    status.setdefault("error",f"Worker status unavailable: {type(error).__name__}: {error}")
+def heartbeat_alive(value,max_age_seconds=90):
+    try:
+        stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        return (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds()<=max_age_seconds
+    except Exception:return False
+worker=bool(status.get("worker_alive",False))
+bot=str(status.get("status","STARTING")).upper()
 if worker and bot=="WAITING":st.warning("🟡 BOT READY • WAITING FOR MARKET SESSION")
 elif worker:st.success("🟢 BOT RUNNING • PAPER TRADING")
 else:st.warning("🟠 WORKER NOT CONFIRMED ALIVE")
