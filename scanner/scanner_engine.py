@@ -22,6 +22,7 @@ class ScannerEngine:
         self.opening_candidates = pd.DataFrame()
         self.gap_analysis = pd.DataFrame()
         self.universe_market_data = {}
+        self.nifty500_market_data = pd.DataFrame()
         self._prepared_date = None
         self._opening_prepared_date = None
         self.diagnostics = self._empty_diagnostics()
@@ -34,8 +35,8 @@ class ScannerEngine:
             "sector_alignment_passed": 0, "strategy_setup_passed": 0,
             "stock_alignment_passed": 0, "final_signals": 0,
             "gap_up_count": 0, "gap_down_count": 0, "gap_data_count": 0,
-            "nifty500_bullish": 0, "nifty500_bearish": 0, "nifty500_neutral": 0,
-            "nifty500_coverage": 0,
+            "nifty500_direction": "UNKNOWN", "nifty500_bullish": 0,
+            "nifty500_bearish": 0, "nifty500_neutral": 0, "nifty500_coverage": 0,
             "rejections": {"missing_data": 0, "liquidity": 0, "opening_setup": 0,
                            "market_alignment": 0, "sector_alignment": 0,
                            "pdh_pdl_not_reached": 0, "no_open_cross": 0,
@@ -116,8 +117,6 @@ class ScannerEngine:
         self.diagnostics["rejections"]["liquidity"] = int((~refs["LiquidityQualified"]).sum())
         symbols = refs["Symbol"].astype(str).str.upper().tolist()
         market_data = self.price_data.get_multi_1m(symbols)
-        # Keep the full-universe intraday data so market and sector alignment are
-        # calculated from the NIFTY 500 universe, not only from selected candidates.
         self.universe_market_data = market_data
         rows, gap_rows = [], []
 
@@ -202,25 +201,17 @@ class ScannerEngine:
         opening, close = float(data.iloc[0]["Open"]), float(data.iloc[-1]["Close"])
         return "BULLISH" if close > opening else "BEARISH" if close < opening else "NEUTRAL"
 
-    def _nifty500_direction(self, market_data):
-        """Calculate breadth direction from the full available NIFTY 500 universe."""
-        counts = {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0}
-        for df in market_data.values():
-            direction = self._direction(df)
-            if direction in counts:
-                counts[direction] += 1
-        coverage = counts["BULLISH"] + counts["BEARISH"] + counts["NEUTRAL"]
-        self.diagnostics["nifty500_bullish"] = counts["BULLISH"]
-        self.diagnostics["nifty500_bearish"] = counts["BEARISH"]
-        self.diagnostics["nifty500_neutral"] = counts["NEUTRAL"]
-        self.diagnostics["nifty500_coverage"] = coverage
-        if coverage == 0:
-            return "UNKNOWN"
-        if counts["BULLISH"] > counts["BEARISH"] and counts["BULLISH"] > counts["NEUTRAL"]:
-            return "BULLISH"
-        if counts["BEARISH"] > counts["BULLISH"] and counts["BEARISH"] > counts["NEUTRAL"]:
-            return "BEARISH"
-        return "NEUTRAL"
+    def _nifty500_direction(self):
+        """Use the actual NIFTY 500 index candle: green=open<close, red=open>close."""
+        data = self.price_data.get_index_1m("^CRSLDX")
+        self.nifty500_market_data = data
+        direction = self._direction(data)
+        self.diagnostics["nifty500_direction"] = direction
+        self.diagnostics["nifty500_coverage"] = 1 if direction in {"BULLISH", "BEARISH", "NEUTRAL"} else 0
+        self.diagnostics["nifty500_bullish"] = 1 if direction == "BULLISH" else 0
+        self.diagnostics["nifty500_bearish"] = 1 if direction == "BEARISH" else 0
+        self.diagnostics["nifty500_neutral"] = 1 if direction == "NEUTRAL" else 0
+        return direction
 
     def _sector_directions(self, market_data):
         """Calculate each sector from all available NIFTY 500 stocks in that sector."""
@@ -262,8 +253,8 @@ class ScannerEngine:
         if candidates.empty:
             return self._finish()
 
-        # IMPORTANT: market alignment is NIFTY 500 breadth, not the NIFTY 50 index.
-        market_direction = self._nifty500_direction(self.universe_market_data)
+        # NIFTY 500 alignment is the actual NIFTY 500 index candle, not breadth.
+        market_direction = self._nifty500_direction()
         selected = candidates.copy()
         if REQUIRE_MARKET_ALIGNMENT:
             expected = selected["OpeningSetup"].map({"BUY_PDH_TO_OPEN": "BULLISH", "SELL_PDL_TO_OPEN": "BEARISH"})
@@ -273,7 +264,7 @@ class ScannerEngine:
         if selected.empty:
             return self._finish()
 
-        # Use the full NIFTY 500 dataset for sector breadth, not candidate-only data.
+        # Sector alignment remains calculated from the full NIFTY 500 universe.
         sector_directions = self._sector_directions(self.universe_market_data)
         reference_by_symbol = self.references.set_index("Symbol").to_dict("index")
         sector_map = dict(zip(self.sectors.get("Symbol", []), self.sectors.get("Sector", []))) if not self.sectors.empty else {}
@@ -317,6 +308,7 @@ class ScannerEngine:
                 "gap_from_previous_close": opening.get("GapFromPreviousClose"),
                 "gap_percent_from_previous_close": opening.get("GapPercentFromPreviousClose"),
                 "pdh_pdl_gap": True,
+                "nifty500_direction": market_direction,
             })
             signals.append(signal)
 
