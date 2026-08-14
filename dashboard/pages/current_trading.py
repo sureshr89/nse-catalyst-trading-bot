@@ -30,7 +30,7 @@ def heartbeat_alive(value,max_age_seconds=90):
         if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=INDIA_TZ)
         return 0 <= (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds() <= max_age_seconds
     except Exception:return False
-s=read(ROOT/"outputs/bot_status.json","json");state=read(ROOT/"outputs/paper_engine_state.json","json");pos=state.get("open_positions",{}) or {};trades=read(ROOT/"outputs/trades.csv","csv")
+s=read(ROOT/"outputs/bot_status.json","json");state=read(ROOT/"outputs/paper_engine_state.json","json");pos=state.get("open_positions",{}) or {};trades=read(ROOT/"outputs/trades.csv","csv");diag=read(ROOT/"outputs/scanner_diagnostics.json","json")
 closed=trades[trades["status"].astype(str).str.upper().eq("CLOSED")].copy() if not trades.empty and "status" in trades.columns else pd.DataFrame()
 if not closed.empty and "pnl" in closed.columns:closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
 worker=bool(s.get("worker_alive")) and heartbeat_alive(s.get("heartbeat"))
@@ -43,6 +43,37 @@ if pos:
     for symbol,p in pos.items():rows.append({"Stock":symbol,"Side":str(p.get("signal","")).upper(),"Entry":p.get("entry"),"SL":p.get("stop_loss"),"Target":p.get("target"),"Qty":p.get("quantity"),"Risk":p.get("actual_risk",p.get("risk")),"R:R":p.get("rr",p.get("risk_reward",1.25)),"Entry Time":p.get("entry_time"),"Setup":p.get("setup_type","GAP_FAILURE_OPEN_RECLAIM"),"PDC":p.get("pdc"),"Today Open":p.get("today_open"),"Today Low":p.get("today_low"),"Today High":p.get("today_high")})
     st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
 else:st.info("No open paper positions.")
+st.subheader("SCANNER FILTER BREAKDOWN")
+if diag:
+    grid([
+        ("Stocks Scanned",diag.get("stocks_scanned",0)),
+        ("Liquidity Passed",diag.get("liquidity_passed",0)),
+        ("Gap + Previous Day Passed",diag.get("gap_previous_day_passed",0)),
+        ("NIFTY Alignment Passed",diag.get("nifty_alignment_passed",0)),
+        ("Sector Alignment Passed",diag.get("sector_alignment_passed",0)),
+        ("Strategy Setup Passed",diag.get("strategy_setup_passed",0)),
+        ("Stock Alignment Passed",diag.get("stock_alignment_passed",0)),
+        ("FINAL SIGNALS",diag.get("final_signals",0)),
+    ])
+    rejections=diag.get("rejections",{}) or {}
+    st.subheader("Top Rejection Reasons")
+    rejection_labels=[
+        ("Sector Alignment", "sector_alignment"),
+        ("No Gap Failure", "no_gap_failure"),
+        ("No Open Reclaim", "no_open_reclaim"),
+        ("Stock Alignment", "stock_alignment"),
+        ("Stock Today Direction", "stock_today_direction"),
+        ("Strategy Setup", "strategy_setup"),
+        ("NIFTY Alignment", "nifty_alignment"),
+        ("Gap + Previous Day", "gap_previous_day"),
+        ("Missing Data", "missing_data"),
+    ]
+    ranked=sorted(((label,int(rejections.get(key,0) or 0)) for label,key in rejection_labels),key=lambda x:x[1],reverse=True)
+    ranked=[item for item in ranked if item[1]>0]
+    if ranked:grid(ranked)
+    else:st.info("No rejection reasons recorded yet. The next scanner cycle will populate them.")
+else:
+    st.info("Scanner filter diagnostics will appear after the next completed scanner cycle.")
 st.subheader("Latest Closed Trade")
 if not closed.empty:
     t=closed.iloc[-1]
