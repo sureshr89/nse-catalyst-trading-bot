@@ -16,12 +16,12 @@ from dashboard.style import load_css
 
 st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
 st.markdown(load_css(), unsafe_allow_html=True)
-render_nav(24)
+render_nav(0)
 
 st.markdown("""
 <style>
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
-[data-testid="stPlotlyChart"],.js-plotly-plot,.plot-container,.svg-container,[data-testid="stPlotlyChart"] canvas,[data-testid="stPlotlyChart"] svg{pointer-events:none!important;touch-action:none!important;user-select:none!important;-webkit-user-select:none!important}
+/* Plotly zoom/pinch is disabled in dashboard/analysis.py via staticPlot. */
 </style>
 """, unsafe_allow_html=True)
 
