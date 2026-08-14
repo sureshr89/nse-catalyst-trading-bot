@@ -91,7 +91,27 @@ class PriceData:
             return pd.DataFrame()
 
     def get_1m(self, symbol):
+        """Return completed 1-minute candles for strategy/exit monitoring."""
         return self.get_candles(symbol, "1m", "1d")
+
+    def get_latest_available_1m(self, symbol):
+        """Return the latest available 1-minute row, including the current minute.
+
+        This is used only for the mandatory 15:00 square-off price. Strategy
+        decisions continue to use completed candles so an unfinished candle can
+        never create an entry signal.
+        """
+        try:
+            data = self._clean_data(yf.download(
+                tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
+                auto_adjust=False, progress=False, threads=False, prepost=False,
+                timeout=self.download_timeout,
+            ))
+            data = self.today_only(data)
+            return None if data.empty else data.iloc[-1].to_dict()
+        except Exception as error:
+            print(f"Latest available price failed for {symbol}: {error}")
+            return None
 
     def get_5m(self, symbol):
         return self.get_candles(symbol, "5m", "1d")
