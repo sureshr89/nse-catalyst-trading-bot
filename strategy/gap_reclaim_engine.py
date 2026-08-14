@@ -8,6 +8,7 @@ import pandas as pd
 from config.settings import ENABLE_LONG, ENABLE_SHORT
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+ENTRY_MAX_DISTANCE_PCT = 0.20  # Entry must remain close to today's Open.
 
 
 class GapReclaimEngine:
@@ -60,8 +61,21 @@ class GapReclaimEngine:
             return "BEARISH"
         return "NEUTRAL"
 
+    @staticmethod
+    def _near_open(price, today_open):
+        """Reject entries that have moved materially away from today's Open."""
+        if today_open <= 0:
+            return False
+        distance_pct = abs(float(price) - float(today_open)) / float(today_open) * 100.0
+        return distance_pct <= ENTRY_MAX_DISTANCE_PCT
+
     def _entry_candle(self, df, today_open, pdc, side):
-        """Return the first later completed candle that reclaims today's open after a PDC failure."""
+        """Return the first later completed candle that reclaims today's open after a PDC failure.
+
+        The completed trigger candle must also finish close to today's Open. This prevents
+        a signal from being generated after price has already moved materially away from
+        the Open (for example 9,273 against an Open of 9,297).
+        """
         data = self._clean(df)
         if len(data) < 2:
             return None
@@ -104,10 +118,18 @@ class GapReclaimEngine:
             candle_close = float(cur["Close"])
 
             if side == "BUY" and candle_low < today_open and candle_close > today_open:
-                return cur
+                if self._near_open(candle_close, today_open):
+                    return cur
+                # A valid reclaim happened, but the close is too far above Open.
+                # Do not chase it; wait for a new valid setup.
+                continue
 
             if side == "SELL" and candle_high > today_open and candle_close < today_open:
-                return cur
+                if self._near_open(candle_close, today_open):
+                    return cur
+                # A valid rejection happened, but the close is too far below Open.
+                # Do not chase it; wait for a new valid setup.
+                continue
 
             if side == "BUY" and candle_low < pdc:
                 pdc_breached = True
@@ -171,6 +193,8 @@ class GapReclaimEngine:
             "today_open": round(today_open, 2),
             "today_low": round(today_low, 2),
             "today_high": round(today_high, 2),
+            "entry_distance_from_open_pct": round(abs(entry - today_open) / today_open * 100.0, 4),
+            "entry_max_distance_pct": ENTRY_MAX_DISTANCE_PCT,
             "sector_direction": sector_direction,
             "industry_direction": sector_direction,
             "market_direction": nifty_direction,
