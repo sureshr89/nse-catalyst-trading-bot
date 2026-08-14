@@ -33,14 +33,16 @@ status = load(ROOT / "outputs/bot_status.json")
 state = load(ROOT / "outputs/paper_engine_state.json")
 try:
     live = ensure_worker_process()
-    if isinstance(live, dict): status.update(live)
+    if isinstance(live, dict):
+        status.update(live)
 except Exception as error:
     status.setdefault("error", "Worker launcher: " + type(error).__name__ + ": " + str(error))
 
 def heartbeat_alive(value, max_age_seconds=90):
     try:
         stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if stamp.tzinfo is None: stamp = stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
         age = (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()
         return 0 <= age <= max_age_seconds
     except Exception:
@@ -48,7 +50,11 @@ def heartbeat_alive(value, max_age_seconds=90):
 
 worker = bool(status.get("worker_alive", False)) and heartbeat_alive(status.get("heartbeat"))
 bot = str(status.get("status", "STARTING")).upper()
-st.success("🟢 NIFTY 500 BOT RUNNING • PAPER TRADING") if worker else st.warning("🟠 NIFTY 500 WORKER NOT CONFIRMED ALIVE")
+if worker:
+    st.success("🟢 NIFTY 500 BOT RUNNING • PAPER TRADING")
+else:
+    st.warning("🟠 NIFTY 500 WORKER NOT CONFIRMED ALIVE")
+
 st.title("📈 NIFTY 500 Trading Bot")
 st.caption("PDH/PDL reaction → today's Open 1-minute reversal • Paper trading only")
 st.subheader("LIVE STATUS")
@@ -57,5 +63,6 @@ st.subheader("CAPITAL & RISK")
 grid([("Starting Capital", "₹250,000"), ("Available", f"₹{float(status.get('available_capital', 250000) or 0):,.0f}"), ("Used", f"₹{float(status.get('used_capital', 0) or 0):,.0f}"), ("Risk / Trade", "₹1,400–₹1,500"), ("R:R", "1:1.25"), ("Max Positions", 2)])
 st.subheader("SCANNER ACTIVITY")
 grid([("NIFTY 500 Scans", status.get("scan_count", 0)), ("Cycle Count", status.get("cycle_count", 0)), ("Last Scan", status.get("last_scan") or "—"), ("Scan Duration", f'{float(status.get("scan_duration_seconds", 0) or 0):.2f}s'), ("Last Completed", status.get("last_scan_completed") or "—")])
-if status.get("error"): st.error(str(status.get("error")))
+if status.get("error"):
+    st.error(str(status.get("error")))
 render_daily_footer()
