@@ -13,10 +13,8 @@ render_nav()
 
 def existing_bytes(name):
     path = ROOT / "outputs" / name
-    try:
-        return path.read_bytes() if path.exists() else None
-    except Exception:
-        return None
+    try: return path.read_bytes() if path.exists() else None
+    except Exception: return None
 
 
 def csv_bytes(name, columns):
@@ -36,22 +34,21 @@ trades_data = csv_bytes("trades.csv", ["status", "symbol", "signal", "entry_time
 signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type", "approved", "reason"])
 status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive": False})
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
-diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "liquidity_passed": 0, "final_signals": 0})
+diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "liquidity_passed": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
 
 st.subheader("Paper Trading Files")
-st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
-st.download_button("⬇️ SIGNALS CSV", data=signals_data, file_name="signals.csv", mime="text/csv", key="download_signals_csv", width="stretch")
-st.download_button("⬇️ BOT STATUS JSON", data=status_data, file_name="bot_status.json", mime="application/json", key="download_bot_status_json", width="stretch")
-st.download_button("⬇️ PAPER STATE JSON", data=engine_data, file_name="paper_engine_state.json", mime="application/json", key="download_paper_engine_json", width="stretch")
-st.download_button("⬇️ SCANNER DIAGNOSTICS JSON", data=diag_data, file_name="scanner_diagnostics.json", mime="application/json", key="download_scanner_diagnostics_json", width="stretch")
+st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="nifty500_trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
+st.download_button("⬇️ SIGNALS CSV", data=signals_data, file_name="nifty500_pdh_pdl_signals.csv", mime="text/csv", key="download_signals_csv", width="stretch")
+st.download_button("⬇️ BOT STATUS JSON", data=status_data, file_name="nifty500_bot_status.json", mime="application/json", key="download_bot_status_json", width="stretch")
+st.download_button("⬇️ PAPER STATE JSON", data=engine_data, file_name="nifty500_paper_engine_state.json", mime="application/json", key="download_paper_engine_json", width="stretch")
+st.download_button("⬇️ SCANNER DIAGNOSTICS JSON", data=diag_data, file_name="nifty500_scanner_diagnostics.json", mime="application/json", key="download_scanner_diagnostics_json", width="stretch")
 
 st.subheader("NIFTY 500 Sector Classification")
 try:
     from data.stock_universe import StockUniverse
     from data.sector_store import SectorStore
     universe = StockUniverse().get_dataframe(refresh=False)
-    if universe.empty:
-        universe = StockUniverse().get_dataframe(refresh=True)
+    if universe.empty: universe = StockUniverse().get_dataframe(refresh=True)
     mapping = SectorStore(universe).load()
 except Exception:
     mapping = pd.DataFrame()
