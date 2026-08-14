@@ -22,9 +22,4 @@ def render_nav(top_offset=0):
         with r3:
             if st.button("📊 ANALYSIS",key="global_nav_analysis",use_container_width=True):st.switch_page("pages/analysis.py")
         with r4:
-            if st.button("🧠 STRATEGY INSIGHTS",key="global_nav_strategy",use_container_width=True):st.switch_page("pages/strategy_insights.py")
-        r5,r6=st.columns(2,gap="small")
-        with r5:
             if st.button("⬇️ DOWNLOADS",key="global_nav_downloads",use_container_width=True):st.switch_page("pages/downloads.py")
-        with r6:
-            st.empty()
