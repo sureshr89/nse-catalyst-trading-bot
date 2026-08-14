@@ -13,7 +13,7 @@ from streamlit_autorefresh import st_autorefresh
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from worker_service import ensure_worker_process
+from bot_runner import ensure_bot_running
 
 st.set_page_config(page_title="NSE Catalyst | NIFTY 500 Bot", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st_autorefresh(interval=5000, key="live")
@@ -32,7 +32,7 @@ render_nav()
 status = load(ROOT / "outputs/bot_status.json")
 state = load(ROOT / "outputs/paper_engine_state.json")
 try:
-    live = ensure_worker_process()
+    live = ensure_bot_running()
     if isinstance(live, dict):
         status.update(live)
 except Exception as error:
