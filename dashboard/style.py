@@ -33,7 +33,13 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"]{color:#F4F7FB!
 .stTabs [aria-selected="true"]{background:#1a2942!important;color:#F4F7FB!important;border-color:#3b5278!important}
 .stTabs [data-baseweb="tab-highlight"]{display:none}
 .stPlotlyChart{border:1px solid #1f2c42;border-radius:10px;overflow:hidden;background:#101724}
-.stDataFrame{border-radius:10px} footer,header{visibility:hidden}
-@media(max-width:768px){.analysis-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.analysis-kpi{min-height:54px}.analysis-kpi strong{font-size:.86rem}.stTabs [data-baseweb="tab"]{font-size:.71rem;padding:0 10px;height:36px}.block-container{padding-left:.65rem;padding-right:.65rem}}
+.stDataFrame{border-radius:10px}
+.daily-motivation{margin-top:26px;padding:15px 14px;border:1px solid #2b3b57;border-radius:12px;background:linear-gradient(180deg,#142036,#101824);text-align:center}
+.daily-motivation-label{font-size:.68rem;font-weight:700;letter-spacing:.08em;color:#8fa6c4;margin-bottom:7px}
+.daily-motivation-quote{font-size:.95rem;font-weight:700;line-height:1.4;color:#f4f7fb}
+.daily-motivation-note{font-size:.70rem;color:#9fb0c7;margin-top:7px}
+.mobile-bottom-space{height:120px}
+footer,header{visibility:hidden}
+@media(max-width:768px){.analysis-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.analysis-kpi{min-height:54px}.analysis-kpi strong{font-size:.86rem}.stTabs [data-baseweb="tab"]{font-size:.71rem;padding:0 10px;height:36px}.block-container{padding-left:.65rem;padding-right:.65rem}.daily-motivation{margin-top:22px;padding:13px 11px}.daily-motivation-quote{font-size:.88rem}.mobile-bottom-space{height:150px}}
 </style>
 """
