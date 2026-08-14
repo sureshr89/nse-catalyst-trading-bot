@@ -88,11 +88,14 @@ def monthly_record_counts():
 
 
 def build_monthly_master_excel(month):
+    # The Gap Board sheet uses the durable daily-stock master, not only the
+    # current day's gap_analysis.csv, so historical gap data is retained.
+    daily_stock = read_csv("MASTER_DAILY_STOCK_DATA.csv")
     sheets = {
-        "Daily Stock Inputs": (read_csv("MASTER_DAILY_STOCK_DATA.csv"), ["TradeDate"]),
+        "Daily Stock Inputs": (daily_stock, ["TradeDate"]),
         "All Trades": (read_csv("MASTER_TRADES.csv"), ["TradeDate", "entry_time", "exit_time"]),
         "Daily Summary": (read_csv("MASTER_DAILY_SUMMARY.csv"), ["TradeDate"]),
-        "Gap Board": (read_csv("gap_analysis.csv"), ["PreparedAtIST"]),
+        "Gap Board": (daily_stock, ["TradeDate"]),
         "Signals": (read_csv("signals.csv"), ["timestamp"]),
     }
 
@@ -100,6 +103,9 @@ def build_monthly_master_excel(month):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, (frame, date_columns) in sheets.items():
             monthly = filter_month(frame, month, date_columns)
+            if sheet_name == "Gap Board" and not monthly.empty:
+                gap_columns = [c for c in ["TradeDate", "Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "PreviousDayTurnover", "LiquidityQualified", "DataSnapshotIST"] if c in monthly.columns]
+                monthly = monthly[gap_columns]
             if monthly.empty:
                 monthly = pd.DataFrame({"Status": [f"No records for {month}"]})
             monthly.to_excel(writer, sheet_name=sheet_name, index=False)
