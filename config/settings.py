@@ -1,4 +1,4 @@
-"""NIFTY 250 Gap-Failure + Open-Reclaim paper trading strategy."""
+"""NIFTY 500 PDH/PDL + Today's Open 1-minute reversal paper-trading strategy."""
 
 import os
 import time
@@ -7,8 +7,8 @@ os.environ["TZ"] = "Asia/Kolkata"
 if hasattr(time, "tzset"):
     time.tzset()
 
-STOCK_UNIVERSE = "NIFTY_250"
-MAX_STOCKS = 250
+STOCK_UNIVERSE = "NIFTY_500"
+MAX_STOCKS = 500
 MARKET_OPEN = "09:15"
 OBSERVATION_START = "09:15"
 PREMARKET_PREP_TIME = "09:25"
@@ -23,7 +23,7 @@ REQUIRE_STOCK_ALIGNMENT = True
 ENABLE_LONG = True
 ENABLE_SHORT = True
 
-STRATEGY_NAME = "GAP_FAILURE_OPEN_RECLAIM"
+STRATEGY_NAME = "PDH_PDL_OPEN_CROSS"
 ENTRY_TIMEFRAME = "1m"
 ENTRY_CONFIRMATION_TIMEFRAME = "1m"
 STOP_LOSS_METHOD = "TODAY_LOW_HIGH"
