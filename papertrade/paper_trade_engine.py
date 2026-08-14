@@ -13,26 +13,18 @@ from market.price_data import PriceData
 from papertrade.persistent_storage import restore_json, sync_json
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+STATE_VERSION = 2
 
 
 class PaperTradeEngine:
     """Simulated execution engine. Live trading is deliberately prohibited."""
 
     def __init__(self):
-        self.paper_trading = bool(PAPER_TRADING)
-        self.live_trading = bool(LIVE_TRADING)
-        self.trading_start = TRADING_START
-        self.last_entry_time = LAST_ENTRY_TIME
-        self.square_off_time = SQUARE_OFF_TIME
-        self.market_close = MARKET_CLOSE
-        self.open_positions = {}
-        self.closed_positions = []
-        self.trade_counter = 0
-        self.total_capital = float(TOTAL_CAPITAL)
-        self.available_capital = float(TOTAL_CAPITAL)
-        self.used_capital = 0.0
-        self.price_data = PriceData()
-        self._restore_state()
+        self.paper_trading = bool(PAPER_TRADING); self.live_trading = bool(LIVE_TRADING)
+        self.trading_start = TRADING_START; self.last_entry_time = LAST_ENTRY_TIME; self.square_off_time = SQUARE_OFF_TIME; self.market_close = MARKET_CLOSE
+        self.open_positions = {}; self.closed_positions = []; self.trade_counter = 0
+        self.total_capital = float(TOTAL_CAPITAL); self.available_capital = float(TOTAL_CAPITAL); self.used_capital = 0.0
+        self.price_data = PriceData(); self._restore_state()
 
     def _state_path(self): return os.path.join("outputs", "paper_engine_state.json")
 
@@ -65,11 +57,12 @@ class PaperTradeEngine:
             restore_json(path, path.replace(os.sep, "/"))
             if not os.path.exists(path): return
             with open(path, "r", encoding="utf-8") as file: state = json.load(file)
-            self.open_positions = state.get("open_positions", {}) or {}
-            self.closed_positions = state.get("closed_positions", []) or []
+            if int(state.get("state_version", 0) or 0) != STATE_VERSION:
+                print("Legacy paper state detected; starting clean.")
+                self._reset_state_file(path); return
+            self.open_positions = state.get("open_positions", {}) or {}; self.closed_positions = state.get("closed_positions", []) or []
             self.total_capital = float(state.get("total_capital", TOTAL_CAPITAL) or TOTAL_CAPITAL)
-            counters = [self._trade_number(p.get("trade_id")) for p in self.open_positions.values()]
-            counters += [self._trade_number(p.get("trade_id")) for p in self.closed_positions]
+            counters = [self._trade_number(p.get("trade_id")) for p in self.open_positions.values()] + [self._trade_number(p.get("trade_id")) for p in self.closed_positions]
             counter = int(state.get("trade_counter", 0) or 0)
             try:
                 journal = pd.read_csv(TRADE_LOG_FILE)
@@ -82,9 +75,16 @@ class PaperTradeEngine:
         except Exception as error:
             print(f"Paper state restore skipped: {type(error).__name__}: {error}")
 
+    @staticmethod
+    def _reset_state_file(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     def _save_state(self):
         path = self._state_path(); os.makedirs(os.path.dirname(path), exist_ok=True)
-        state = {"open_positions": self.open_positions, "closed_positions": self.closed_positions, "trade_counter": self.trade_counter, "total_capital": self.total_capital, "available_capital": self.available_capital, "used_capital": self.used_capital, "saved_at": datetime.now().isoformat()}
+        state = {"state_version": STATE_VERSION, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL", "open_positions": self.open_positions, "closed_positions": self.closed_positions, "trade_counter": self.trade_counter, "total_capital": self.total_capital, "available_capital": self.available_capital, "used_capital": self.used_capital, "saved_at": datetime.now().isoformat()}
         try:
             with open(path, "w", encoding="utf-8") as file: json.dump(state, file, ensure_ascii=False, indent=2, default=str)
             sync_json(path, path.replace(os.sep, "/"), "Save NIFTY 500 paper-trading state")
@@ -97,8 +97,7 @@ class PaperTradeEngine:
         if not self.paper_trading: return None, "Paper trading is disabled"
         if self.live_trading: return None, "Live trading must remain disabled"
         if not trade.get("approved", False): return None, "Trade has not been approved"
-        symbol = str(trade.get("symbol", "")).strip().upper(); signal = str(trade.get("signal", "")).strip().upper()
-        entry = self._number(trade.get("entry")); stop = self._number(trade.get("stop_loss")); target = self._number(trade.get("target")); quantity_number = self._number(trade.get("quantity")); actual_risk = self._number(trade.get("actual_risk"))
+        symbol = str(trade.get("symbol", "")).strip().upper(); signal = str(trade.get("signal", "")).strip().upper(); entry = self._number(trade.get("entry")); stop = self._number(trade.get("stop_loss")); target = self._number(trade.get("target")); quantity_number = self._number(trade.get("quantity")); actual_risk = self._number(trade.get("actual_risk"))
         if not symbol: return None, "Missing symbol"
         if signal not in {"BUY", "SELL"}: return None, "Invalid signal"
         if entry is None or stop is None or target is None or quantity_number is None: return None, "Invalid trade values"
@@ -151,8 +150,7 @@ class PaperTradeEngine:
                     if latest_price is not None and latest_price > 0: exit_price = latest_price
                     if latest_time is not None: exit_time = latest_time
             except Exception: pass
-        position = self.open_positions[symbol]
-        pnl = self.calculate_pnl(position["signal"], position["entry"], exit_price, position["quantity"])
+        position = self.open_positions[symbol]; pnl = self.calculate_pnl(position["signal"], position["entry"], exit_price, position["quantity"])
         position.update({"status": "CLOSED", "exit_time": exit_time, "exit_price": round(exit_price, 4), "exit_reason": reason, "pnl": pnl})
         closed = position.copy(); self.closed_positions.append(closed)
         position_value = round(float(position["entry"]) * int(position["quantity"]), 2)
@@ -172,8 +170,6 @@ class PaperTradeEngine:
         else: sl_hit, target_hit = high >= stop, low <= target
         if sl_hit: return self.close_position(symbol, stop, candle_time, "STOP_LOSS")
         if target_hit: return self.close_position(symbol, target, candle_time, "TARGET")
-        candle_hhmm = self._time_string(candle_time)
-        if candle_hhmm is not None and candle_hhmm >= self.square_off_time: return self.close_position(symbol, close, candle_time, "SQUARE_OFF")
         return None
 
     def summary(self):
