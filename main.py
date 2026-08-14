@@ -56,12 +56,18 @@ class TradingBot:
             if field in signal:position[field]=signal[field]
         return position
     def _set_market_entry(self,signal):
-        side=str(signal.get("signal","")).upper();stop=float(signal.get("stop_loss",0) or 0);trigger_close=float(signal.get("trigger_candle_close",signal.get("entry",0)) or 0);quote=self.price_data.get_latest_available_1m(str(signal.get("symbol","")))
-        if not quote:return False
-        try:market_price=float(quote.get("Close"))
-        except (TypeError,ValueError):return False
-        if market_price<=0 or (side=="BUY" and stop>=market_price) or (side=="SELL" and stop<=market_price):return False
-        signal["trigger_entry_time"]=signal.get("entry_time");signal["trigger_close"]=trigger_close;signal["market_entry_time"]=self._now().isoformat(timespec="seconds");signal["entry"]=round(market_price,2);signal["entry_time"]=signal["market_entry_time"];reward_distance=abs(market_price-stop)*float(RISK_REWARD_RATIO);signal["target"]=round(market_price+reward_distance if side=="BUY" else market_price-reward_distance,2);return True
+        """Use the completed 1-minute confirmation candle close as the paper entry."""
+        side=str(signal.get("signal","")).upper();stop=float(signal.get("stop_loss",0) or 0);trigger_close=float(signal.get("trigger_candle_close",signal.get("entry",0)) or 0);trigger_time=signal.get("entry_time")
+        if trigger_close<=0 or stop<=0 or side not in {"BUY","SELL"} or trigger_time is None:return False
+        if side=="BUY" and stop>=trigger_close:return False
+        if side=="SELL" and stop<=trigger_close:return False
+        try:
+            parsed=pd.to_datetime(trigger_time,errors="coerce")
+            if pd.isna(parsed):return False
+            if parsed.tzinfo is None:parsed=parsed.tz_localize(INDIA_TZ)
+            else:parsed=parsed.tz_convert(INDIA_TZ)
+            signal["trigger_entry_time"]=parsed.isoformat();signal["trigger_close"]=round(trigger_close,2);signal["market_entry_time"]=parsed.isoformat();signal["entry"]=round(trigger_close,2);signal["entry_time"]=parsed.isoformat();reward_distance=abs(trigger_close-stop)*float(RISK_REWARD_RATIO);signal["target"]=round(trigger_close+reward_distance if side=="BUY" else trigger_close-reward_distance,2);return True
+        except Exception:return False
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         signal["trigger_entry_time"]=signal.get("entry_time");key=self.signal_key(signal)
