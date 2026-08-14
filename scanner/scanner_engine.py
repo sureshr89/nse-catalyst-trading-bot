@@ -36,8 +36,7 @@ class ScannerEngine:
 
     def _write_gap_analysis(self, rows):
         path = Path(__file__).resolve().parents[1] / "outputs" / "gap_analysis.csv"; path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            frame = pd.DataFrame(rows); frame.to_csv(path, index=False)
+        try: pd.DataFrame(rows).to_csv(path, index=False)
         except Exception as error: print("Could not write gap analysis:", error)
 
     def _finish(self, signals=None):
@@ -94,12 +93,6 @@ class ScannerEngine:
             data=data[data["Datetime"]<=stamp]
         return ScannerEngine._direction(data)
 
-    def _nifty500_direction(self, as_of=None):
-        data=self.price_data.get_index_1m("^CRSLDX")
-        data=self.price_data.today_only(data)
-        if data.empty: return "UNKNOWN"
-        return self._direction_asof(data, as_of)
-
     def _nifty500_candle(self, as_of):
         data=self.price_data.today_only(self.price_data.get_index_1m("^CRSLDX"))
         if data.empty: return None
@@ -111,22 +104,24 @@ class ScannerEngine:
 
     def _sector_direction(self, symbol, as_of=None):
         row=self.sectors[self.sectors["Symbol"].astype(str).str.upper().eq(str(symbol).upper())] if not self.sectors.empty else pd.DataFrame()
-        if row.empty: return "UNKNOWN", None
-        sector=str(row.iloc[0].get("Sector", "UNKNOWN"))
-        # Yahoo sector indices are not guaranteed; use sector constituent direction
-        # from the same active NIFTY 500 universe, which is stable and reproducible.
-        members=self.sectors[self.sectors["Sector"].astype(str).eq(sector)]["Symbol"].astype(str).str.upper().tolist()
+        if row.empty: return "UNKNOWN", "UNKNOWN"
+        sector_name=str(row.iloc[0].get("Sector", "UNKNOWN"))
+        members=self.sectors[self.sectors["Sector"].astype(str).eq(sector_name)]["Symbol"].astype(str).str.upper().tolist()
         frames=[]
         for member in members:
             df=self.universe_market_data.get(member)
             if df is None or df.empty: continue
             d=self.price_data.today_only(df)
-            if as_of is not None: d=d[d["Datetime"]<=pd.Timestamp(as_of)]
+            if as_of is not None:
+                stamp=pd.Timestamp(as_of)
+                if stamp.tzinfo is None: stamp=stamp.tz_localize("Asia/Kolkata")
+                else: stamp=stamp.tz_convert("Asia/Kolkata")
+                d=d[d["Datetime"]<=stamp]
             if not d.empty: frames.append(d.iloc[-1])
-        if not frames: return "UNKNOWN", None
+        if not frames: return "UNKNOWN", sector_name
         green=sum(float(r["Close"])>float(r["Open"]) for r in frames); red=sum(float(r["Close"])<float(r["Open"]) for r in frames)
         direction="BULLISH" if green>red else "BEARISH" if red>green else "NEUTRAL"
-        return direction, None
+        return direction, sector_name
 
     def scan(self):
         candidates=self.prepare_opening_candidates()
@@ -135,25 +130,24 @@ class ScannerEngine:
         for _, row in candidates.iterrows():
             symbol=str(row["Symbol"]).upper(); candles=self.universe_market_data.get(symbol)
             if candles is None or candles.empty: continue
-            # Strategy trigger is evaluated first; alignment is evaluated at that exact trigger time.
             raw=self.strategy.build(symbol,candles,row["PDH"],row["PDL"],row["TodayOpen"],"UNKNOWN","UNKNOWN")
             if raw is None: continue
             trigger_time=raw.get("entry_time")
             nifty_candle=self._nifty500_candle(trigger_time)
             nifty_dir=self.strategy._candle_direction(nifty_candle)
-            sector_dir,_=self._sector_direction(symbol,trigger_time)
+            sector_dir,sector_name=self._sector_direction(symbol,trigger_time)
             side=raw["signal"]; required="BULLISH" if side=="BUY" else "BEARISH"
             self.diagnostics["nifty500_direction"]=nifty_dir
             if REQUIRE_MARKET_ALIGNMENT and nifty_dir!=required: self.diagnostics["rejections"]["market_alignment"]+=1; continue
             self.diagnostics["market_alignment_passed"]+=1
             if REQUIRE_SECTOR_ALIGNMENT and sector_dir!=required: self.diagnostics["rejections"]["sector_alignment"]+=1; continue
             self.diagnostics["sector_alignment_passed"]+=1
-            stock_dir=self.strategy._candle_direction(candles[candles["Datetime"]==pd.Timestamp(trigger_time)])
+            trigger_rows=candles[candles["Datetime"]==pd.Timestamp(trigger_time)]
+            stock_dir=self.strategy._candle_direction(trigger_rows)
             if REQUIRE_STOCK_ALIGNMENT and stock_dir!=required: self.diagnostics["rejections"]["stock_alignment"]+=1; continue
             self.diagnostics["stock_alignment_passed"]+=1
             signal=self.strategy.build(symbol,candles,row["PDH"],row["PDL"],row["TodayOpen"],sector_dir,nifty_dir,nifty_candle,None)
             if signal is not None:
-                signal.update({"industry": self.sectors.loc[self.sectors["Symbol"].eq(symbol),"Sector"].iloc[0] if not self.sectors.empty and any(self.sectors["Symbol"].eq(symbol)) else "UNKNOWN","sector": sector_dir,"nifty500_universe": True,"liquidity_qualified": True,"gap": row.get("Gap"),"gap_percent": row.get("GapPercent"),"gap_type": row.get("GapType")})
-                signals.append(signal)
-                self.diagnostics["strategy_setup_passed"]+=1
+                signal.update({"industry": sector_name,"sector": sector_name,"nifty500_universe": True,"liquidity_qualified": True,"gap": row.get("Gap"),"gap_percent": row.get("GapPercent"),"gap_type": row.get("GapType")})
+                signals.append(signal); self.diagnostics["strategy_setup_passed"]+=1
         return self._finish(signals)
