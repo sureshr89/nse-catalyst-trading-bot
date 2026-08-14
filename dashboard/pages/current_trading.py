@@ -4,8 +4,6 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-# Streamlit can execute files inside dashboard/pages with that directory as the
-# import context. Add the repository root before importing shared packages.
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -16,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from worker_service import ensure_worker_process
+from bot_runner import ensure_bot_running
 from market.price_data import PriceData
 from data.stock_universe import StockUniverse
 from data.sector_store import SectorStore
@@ -67,7 +65,6 @@ def candle_label(pct):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def live_alignment_for_positions(symbols):
-    """Display-only live alignment for the small set of signaled/open stocks."""
     symbols = [str(s).upper().replace(".NS", "") for s in symbols if str(s).strip()]
     if not symbols:
         return pd.DataFrame()
@@ -99,22 +96,13 @@ def live_alignment_for_positions(symbols):
         member_pcts = [v for v in member_pcts if v is not None]
         sector_pct = sum(member_pcts) / len(member_pcts) if member_pcts else None
         stock_pct = candle_pct(stock_candle)
-        rows.append({
-            "Stock": symbol,
-            "Sector": sector,
-            "NIFTY 500 1m %": candle_label(nifty_pct),
-            "Sector 1m %": candle_label(sector_pct),
-            "Stock 1m %": candle_label(stock_pct),
-            "NIFTY 500": "GREEN" if nifty_pct is not None and nifty_pct > 0 else "RED" if nifty_pct is not None and nifty_pct < 0 else "NEUTRAL",
-            "Stock Candle": "GREEN" if stock_pct is not None and stock_pct > 0 else "RED" if stock_pct is not None and stock_pct < 0 else "NEUTRAL",
-            "Candle Time": stock_candle.get("Datetime") if stock_candle else (nifty.get("Datetime") if nifty else "—"),
-        })
+        rows.append({"Stock": symbol, "Sector": sector, "NIFTY 500 1m %": candle_label(nifty_pct), "Sector 1m %": candle_label(sector_pct), "Stock 1m %": candle_label(stock_pct), "NIFTY 500": "GREEN" if nifty_pct is not None and nifty_pct > 0 else "RED" if nifty_pct is not None and nifty_pct < 0 else "NEUTRAL", "Stock Candle": "GREEN" if stock_pct is not None and stock_pct > 0 else "RED" if stock_pct is not None and stock_pct < 0 else "NEUTRAL", "Candle Time": stock_candle.get("Datetime") if stock_candle else (nifty.get("Datetime") if nifty else "—")})
     return pd.DataFrame(rows)
 
 
 status = read(ROOT / "outputs/bot_status.json", "json")
 try:
-    live = ensure_worker_process()
+    live = ensure_bot_running()
     if isinstance(live, dict):
         status.update(live)
 except Exception as error:
