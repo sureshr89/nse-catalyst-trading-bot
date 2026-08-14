@@ -5,9 +5,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from dashboard.nav import render_nav
 ROOT=Path(__file__).resolve().parent.parent
-sys.path.insert(0,str(ROOT))
+if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
+from dashboard.nav import render_nav
 st.set_page_config(page_title="NSE Catalyst | Bot Status",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
 st_autorefresh(interval=5000,key="live")
 def load(p,kind="json"):
@@ -29,7 +29,6 @@ render_nav()
 status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json")
 try:
     spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
-    # This main dashboard owns the single paper worker. Child pages only read status.
     live=mod.ensure_bot_running() if hasattr(mod,"ensure_bot_running") else mod.get_status()
     if isinstance(live,dict):status.update(live)
 except Exception as error:
