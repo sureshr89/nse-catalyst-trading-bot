@@ -9,7 +9,7 @@ except ImportError:
     fcntl = None
 from config import settings as _settings
 PREMARKET_PREP_TIME=str(getattr(_settings,"PREMARKET_PREP_TIME","09:25")); TRADING_START=str(getattr(_settings,"TRADING_START","09:45")); LAST_ENTRY_TIME=str(getattr(_settings,"LAST_ENTRY_TIME","14:00")); SQUARE_OFF_TIME=str(getattr(_settings,"SQUARE_OFF_TIME","15:00")); SCAN_INTERVAL_SECONDS=int(getattr(_settings,"SCAN_INTERVAL_SECONDS",30))
-INDIA_TZ=ZoneInfo("Asia/Kolkata"); PROJECT_ROOT=Path(__file__).resolve().parent; OUTPUT_DIR=PROJECT_ROOT/"outputs"; STATUS_FILE=OUTPUT_DIR/"bot_status.json"; STATUS_LOCK_FILE=OUTPUT_DIR/"bot_status.lock"; WORKER_LOCK_FILE=OUTPUT_DIR/"paper_bot.worker.lock"
+INDIA_TZ=ZoneInfo("Asia/Kolkata"); PROJECT_ROOT=Path(__file__).resolve().parent; OUTPUT_DIR=PROJECT_ROOT/"outputs"; STATUS_FILE=OUTPUT_DIR/"bot_status.json"; STATUS_LOCK_FILE=OUTPUT_DIR/"bot_status.lock"; WORKER_LOCK_FILE=OUTPUT_DIR/"paper_bot.worker.lock"; SCANNER_DIAGNOSTICS_FILE=OUTPUT_DIR/"scanner_diagnostics.json"
 _lock=threading.RLock(); _thread=None; _worker_lock_handle=None
 _state={"status":"STARTING","message":"Paper bot is starting.","last_cycle":None,"last_scan":None,"last_scan_completed":None,"scan_started_at":None,"scan_duration_seconds":None,"last_signal_count":0,"last_scan_error":None,"scanner_status":"IDLE","error":None,"worker_alive":False,"heartbeat":None,"cycle_count":0,"scan_count":0,"worker_id":None,"trading_start":TRADING_START,"last_entry_time":LAST_ENTRY_TIME,"premarket_prep_time":PREMARKET_PREP_TIME,"square_off_time":SQUARE_OFF_TIME,"scan_interval_seconds":SCAN_INTERVAL_SECONDS}
 
@@ -53,6 +53,22 @@ def _write_status(bot=None,**updates):
             except Exception: pass
         finally:_release_file_lock(status_lock)
 
+def _persist_scanner_diagnostics(bot):
+    """Persist the scanner's in-memory filter breakdown to the dashboard's absolute outputs path."""
+    try:
+        diagnostics=getattr(bot.scanner,"diagnostics",None)
+        if not isinstance(diagnostics,dict): return
+        payload=dict(diagnostics)
+        payload["rejections"]=dict(diagnostics.get("rejections",{}) or {})
+        payload["timestamp"]=_iso_now()
+        OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+        temporary=OUTPUT_DIR/f"scanner_diagnostics.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+        with open(temporary,"w",encoding="utf-8") as file:
+            json.dump(payload,file,indent=2,default=str); file.flush(); os.fsync(file.fileno())
+        os.replace(temporary,SCANNER_DIAGNOSTICS_FILE)
+    except Exception as error:
+        print("Could not persist scanner diagnostics:",error)
+
 def _ist_current_time(self): return _now().strftime("%H:%M")
 def _ist_cooldown_active(self):
     if self.cooldown_until is None:return False
@@ -67,6 +83,7 @@ def _prepare_pre_entry_candidates(bot):
     try:
         _write_status(bot,status="PREPARING",message="Preparing PDC and today's Open / gap candidates before entry time.",scanner_status="PREPARING")
         references=bot.scanner.prepare_reference_data(); candidates=bot.scanner.prepare_gap_candidates()
+        _persist_scanner_diagnostics(bot)
         if references.empty or candidates.empty:
             _write_status(bot,status="WAITING",message="Pre-entry candidate preparation incomplete; retrying before 09:45.",scanner_status="ERROR",error="PDC/today-open gap candidate coverage unavailable"); return False
         up=int((candidates["GapDirection"].astype(str).str.upper()=="GAP_UP").sum()); down=int((candidates["GapDirection"].astype(str).str.upper()=="GAP_DOWN").sum())
@@ -90,8 +107,9 @@ def _run_one_trading_day():
                 def monitored_scan():
                     scan_started=time.monotonic(); stamp=_iso_now(); _write_status(bot,scanner_status="SCANNING",last_scan=stamp,scan_started_at=stamp,last_scan_error=None,scan_count=int(_state.get("scan_count",0))+1)
                     try:
-                        result=original_scan(); _write_status(bot,last_signal_count=len(result) if isinstance(result,list) else 0); return result
+                        result=original_scan(); _persist_scanner_diagnostics(bot); _write_status(bot,last_signal_count=len(result) if isinstance(result,list) else 0); return result
                     except Exception as error:
+                        _persist_scanner_diagnostics(bot)
                         _write_status(bot,last_scan_error=f"{type(error).__name__}: {error}",error=f"Scanner error: {type(error).__name__}: {error}"); raise
                     finally:_write_status(bot,scanner_status="IDLE",last_scan_completed=_iso_now(),scan_duration_seconds=round(time.monotonic()-scan_started,2))
                 bot.scanner.scan=monitored_scan; bot.run_cycle()
@@ -116,8 +134,6 @@ def _run_bot():
                 else:
                     _write_status(status="WAITING",message="Market session finished. Waiting for the next Indian market session.",scanner_status="IDLE",error=None); time.sleep(30)
             except Exception as error:
-                # NEVER let a single scanner/data/journal exception kill the worker.
-                # Keep the worker thread alive and let the next cycle retry.
                 message=f"Worker cycle error: {type(error).__name__}: {error}"
                 _write_status(status="ERROR",message="Trading cycle failed; worker remains alive and will retry.",scanner_status="ERROR",error=message,last_scan_error=message)
                 print(message); traceback.print_exc()
