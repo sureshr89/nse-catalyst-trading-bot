@@ -29,8 +29,9 @@ render_nav()
 status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json")
 try:
     spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
-    if hasattr(mod,"get_status"):
-        live=mod.get_status();status.update(live if isinstance(live,dict) else {})
+    # This main dashboard owns the single paper worker. Child pages only read status.
+    live=mod.ensure_bot_running() if hasattr(mod,"ensure_bot_running") else mod.get_status()
+    if isinstance(live,dict):status.update(live)
 except Exception as error:
     status.setdefault("error",f"Worker status unavailable: {type(error).__name__}: {error}")
 def heartbeat_alive(value,max_age_seconds=90):
