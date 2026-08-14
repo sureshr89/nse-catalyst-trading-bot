@@ -9,12 +9,17 @@ import pandas as pd
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
+from worker_service import ensure_worker_process
 from master_data import build_master_data
 
 ROOT = Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Downloads", page_icon="⬇️", layout="wide")
 st.markdown(load_css(), unsafe_allow_html=True)
 render_nav()
+try:
+    ensure_worker_process()
+except Exception as error:
+    st.warning(f"Worker launcher: {type(error).__name__}: {error}")
 
 
 def existing_bytes(name):
@@ -44,7 +49,6 @@ def read_csv(name):
 
 
 def _month_series(frame, columns):
-    """Return YYYY-MM values from the first usable date column."""
     for column in columns:
         if column in frame.columns:
             values = pd.to_datetime(frame[column], errors="coerce")
@@ -61,14 +65,12 @@ def filter_month(frame, month, date_columns):
 
 
 def last_six_calendar_months():
-    """Always show six recent calendar months, even if some have no records yet."""
     now = datetime.now()
     first = now.replace(day=1)
     return [(first - relativedelta(months=i)).strftime("%Y-%m") for i in range(6)]
 
 
 def monthly_record_counts():
-    """Small record-count lookup used by the six-month download table."""
     counts = {m: 0 for m in last_six_calendar_months()}
     sources = [
         ("MASTER_DAILY_STOCK_DATA.csv", ["TradeDate"]),
@@ -86,7 +88,6 @@ def monthly_record_counts():
 
 
 def build_monthly_master_excel(month):
-    """Create only the selected month's workbook, keeping downloads small."""
     sheets = {
         "Daily Stock Inputs": (read_csv("MASTER_DAILY_STOCK_DATA.csv"), ["TradeDate"]),
         "All Trades": (read_csv("MASTER_TRADES.csv"), ["TradeDate", "entry_time", "exit_time"]),
