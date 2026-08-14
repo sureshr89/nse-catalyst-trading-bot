@@ -18,7 +18,7 @@ from worker_service import ensure_worker_process
 
 st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
 st.markdown(load_css(), unsafe_allow_html=True)
-render_nav(0)
+render_nav(24)
 try:
     ensure_worker_process()
 except Exception as error:
