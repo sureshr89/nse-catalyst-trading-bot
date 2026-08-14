@@ -70,7 +70,6 @@ def _prune_to_last_six_months(path, date_columns):
     now = datetime.now(IST)
     current_period = pd.Period(now.strftime("%Y-%m"), freq="M")
     first_period = current_period - (MASTER_MONTHS - 1)
-    parsed_months = pd.PeriodIndex(months.dropna().unique(), freq="M") if months.notna().any() else pd.PeriodIndex([], freq="M")
     allowed = {str(p) for p in pd.period_range(first_period, current_period, freq="M")}
     keep = months.isna() | months.isin(allowed)
     trimmed = frame.loc[keep].copy()
@@ -87,7 +86,6 @@ def enforce_six_month_retention():
 def _today_rows(frame, date_columns, today):
     if frame.empty:
         return frame
-    keys = _month_values(frame, date_columns)  # placeholder for stable empty handling
     for column in date_columns:
         if column in frame.columns:
             values = pd.to_datetime(frame[column], errors="coerce")
@@ -133,9 +131,11 @@ def build_master_data():
             ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"],
         )
 
-    today_trades = _today_rows(trades, ["exit_time", "entry_time", "timestamp"], today)
+    # Trade activity belongs to the entry day; realized P&L belongs to the exit day.
+    today_trades = _today_rows(trades, ["entry_time", "timestamp", "exit_time"], today)
+    today_closed = _today_rows(trades, ["exit_time"], today)
     today_signals = _today_rows(signals, ["timestamp", "entry_time"], today)
-    today_pnl = float(pd.to_numeric(today_trades.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    today_pnl = float(pd.to_numeric(today_closed.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 
     row = {
         "TradeDate": today,
@@ -145,7 +145,7 @@ def build_master_data():
         "GapDowns": int((gaps.get("GapType", pd.Series(dtype=str)) == "GAP_DOWN").sum()),
         "SignalsRecorded": int(len(today_signals)),
         "TradesRecorded": int(len(today_trades)),
-        "ClosedTrades": int((today_trades.get("status", pd.Series(dtype=str)).astype(str).str.upper() == "CLOSED").sum()),
+        "ClosedTrades": int((today_closed.get("status", pd.Series(dtype=str)).astype(str).str.upper() == "CLOSED").sum()),
         "FinalSignals": int(diag.get("final_signals", 0) or 0),
         "StocksScanned": int(diag.get("stocks_scanned", 0) or 0),
         "LiquidityPassed": int(diag.get("liquidity_passed", 0) or 0),
@@ -160,7 +160,6 @@ def build_master_data():
 
     enforce_six_month_retention()
 
-    # Persist the durable research files to the non-deployment data branch.
     for path in (MASTER_STOCK, MASTER_TRADES, MASTER_DAILY):
         try:
             sync(path, f"outputs/{path.name}", f"Update master trading data {today}")
