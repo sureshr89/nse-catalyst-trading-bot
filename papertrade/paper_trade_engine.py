@@ -61,6 +61,10 @@ class PaperTradeEngine:
                 print("Legacy paper state detected; starting clean.")
                 self._reset_state_file(path); return
             self.open_positions = state.get("open_positions", {}) or {}; self.closed_positions = state.get("closed_positions", []) or []
+            for position in self.open_positions.values():
+                position.setdefault("mae", 0.0); position.setdefault("mfe", 0.0)
+            for position in self.closed_positions:
+                position.setdefault("mae", 0.0); position.setdefault("mfe", 0.0)
             self.total_capital = float(state.get("total_capital", TOTAL_CAPITAL) or TOTAL_CAPITAL)
             counters = [self._trade_number(p.get("trade_id")) for p in self.open_positions.values()] + [self._trade_number(p.get("trade_id")) for p in self.closed_positions]
             counter = int(state.get("trade_counter", 0) or 0)
@@ -77,10 +81,8 @@ class PaperTradeEngine:
 
     @staticmethod
     def _reset_state_file(path):
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        try: os.remove(path)
+        except OSError: pass
 
     def _save_state(self):
         path = self._state_path(); os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -123,7 +125,7 @@ class PaperTradeEngine:
         validated, reason = self._validate_trade(trade)
         if validated is None: return {"opened": False, "reason": reason}
         self.trade_counter += 1; trade_id = f"PAPER-{self.trade_counter:04d}"
-        position = {"trade_id": trade_id, "symbol": validated["symbol"], "stock": validated["symbol"], "signal": validated["signal"], "buy_sell": validated["signal"], "entry_time": validated["entry_time"], "entry": validated["entry"], "stop_loss": validated["stop_loss"], "target": validated["target"], "quantity": validated["quantity"], "risk": validated["risk"], "reward": validated["reward"], "rr": validated["rr"], "status": "OPEN", "exit_time": None, "exit_price": None, "exit_reason": None, "pnl": None}
+        position = {"trade_id": trade_id, "symbol": validated["symbol"], "stock": validated["symbol"], "signal": validated["signal"], "buy_sell": validated["signal"], "entry_time": validated["entry_time"], "entry": validated["entry"], "stop_loss": validated["stop_loss"], "target": validated["target"], "quantity": validated["quantity"], "risk": validated["risk"], "reward": validated["reward"], "rr": validated["rr"], "mae": 0.0, "mfe": 0.0, "status": "OPEN", "exit_time": None, "exit_price": None, "exit_reason": None, "pnl": None}
         ignored = {"approved", "reasons", "min_rr_ratio", "min_required_risk", "max_risk", "capital", "trade_count"}
         for field, value in trade.items():
             if field not in ignored and field not in position and value is not None: position[field] = value
@@ -136,6 +138,16 @@ class PaperTradeEngine:
         if signal == "BUY": return round((exit_price - entry) * quantity, 2)
         if signal == "SELL": return round((entry - exit_price) * quantity, 2)
         return 0.0
+
+    def _update_excursions(self, position, high, low):
+        entry=float(position.get("entry", 0) or 0); qty=int(float(position.get("quantity", 0) or 0)); signal=str(position.get("signal", "")).upper()
+        if entry <= 0 or qty <= 0: return
+        if signal == "BUY":
+            favorable=max(0.0, (float(high)-entry)*qty); adverse=max(0.0, (entry-float(low))*qty)
+        else:
+            favorable=max(0.0, (entry-float(low))*qty); adverse=max(0.0, (float(high)-entry)*qty)
+        position["mfe"] = round(max(float(position.get("mfe", 0) or 0), favorable), 2)
+        position["mae"] = round(max(float(position.get("mae", 0) or 0), adverse), 2)
 
     def close_position(self, symbol, exit_price, exit_time, reason):
         symbol = str(symbol).strip().upper()
@@ -165,11 +177,13 @@ class PaperTradeEngine:
             except Exception: return None
         high = self._number(candle.get("High")); low = self._number(candle.get("Low")); close = self._number(candle.get("Close")); candle_time = candle.get("Datetime")
         if high is None or low is None or close is None: return None
-        position = self.open_positions[symbol]; signal = position["signal"]; stop = float(position["stop_loss"]); target = float(position["target"])
+        position = self.open_positions[symbol]; self._update_excursions(position, high, low)
+        signal = position["signal"]; stop = float(position["stop_loss"]); target = float(position["target"])
         if signal == "BUY": sl_hit, target_hit = low <= stop, high >= target
         else: sl_hit, target_hit = high >= stop, low <= target
         if sl_hit: return self.close_position(symbol, stop, candle_time, "STOP_LOSS")
         if target_hit: return self.close_position(symbol, target, candle_time, "TARGET")
+        self._save_state()
         return None
 
     def summary(self):
