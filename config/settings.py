@@ -1,4 +1,4 @@
-"""NIFTY 500 PDH/PDL + Today's Open 1-minute reversal paper-trading strategy."""
+"""Configuration for the NIFTY 500 PDH/PDL open-reversal paper strategy."""
 
 import os
 import time
@@ -17,16 +17,17 @@ LAST_ENTRY_TIME = "14:00"
 SQUARE_OFF_TIME = "15:00"
 MARKET_CLOSE = "15:30"
 
+# Alignment is NIFTY -> sector -> stock. The scanned universe is NIFTY 500.
 REQUIRE_MARKET_ALIGNMENT = True
 REQUIRE_SECTOR_ALIGNMENT = True
 REQUIRE_STOCK_ALIGNMENT = True
 ENABLE_LONG = True
 ENABLE_SHORT = True
 
-STRATEGY_NAME = "PDH_PDL_OPEN_CROSS"
+STRATEGY_NAME = "NIFTY_500_PDH_PDL_OPEN_REVERSAL"
 ENTRY_TIMEFRAME = "1m"
 ENTRY_CONFIRMATION_TIMEFRAME = "1m"
-STOP_LOSS_METHOD = "TODAY_LOW_HIGH"
+STOP_LOSS_METHOD = "TODAY_LOW_HIGH_AT_TRIGGER"
 RISK_REWARD_RATIO = 1.25
 MIN_RR_RATIO = 1.25
 
