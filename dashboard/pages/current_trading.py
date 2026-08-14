@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -24,12 +24,19 @@ def grid(items):st.markdown('<div class="metric-grid">'+''.join(f'<div class="me
 def latest_rows(df,statuses):
     if df.empty or "status" not in df.columns:return pd.DataFrame()
     return df[df["status"].astype(str).str.upper().isin(statuses)].iloc[::-1].head(30).copy()
+def heartbeat_alive(value,max_age_seconds=90):
+    try:
+        stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=INDIA_TZ)
+        return 0 <= (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds() <= max_age_seconds
+    except Exception:return False
 s=read(ROOT/"outputs/bot_status.json","json");state=read(ROOT/"outputs/paper_engine_state.json","json");pos=state.get("open_positions",{}) or {};trades=read(ROOT/"outputs/trades.csv","csv")
 closed=trades[trades["status"].astype(str).str.upper().eq("CLOSED")].copy() if not trades.empty and "status" in trades.columns else pd.DataFrame()
 if not closed.empty and "pnl" in closed.columns:closed["pnl"]=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0)
+worker=bool(s.get("worker_alive")) and heartbeat_alive(s.get("heartbeat"))
 st.title("📌 Current Trading")
 st.caption("Only live positions, the latest closed trade and executed/capital-missed records are shown here. Overall performance is on Analysis.")
-grid([("Bot",s.get("status","UNKNOWN")),("Worker","ALIVE" if s.get("worker_alive") else "OFFLINE"),("Open Positions",len(pos)),("Available Capital",f"₹{float(s.get('available_capital',250000) or 0):,.0f}")])
+grid([("Bot",s.get("status","UNKNOWN")),("Worker","ALIVE" if worker else "OFFLINE"),("Open Positions",len(pos)),("Available Capital",f"₹{float(s.get('available_capital',250000) or 0):,.0f}")])
 st.subheader("Open Positions")
 if pos:
     rows=[]
