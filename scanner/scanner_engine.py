@@ -1,6 +1,8 @@
-"""NIFTY 100 Gap-Failure + Open-Reclaim scanner."""
+"""NIFTY 100 Gap-Failure + Open-Reclaim scanner with transparent filter diagnostics."""
 
 from pathlib import Path
+import json
+from datetime import datetime
 
 import pandas as pd
 
@@ -30,6 +32,52 @@ class ScannerEngine:
         self.gap_candidates = pd.DataFrame()
         self._prepared_date = None
         self._gap_prepared_date = None
+        self.diagnostics = self._empty_diagnostics()
+
+    @staticmethod
+    def _empty_diagnostics():
+        return {
+            "timestamp": None,
+            "stocks_scanned": 0,
+            "liquidity_passed": 0,
+            "gap_previous_day_passed": 0,
+            "nifty_alignment_passed": 0,
+            "sector_alignment_passed": 0,
+            "strategy_setup_passed": 0,
+            "stock_alignment_passed": 0,
+            "final_signals": 0,
+            "rejections": {
+                "liquidity": 0,
+                "gap_previous_day": 0,
+                "nifty_alignment": 0,
+                "sector_alignment": 0,
+                "no_gap_failure": 0,
+                "no_open_reclaim": 0,
+                "strategy_setup": 0,
+                "stock_alignment": 0,
+                "stock_today_direction": 0,
+                "missing_data": 0,
+            },
+        }
+
+    def _write_diagnostics(self):
+        payload = dict(self.diagnostics)
+        payload["rejections"] = dict(self.diagnostics.get("rejections", {}))
+        payload["timestamp"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        self.diagnostics["timestamp"] = payload["timestamp"]
+        path = Path("outputs") / "scanner_diagnostics.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f".{Path(__file__).stem}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.replace(path)
+        except Exception as error:
+            print("Could not write scanner diagnostics:", error)
+
+    def _finish(self, signals=None):
+        self.diagnostics["final_signals"] = len(signals or [])
+        self._write_diagnostics()
+        return signals or []
 
     @staticmethod
     def _today():
@@ -47,18 +95,8 @@ class ScannerEngine:
         return self.references
 
     def prepare_gap_candidates(self, force=False):
-        """Freeze the pre-09:45 candidate pool for the trading day.
-
-        Candidate eligibility is intentionally decided before strategy scanning:
-        high liquidity + previous-day direction + today's opening gap direction.
-        Liquidity is measured by previous-day traded value (Close * Volume); the
-        high-liquidity set is the upper half of the valid NIFTY 100 universe by
-        previous-day traded value. A stock must also have a valid 09:15 regular-
-        session opening candle. The resulting pool is persisted once per day.
-        """
         today = self._today()
         output = Path("outputs") / "references" / f"gap_candidates_{today}.csv"
-        output.parent.mkdir(parents=True, exist_ok=True)
         required = {
             "Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection",
             "PreviousDayDirection", "PreviousDayTurnover", "LiquidityQualified",
@@ -85,70 +123,75 @@ class ScannerEngine:
         refs["PreviousDayTurnover"] = pd.to_numeric(refs["PreviousDayTurnover"], errors="coerce")
         refs["PDC"] = pd.to_numeric(refs["PDC"], errors="coerce")
         refs["PreviousDayOpen"] = pd.to_numeric(refs["PreviousDayOpen"], errors="coerce")
+        total = len(refs)
+        self.diagnostics["stocks_scanned"] = total
         refs = refs.dropna(subset=["PDC", "PreviousDayTurnover"])
         if refs.empty:
+            self.diagnostics["rejections"]["missing_data"] = total
             return pd.DataFrame()
 
         liquidity_cutoff = float(refs["PreviousDayTurnover"].median())
         refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= liquidity_cutoff
+        liquidity_passed = int(refs["LiquidityQualified"].sum())
+        self.diagnostics["liquidity_passed"] = liquidity_passed
+        self.diagnostics["rejections"]["liquidity"] = max(0, len(refs) - liquidity_passed)
         refs = refs[refs["LiquidityQualified"]].copy()
         print("PRE-09:45 LIQUIDITY FILTER:", len(refs), "stocks | cutoff traded value:", round(liquidity_cutoff, 2))
 
         symbols = refs["Symbol"].astype(str).str.upper().tolist()
         market_data = self.price_data.get_multi_1m(symbols)
         rows = []
-
+        gap_rejected = 0
         for _, ref in refs.iterrows():
             symbol = str(ref["Symbol"]).upper()
             candles = market_data.get(symbol)
             if candles is None or candles.empty:
+                gap_rejected += 1
                 continue
             data = self.price_data.today_only(candles)
             if data is None or data.empty:
+                gap_rejected += 1
                 continue
             first = data.iloc[0]
             try:
                 today_open = float(first["Open"])
                 pdc = float(ref["PDC"])
             except (TypeError, ValueError):
+                gap_rejected += 1
                 continue
             if today_open <= 0 or pdc <= 0:
+                gap_rejected += 1
                 continue
-
             gap_pct = round((today_open - pdc) / pdc * 100.0, 4)
             gap_direction = "GAP_UP" if today_open > pdc else "GAP_DOWN" if today_open < pdc else "FLAT"
             previous_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
-
             if gap_direction == "GAP_UP" and previous_direction != "BULLISH":
+                gap_rejected += 1
                 continue
             if gap_direction == "GAP_DOWN" and previous_direction != "BEARISH":
+                gap_rejected += 1
                 continue
             if gap_direction == "FLAT":
+                gap_rejected += 1
                 continue
-
             rows.append({
-                "Symbol": symbol,
-                "PDC": round(pdc, 4),
-                "TodayOpen": round(today_open, 4),
-                "GapPct": gap_pct,
-                "GapDirection": gap_direction,
+                "Symbol": symbol, "PDC": round(pdc, 4), "TodayOpen": round(today_open, 4),
+                "GapPct": gap_pct, "GapDirection": gap_direction,
                 "PreviousDayDirection": previous_direction,
                 "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
-                "LiquidityQualified": True,
-                "OpenTimestamp": str(first.get("Datetime", "")),
+                "LiquidityQualified": True, "OpenTimestamp": str(first.get("Datetime", "")),
             })
 
+        self.diagnostics["rejections"]["gap_previous_day"] = gap_rejected
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
+        self.diagnostics["gap_previous_day_passed"] = len(result)
         if result.empty:
             print("No stocks met liquidity + previous-day direction + opening-gap filters")
             return pd.DataFrame()
-
         result.to_csv(output, index=False)
         self.gap_candidates = result
         self._gap_prepared_date = today
-        up = int((result["GapDirection"] == "GAP_UP").sum())
-        down = int((result["GapDirection"] == "GAP_DOWN").sum())
-        print("PRE-09:45 CANDIDATES READY:", len(result), "| GAP UP:", up, "| GAP DOWN:", down)
+        print("PRE-09:45 CANDIDATES READY:", len(result))
         return result
 
     @staticmethod
@@ -162,11 +205,7 @@ class ScannerEngine:
             return "UNKNOWN"
         day_open = float(data.iloc[0]["Open"])
         close = float(data.iloc[-1]["Close"])
-        if close > day_open:
-            return "BULLISH"
-        if close < day_open:
-            return "BEARISH"
-        return "NEUTRAL"
+        return "BULLISH" if close > day_open else "BEARISH" if close < day_open else "NEUTRAL"
 
     def _nifty100_direction(self):
         return self._direction(self.price_data.get_index_1m("^CNX100"))
@@ -178,7 +217,7 @@ class ScannerEngine:
             if df is None or df.empty:
                 continue
             sector = str(sector_map.get(symbol, "UNKNOWN"))
-            if not sector or sector == "UNKNOWN":
+            if sector == "UNKNOWN":
                 continue
             direction = self._direction(df)
             if direction in {"BULLISH", "BEARISH"}:
@@ -197,87 +236,90 @@ class ScannerEngine:
         print("=" * 110)
         print("NIFTY 100 GAP-FAILURE + OPEN-RECLAIM PRICE-ACTION SCANNER")
         print("=" * 110)
+        self.diagnostics = self._empty_diagnostics()
         self.prepare_reference_data()
+        self.diagnostics["stocks_scanned"] = len(self.universe)
         if self.references.empty:
-            print("No pre-market reference data. No trades.")
-            return []
+            self.diagnostics["rejections"]["missing_data"] = len(self.universe)
+            return self._finish()
 
         gap_candidates = self.prepare_gap_candidates()
         if gap_candidates.empty:
-            print("No pre-09:45 candidate data. No trades.")
-            return []
+            return self._finish()
 
         nifty_direction = self._nifty100_direction()
         print("NIFTY 100 Direction:", nifty_direction)
         if REQUIRE_MARKET_ALIGNMENT and nifty_direction not in {"BULLISH", "BEARISH"}:
-            print("NIFTY 100 is neutral/unavailable. No new trades.")
-            return []
+            self.diagnostics["rejections"]["nifty_alignment"] = len(gap_candidates)
+            return self._finish()
 
         selected_gap = "GAP_UP" if nifty_direction == "BULLISH" else "GAP_DOWN"
         selected_symbols = gap_candidates.loc[
             gap_candidates["GapDirection"].astype(str).str.upper() == selected_gap, "Symbol"
         ].astype(str).str.upper().tolist()
+        self.diagnostics["nifty_alignment_passed"] = len(selected_symbols)
+        self.diagnostics["rejections"]["nifty_alignment"] = max(0, len(gap_candidates) - len(selected_symbols))
         print("PRE-SELECTED", selected_gap, "STOCKS:", len(selected_symbols))
         if not selected_symbols:
-            return []
+            return self._finish()
 
         market_data = self.price_data.get_multi_1m(selected_symbols)
         sector_directions = self._sector_directions(market_data)
         reference_by_symbol = self.references.set_index("Symbol").to_dict("index")
         signals = []
         sector_map = dict(zip(self.sectors["Symbol"], self.sectors["Sector"])) if not self.sectors.empty else {}
+        sector_passed_symbols = []
+        strategy_passed_symbols = []
 
         for symbol in selected_symbols:
             candles = market_data.get(symbol)
             if candles is None or candles.empty:
+                self.diagnostics["rejections"]["missing_data"] += 1
                 continue
             ref = reference_by_symbol.get(symbol)
             if not ref:
+                self.diagnostics["rejections"]["missing_data"] += 1
                 continue
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
-            if REQUIRE_SECTOR_ALIGNMENT and sector_direction not in {"BULLISH", "BEARISH"}:
+            if REQUIRE_SECTOR_ALIGNMENT and sector_direction != nifty_direction:
+                self.diagnostics["rejections"]["sector_alignment"] += 1
                 continue
+            sector_passed_symbols.append(symbol)
 
-            previous_day_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
             signal = self.strategy.build(
-                symbol=symbol,
-                candles=candles,
-                pdc=ref.get("PDC"),
+                symbol=symbol, candles=candles, pdc=ref.get("PDC"),
                 previous_day_open=ref.get("PreviousDayOpen"),
-                sector_direction=sector_direction,
-                nifty_direction=nifty_direction,
+                sector_direction=sector_direction, nifty_direction=nifty_direction,
             )
             if not signal:
+                self.diagnostics["rejections"]["strategy_setup"] += 1
                 continue
+            strategy_passed_symbols.append(symbol)
 
+            previous_day_direction = str(ref.get("PreviousDayDirection", "NEUTRAL")).upper()
             expected_previous = "BULLISH" if signal.get("signal") == "BUY" else "BEARISH"
-            previous_day_aligned = previous_day_direction == expected_previous
-            if REQUIRE_STOCK_ALIGNMENT and not previous_day_aligned:
-                print("REJECT:", symbol, "previous-day stock alignment mismatch")
+            if REQUIRE_STOCK_ALIGNMENT and previous_day_direction != expected_previous:
+                self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") not in {"BULLISH", "BEARISH"}:
+                self.diagnostics["rejections"]["stock_today_direction"] += 1
                 continue
 
-            signal["sector"] = sector
-            signal["industry"] = sector
-            signal["sector_direction"] = sector_direction
-            signal["industry_direction"] = sector_direction
-            signal["market_direction"] = nifty_direction
-            signal["nifty100_direction"] = nifty_direction
-            signal["stock_previous_day_direction"] = previous_day_direction
-            signal["previous_day_direction"] = previous_day_direction
-            signal["previous_day_aligned"] = previous_day_aligned
-            signal["gap_direction"] = selected_gap
-            signal["liquidity_qualified"] = True
+            signal.update({
+                "sector": sector, "industry": sector,
+                "sector_direction": sector_direction, "industry_direction": sector_direction,
+                "market_direction": nifty_direction, "nifty100_direction": nifty_direction,
+                "stock_previous_day_direction": previous_day_direction,
+                "previous_day_direction": previous_day_direction,
+                "previous_day_aligned": True, "gap_direction": selected_gap,
+                "liquidity_qualified": True,
+            })
             signals.append(signal)
-            print(
-                "SIGNAL:", symbol, signal["signal"],
-                "Entry", signal["entry"], "SL", signal["stop_loss"],
-                "Target", signal["target"], "PDC", signal["pdc"],
-                "Gap", selected_gap, "Previous Day", previous_day_direction,
-                "Sector", sector_direction, "NIFTY 100", nifty_direction,
-            )
+            print("SIGNAL:", symbol, signal["signal"])
 
+        self.diagnostics["sector_alignment_passed"] = len(sector_passed_symbols)
+        self.diagnostics["strategy_setup_passed"] = len(strategy_passed_symbols)
+        self.diagnostics["stock_alignment_passed"] = len(signals)
         print("Final signals:", len(signals))
-        return signals
+        return self._finish(signals)
