@@ -23,3 +23,14 @@ Thumbs.db
 
 # Pytest
 .pytest_cache/
+
+# Trading runtime data
+outputs/*.csv
+outputs/*.json
+outputs/*.lock
+outputs/*.tmp
+outputs/*.log
+outputs/references/
+outputs/open_reversal_references/
+data/nifty500.csv
+data/nifty500_sectors.csv
