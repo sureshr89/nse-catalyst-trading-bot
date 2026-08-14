@@ -1,41 +1,45 @@
 # NSE Catalyst Trading Bot
 
-## Current strategy — NIFTY 250 Gap-Failure + Open-Reclaim
+## Current strategy — NIFTY 500 PDH/PDL + Today's Open 1-minute Cross
 
-A Python-based **paper-trading** bot for the **NIFTY 250 scanner universe**, defined as **NIFTY 100 + NIFTY Midcap 150**. The strategy is pure price action and does not use technical indicators.
-
-### BUY setup
-
-1. Previous trading day closed **green** (previous-day Close > previous-day Open).
-2. Today opens **above PDC** (gap-up).
-3. During today's session, price trades **below PDC**.
-4. NIFTY 100 market direction is **BULLISH**.
-5. The stock's sector direction is **BULLISH**.
-6. The stock's own current-day direction is aligned **BULLISH** and its previous-day direction is aligned with the setup.
-7. After the PDC failure, a completed **1-minute candle closes back above today's Open**.
-8. BUY at that completed 1-minute candle close.
-9. Stop-loss = **today's session Low**.
-10. Target = **1.25 × risk**.
+A Python-based **paper-trading** bot for the **NIFTY 500 scanner universe**. The strategy is pure price action and uses previous-day High/Low, today's Open, 1-minute candles, market direction, sector direction and stock direction.
 
 ### SELL setup
 
-1. Previous trading day closed **red** (previous-day Close < previous-day Open).
-2. Today opens **below PDC** (gap-down).
-3. During today's session, price trades **above PDC**.
-4. NIFTY 100 market direction is **BEARISH**.
-5. The stock's sector direction is **BEARISH**.
-6. The stock's own current-day direction is aligned **BEARISH** and its previous-day direction is aligned with the setup.
-7. After the PDC failure, a completed **1-minute candle closes back below today's Open**.
-8. SELL at that completed 1-minute candle close.
-9. Stop-loss = **today's session High**.
-10. Target = **1.25 × risk**.
+1. Today's Open is **above PDH (Previous Day High)**.
+2. Price first **comes down to/touches PDH**.
+3. The PDH interaction must happen **before** the trigger candle.
+4. Price then moves back through today's Open.
+5. A completed **1-minute candle opens above today's Open and closes below today's Open**.
+6. That candle close is the **trigger**, not the execution price.
+7. Enter at the **latest available market price immediately after the completed trigger candle**.
+8. NIFTY market direction must be **BEARISH** when market alignment is enabled.
+9. Sector direction must be **BEARISH** when sector alignment is enabled.
+10. Stock current-day direction must be **BEARISH** when stock alignment is enabled.
+11. Stop-loss = **today's session High**.
+12. Target = **1.25 × actual risk**.
+
+### BUY setup
+
+1. Today's Open is **below PDL (Previous Day Low)**.
+2. Price first **comes up to/touches PDL**.
+3. The PDL interaction must happen **before** the trigger candle.
+4. Price then moves back through today's Open.
+5. A completed **1-minute candle opens below today's Open and closes above today's Open**.
+6. That candle close is the **trigger**, not the execution price.
+7. Enter at the **latest available market price immediately after the completed trigger candle**.
+8. NIFTY market direction must be **BULLISH** when market alignment is enabled.
+9. Sector direction must be **BULLISH** when sector alignment is enabled.
+10. Stock current-day direction must be **BULLISH** when stock alignment is enabled.
+11. Stop-loss = **today's session Low**.
+12. Target = **1.25 × actual risk**.
 
 ### Risk management
 
-- Scanner universe: **NIFTY 250 = NIFTY 100 + NIFTY Midcap 150**
+- Scanner universe: **NIFTY 500**
 - Capital: ₹2,50,000
 - Maximum risk per trade: ₹1,500
-- **Accepted actual risk band: ₹1,400–₹1,500 only**
+- Accepted actual risk band: **₹1,400–₹1,500**
 - Risk/reward: **minimum 1:1.25**
 - Maximum 1 trade per stock per day
 - Maximum 2 open positions
@@ -44,27 +48,23 @@ A Python-based **paper-trading** bot for the **NIFTY 250 scanner universe**, def
 - Paper trading: **ON**
 - Live trading: **OFF**
 
-A stock is rejected if whole-share sizing cannot produce actual risk within ₹1,400–₹1,500 without exceeding ₹1,500. The bot never increases quantity beyond the ₹1,500 cap just to reach the minimum risk.
+### Reference data
 
-## Reference data
+Before trading, the bot stores the latest completed trading day's **PDH, PDL, PDC, Open and turnover** for the NIFTY 500 universe. PDH/PDL are the structural reference levels used by the strategy.
 
-Before trading, the bot stores the latest completed trading day's PDC, previous-day Open and previous-day direction for the NIFTY 250 scanner universe. PDC is the key previous-day price level used by the setup.
+### Architecture
 
-## Current architecture
-
-- `scanner/scanner_engine.py` — NIFTY 250 scanning with NIFTY 100 market, sector and stock alignment
-- `strategy/gap_reclaim_engine.py` — active price-action strategy
+- `scanner/scanner_engine.py` — NIFTY 500 scanning and filter diagnostics
+- `strategy/pdh_pdl_open_cross_engine.py` — active PDH/PDL + Open Cross strategy
 - `strategy/risk_engine.py` — risk approval and position sizing
 - `market/price_data.py` — market data
-- `data/stock_universe.py` — NIFTY 100 + NIFTY Midcap 150 universe
-- `data/reference_store.py` — daily PDC/reference storage
-- `data/sector_store.py` — NIFTY 250 sector mapping
+- `data/stock_universe.py` — NIFTY 500 universe
+- `data/reference_store.py` — PDH/PDL/PDC daily references
+- `data/sector_store.py` — sector mapping
 - `bot_runner.py` — persistent paper worker
 - `dashboard/app.py` — Streamlit dashboard
 - `dashboard/pages/current_trading.py` — live positions and scanner breakdown
 - `dashboard/pages/analysis.py` — read-only trade analysis
-- `dashboard/pages/downloads.py` — trading and NIFTY 250 research downloads
-- `outputs/signals.csv` — scanner decision journal
-- `outputs/trades.csv` — trade execution/journal
+- `dashboard/pages/downloads.py` — trading and NIFTY 500 research downloads
 
-The obsolete 5-minute pullback/frozen-high/frozen-low strategy has been removed from the repository so it cannot accidentally be used again.
+The previous Gap-Failure + Open-Reclaim strategy and its historical paper-trade data have been reset/removed from the active repository state.
