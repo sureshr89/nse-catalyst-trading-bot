@@ -23,15 +23,11 @@ st.markdown("""
 .metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .metric-card{background:#111b2d;border:1px solid #26344d;border-radius:10px;padding:8px;min-height:50px}
 .metric-card small{display:block;color:#9fb0c7;font-size:.58rem}.metric-card b{display:block;color:#f4f7fb;font-size:.82rem;margin-top:3px}
-[data-testid="stPageLink"] a{min-height:38px!important;margin-bottom:7px!important;border:1px solid #2b3b57!important;border-radius:10px!important;background:#142036!important;color:#e9f0f8!important;justify-content:center!important;font-size:.60rem!important;font-weight:700!important}
 [data-testid="stPlotlyChart"],[data-testid="stPlotlyChart"] *{pointer-events:none!important;touch-action:none!important}
 </style>""",unsafe_allow_html=True)
-
-# One shared navigation is used on every page. It is fixed as a 2x2 block,
-# so all four destinations remain visible together even while scrolling.
 render_nav()
 
-status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json");trades=load(ROOT/"outputs/trades.csv","csv");signals=load(ROOT/"outputs/signals.csv","csv")
+status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json");trades=load(ROOT/"outputs/trades.csv","csv")
 try:
     spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);mod.ensure_bot_running();live=mod.get_status();status.update(live if isinstance(live,dict) else {})
 except Exception:pass
@@ -54,6 +50,22 @@ st.warning("🟡 BOT READY • WAITING FOR MARKET SESSION" if worker and bot=="W
 st.subheader("LIVE STATUS");grid([("India Time",datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")),("Bot",bot),("Worker","ALIVE" if worker else "OFFLINE"),("Scanner",status.get("scanner_status","IDLE")),("Open Positions",len(state.get("open_positions",{}) or {})),("Daily P&L",f"₹{pnl:,.2f}")])
 st.subheader("CAPITAL & RISK");grid([("Starting Capital","₹250,000"),("Available",f"₹{float(status.get('available_capital',250000) or 0):,.0f}"),("Used",f"₹{float(status.get('used_capital',0) or 0):,.0f}"),("Risk / Trade","₹1,400–₹1,500"),("R:R","1:1.25"),("Max Positions",2)])
 st.subheader("TODAY'S TRADING");grid([("Closed Trades",len(closed)),("Wins / Losses",f"{wins} / {losses}"),("Win Rate",f"{wins/len(closed)*100:.1f}%" if len(closed) else "0.0%"),("Realized P&L",f"₹{pnl:,.2f}")])
-st.subheader("SCANNER ACTIVITY");grid([("Total Scans",status.get("scan_count",0)),("Unique Signals",len(signals)),("Cycle Count",status.get("cycle_count",0)),("Last Scan",status.get("last_scan") or "—"),("Scan Duration",f'{float(status.get("scan_duration_seconds",0) or 0):.2f}s'),("Last Completed",status.get("last_scan_completed") or "—")])
+
+st.subheader("LATEST CLOSED TRADE")
+if not closed.empty:
+    t=closed.iloc[0]
+    grid([("Stock",t.get("symbol","—")),("Side",t.get("signal",t.get("buy_sell","—"))),
+          ("Entry",t.get("entry","—")),("Exit",t.get("exit_price","—")),("Exit Time",t.get("exit_time","—")),
+          ("Exit Reason",t.get("exit_reason","—")),("P&L",f"₹{float(t.get('pnl',0) or 0):,.2f}"),
+          ("Quantity",t.get("quantity","—")),("Risk",t.get("actual_risk",t.get("risk","—"))),
+          ("R:R",t.get("rr",t.get("risk_reward","—"))),("PDC",t.get("pdc","—")),
+          ("Today Open",t.get("today_open","—")),("Today Low",t.get("today_low","—")),("Today High",t.get("today_high","—")),
+          ("Setup",t.get("setup_type","—")),("Sector",t.get("sector",t.get("sector_direction","—"))),
+          ("Previous Day",t.get("previous_day_direction","—")),("Market",t.get("market_direction","—"))])
+    st.dataframe(pd.DataFrame([t.to_dict()]),width="stretch",hide_index=True)
+else:
+    st.info("No closed paper trade yet.")
+
+st.subheader("SCANNER ACTIVITY");grid([("Total Scans",status.get("scan_count",0)),("Cycle Count",status.get("cycle_count",0)),("Last Scan",status.get("last_scan") or "—"),("Scan Duration",f'{float(status.get("scan_duration_seconds",0) or 0):.2f}s'),("Last Completed",status.get("last_scan_completed") or "—"),("Last Signal Count",status.get("last_signal_count",0))])
 with st.expander("SYSTEM DIAGNOSTICS"):
     st.json({"Last bot cycle":status.get("last_cycle"),"Heartbeat":status.get("heartbeat"),"Worker":worker,"Status":status.get("message") or "—","Last Scan":status.get("last_scan"),"Scan Count":status.get("scan_count",0),"Last Signal Count":status.get("last_signal_count",0),"Last Completed":status.get("last_scan_completed") or "—","Error":status.get("error")})
