@@ -33,15 +33,22 @@ try:
     if isinstance(live,dict):status.update(live)
 except Exception as error:
     status.setdefault("error",f"Worker status unavailable: {type(error).__name__}: {error}")
-def heartbeat_alive(value,max_age_seconds=90):
+def heartbeat_alive(value,max_age_seconds=180):
     try:
         stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
         if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
-        return (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds()<=max_age_seconds
+        age=(datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds()
+        return 0 <= age <= max_age_seconds
     except Exception:return False
-worker=bool(status.get("worker_alive",False))
+# The dashboard can execute in a different Streamlit context from the persistent
+# worker. A fresh heartbeat or completed scan is therefore also a valid liveness
+# signal; the local thread object alone is not sufficient.
+local_worker=bool(status.get("worker_alive",False))
+recent_heartbeat=heartbeat_alive(status.get("heartbeat"))
+recent_scan=heartbeat_alive(status.get("last_scan")) or heartbeat_alive(status.get("last_scan_completed"))
+worker=local_worker or recent_heartbeat or recent_scan
 bot=str(status.get("status","STARTING")).upper()
-if worker and bot=="WAITING":st.warning("🟡 BOT READY • WAITING FOR MARKET SESSION")
+if worker and bot in {"WAITING","STOPPED","STARTING"}:st.warning("🟡 BOT READY • WORKER ALIVE • WAITING / RECOVERING")
 elif worker:st.success("🟢 BOT RUNNING • PAPER TRADING")
 else:st.warning("🟠 WORKER NOT CONFIRMED ALIVE")
 st.subheader("LIVE STATUS");grid([("India Time",datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")),("Bot",bot),("Worker","ALIVE" if worker else "OFFLINE"),("Scanner",status.get("scanner_status","IDLE")),("Open Positions",len(state.get("open_positions",{}) or {})),("Heartbeat",status.get("heartbeat") or "—")])
