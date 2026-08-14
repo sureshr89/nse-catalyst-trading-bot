@@ -65,11 +65,13 @@ class ScannerEngine:
         payload["rejections"] = dict(self.diagnostics.get("rejections", {}))
         payload["timestamp"] = datetime.now().astimezone().isoformat(timespec="seconds")
         self.diagnostics["timestamp"] = payload["timestamp"]
-        path = Path("outputs") / "scanner_diagnostics.json"
+        # Always write relative to the repository, never the process working directory.
+        root = Path(__file__).resolve().parents[1]
+        path = root / "outputs" / "scanner_diagnostics.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(f".{Path(__file__).stem}.tmp")
+        temporary = path.with_name(f"scanner_diagnostics.{Path(__file__).stem}.tmp")
         try:
-            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
             temporary.replace(path)
         except Exception as error:
             print("Could not write scanner diagnostics:", error)
@@ -90,6 +92,7 @@ class ScannerEngine:
         refs = references.copy()
         if refs.empty:
             self.diagnostics["rejections"]["missing_data"] = int(total)
+            self._write_diagnostics()
             return
         turnover = pd.to_numeric(refs.get("PreviousDayTurnover"), errors="coerce")
         pdc = pd.to_numeric(refs.get("PDC"), errors="coerce")
@@ -97,6 +100,7 @@ class ScannerEngine:
         missing = max(0, int(total) - len(valid))
         self.diagnostics["rejections"]["missing_data"] = missing
         if valid.empty:
+            self._write_diagnostics()
             return
         cutoff = float(turnover.loc[valid.index].median())
         liquidity_mask = turnover.loc[valid.index] >= cutoff
@@ -105,6 +109,7 @@ class ScannerEngine:
         self.diagnostics["rejections"]["liquidity"] = max(0, len(valid) - liquidity_passed)
         self.diagnostics["gap_previous_day_passed"] = int(len(saved))
         self.diagnostics["rejections"]["gap_previous_day"] = max(0, liquidity_passed - int(len(saved)))
+        self._write_diagnostics()
 
     def prepare_reference_data(self, force=False):
         today = self._today()
@@ -119,7 +124,8 @@ class ScannerEngine:
 
     def prepare_gap_candidates(self, force=False):
         today = self._today()
-        output = Path("outputs") / "references" / f"gap_candidates_{today}.csv"
+        output = Path(__file__).resolve().parents[1] / "outputs" / "references" / f"gap_candidates_{today}.csv"
+        output.parent.mkdir(parents=True, exist_ok=True)
         required = {
             "Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection",
             "PreviousDayDirection", "PreviousDayTurnover", "LiquidityQualified",
@@ -142,6 +148,8 @@ class ScannerEngine:
 
         if references.empty:
             print("Cannot prepare candidates: PDC references unavailable")
+            self.diagnostics["rejections"]["missing_data"] = len(self.universe)
+            self._write_diagnostics()
             return pd.DataFrame()
 
         refs = references.copy()
@@ -153,6 +161,7 @@ class ScannerEngine:
         refs = refs.dropna(subset=["PDC", "PreviousDayTurnover"])
         if refs.empty:
             self.diagnostics["rejections"]["missing_data"] = total
+            self._write_diagnostics()
             return pd.DataFrame()
 
         self.diagnostics["rejections"]["missing_data"] = max(0, total - len(refs))
@@ -163,6 +172,7 @@ class ScannerEngine:
         self.diagnostics["rejections"]["liquidity"] = max(0, len(refs) - liquidity_passed)
         refs = refs[refs["LiquidityQualified"]].copy()
         print("PRE-09:45 LIQUIDITY FILTER:", len(refs), "stocks | cutoff traded value:", round(liquidity_cutoff, 2))
+        self._write_diagnostics()
 
         symbols = refs["Symbol"].astype(str).str.upper().tolist()
         market_data = self.price_data.get_multi_1m(symbols)
@@ -211,6 +221,7 @@ class ScannerEngine:
         self.diagnostics["rejections"]["gap_previous_day"] = gap_rejected
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         self.diagnostics["gap_previous_day_passed"] = len(result)
+        self._write_diagnostics()
         if result.empty:
             print("No stocks met liquidity + previous-day direction + opening-gap filters")
             return pd.DataFrame()
@@ -265,6 +276,7 @@ class ScannerEngine:
         self.diagnostics = self._empty_diagnostics()
         self.prepare_reference_data()
         self.diagnostics["stocks_scanned"] = len(self.universe)
+        self._write_diagnostics()
         if self.references.empty:
             self.diagnostics["rejections"]["missing_data"] = len(self.universe)
             return self._finish()
@@ -285,6 +297,7 @@ class ScannerEngine:
         ].astype(str).str.upper().tolist()
         self.diagnostics["nifty_alignment_passed"] = len(selected_symbols)
         self.diagnostics["rejections"]["nifty_alignment"] = max(0, len(gap_candidates) - len(selected_symbols))
+        self._write_diagnostics()
         print("PRE-SELECTED", selected_gap, "STOCKS:", len(selected_symbols))
         if not selected_symbols:
             return self._finish()
