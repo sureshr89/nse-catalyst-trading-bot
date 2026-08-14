@@ -1,7 +1,15 @@
 import json
+import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+# Streamlit can execute files inside dashboard/pages with that directory as the
+# import context. Add the repository root before importing shared packages.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -13,7 +21,6 @@ from market.price_data import PriceData
 from data.stock_universe import StockUniverse
 from data.sector_store import SectorStore
 
-ROOT = Path(__file__).resolve().parents[2]
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 st.set_page_config(page_title="NSE Catalyst | Current Trading", page_icon="📌", layout="wide")
 st_autorefresh(interval=5000, key="current_live")
@@ -74,15 +81,19 @@ def live_alignment_for_positions(symbols):
     if not sectors.empty and "Sector" in sectors.columns:
         for sector, group in sectors.groupby("Sector"):
             sector_members_by_name[str(sector)] = group["Symbol"].astype(str).str.upper().tolist()
-    needed_members = sorted({m for symbol in symbols for m in sector_members_by_name.get(str(sectors.loc[sectors["Symbol"].astype(str).str.upper().eq(symbol), "Sector"].iloc[0]) if not sectors.empty and not sectors.loc[sectors["Symbol"].astype(str).str.upper().eq(symbol)].empty else "UNKNOWN", [])})
+    symbol_sector = {}
+    if not sectors.empty:
+        for symbol in symbols:
+            match = sectors[sectors["Symbol"].astype(str).str.upper().eq(symbol)]
+            symbol_sector[symbol] = str(match.iloc[0].get("Sector", "UNKNOWN")) if not match.empty else "UNKNOWN"
+    needed_members = sorted({member for symbol in symbols for member in sector_members_by_name.get(symbol_sector.get(symbol, "UNKNOWN"), [])})
     member_data = price.get_multi_1m(needed_members) if needed_members else {}
     rows = []
     nifty_pct = candle_pct(nifty)
     for symbol in symbols:
         df = stock_data.get(symbol, pd.DataFrame())
         stock_candle = df.iloc[-1].to_dict() if df is not None and not df.empty else None
-        match = sectors[sectors["Symbol"].astype(str).str.upper().eq(symbol)] if not sectors.empty else pd.DataFrame()
-        sector = str(match.iloc[0].get("Sector", "UNKNOWN")) if not match.empty else "UNKNOWN"
+        sector = symbol_sector.get(symbol, "UNKNOWN")
         members = sector_members_by_name.get(sector, [])
         member_pcts = [candle_pct(member_data[m].iloc[-1].to_dict()) for m in members if m in member_data and member_data[m] is not None and not member_data[m].empty]
         member_pcts = [v for v in member_pcts if v is not None]
@@ -94,8 +105,8 @@ def live_alignment_for_positions(symbols):
             "NIFTY 500 1m %": candle_label(nifty_pct),
             "Sector 1m %": candle_label(sector_pct),
             "Stock 1m %": candle_label(stock_pct),
-            "NIFTY 500": "GREEN" if nifty_pct and nifty_pct > 0 else "RED" if nifty_pct and nifty_pct < 0 else "NEUTRAL",
-            "Stock Candle": "GREEN" if stock_pct and stock_pct > 0 else "RED" if stock_pct and stock_pct < 0 else "NEUTRAL",
+            "NIFTY 500": "GREEN" if nifty_pct is not None and nifty_pct > 0 else "RED" if nifty_pct is not None and nifty_pct < 0 else "NEUTRAL",
+            "Stock Candle": "GREEN" if stock_pct is not None and stock_pct > 0 else "RED" if stock_pct is not None and stock_pct < 0 else "NEUTRAL",
             "Candle Time": stock_candle.get("Datetime") if stock_candle else (nifty.get("Datetime") if nifty else "—"),
         })
     return pd.DataFrame(rows)
