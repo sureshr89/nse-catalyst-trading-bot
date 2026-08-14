@@ -1,20 +1,20 @@
-"""NIFTY 250 scanner universe: NIFTY 100 + NIFTY Midcap 150."""
-from pathlib import Path
+"""NIFTY 500 scanner universe."""
 from io import StringIO
+from pathlib import Path
+
 import pandas as pd
 import requests
 
 
 class StockUniverse:
-    MIN_EXPECTED_STOCKS = 225
+    MIN_EXPECTED_STOCKS = 450
 
     def __init__(self):
         self.urls = {
-            "NIFTY100": "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
-            "MIDCAP150": "https://www.niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv",
+            "NIFTY500": "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
         }
         self.data_folder = Path("data")
-        self.output_file = self.data_folder / "nifty250.csv"
+        self.output_file = self.data_folder / "nifty500.csv"
         self.data_folder.mkdir(parents=True, exist_ok=True)
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36",
@@ -50,20 +50,14 @@ class StockUniverse:
         return df.reset_index(drop=True)
 
     def download(self):
-        frames = []
-        for name, url in self.urls.items():
-            df = self._clean(self._download(url))
-            if df is not None and not df.empty:
-                df["Universe"] = name
-                frames.append(df)
-        if not frames:
+        df = self._clean(self._download(self.urls["NIFTY500"]))
+        if df is None or df.empty:
             return None
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-        combined = combined.drop_duplicates("Symbol", keep="first").reset_index(drop=True)
-        if len(combined) < self.MIN_EXPECTED_STOCKS:
-            print("NIFTY 250 universe rejected: only", len(combined), "stocks")
+        df["Universe"] = "NIFTY500"
+        if len(df) < self.MIN_EXPECTED_STOCKS:
+            print("NIFTY 500 universe rejected: only", len(df), "stocks")
             return None
-        return combined
+        return df
 
     def save(self, df):
         if df is None or df.empty or len(df) < self.MIN_EXPECTED_STOCKS:
@@ -103,4 +97,4 @@ class StockUniverse:
 
 if __name__ == "__main__":
     symbols = StockUniverse().get_symbols(refresh=True)
-    print("NIFTY 250 stocks loaded:", len(symbols))
+    print("NIFTY 500 stocks loaded:", len(symbols))
