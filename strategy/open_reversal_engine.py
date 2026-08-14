@@ -52,7 +52,6 @@ class OpenReversalEngine:
 
     @staticmethod
     def _candle_direction(candle_or_df):
-        """Return direction from the actual candle: green=open<close, red=open>close."""
         data = candle_or_df if isinstance(candle_or_df, pd.DataFrame) else pd.DataFrame([candle_or_df])
         data = OpenReversalEngine._clean(data)
         if data.empty:
@@ -99,7 +98,7 @@ class OpenReversalEngine:
         age = (datetime.now(INDIA_TZ) - trigger["Datetime"]).total_seconds() / 60.0
         return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES)
 
-    def build(self, symbol, candles, pdh, pdl, today_open=None, sector_direction="UNKNOWN", nifty_direction="UNKNOWN", nifty_candle=None, sector_candle=None):
+    def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
         data = self._clean(candles)
         if data.empty or pdh is None or pdl is None:
             return None
@@ -115,25 +114,21 @@ class OpenReversalEngine:
             if trigger is not None and self._fresh(trigger):
                 if nifty_candle is not None and self._candle_direction(nifty_candle) != "BULLISH":
                     return None
-                if sector_candle is not None and self._candle_direction(sector_candle) != "BULLISH":
-                    return None
                 setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
                 stock_direction = self._direction(setup_data)
-                return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
+                return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), nifty_direction, stock_direction)
 
         if ENABLE_SHORT and today_open < pdl:
             trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
             if trigger is not None and self._fresh(trigger):
                 if nifty_candle is not None and self._candle_direction(nifty_candle) != "BEARISH":
                     return None
-                if sector_candle is not None and self._candle_direction(sector_candle) != "BEARISH":
-                    return None
                 setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
                 stock_direction = self._direction(setup_data)
-                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
+                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), nifty_direction, stock_direction)
         return None
 
-    def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction):
+    def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, nifty_direction, stock_direction):
         trigger_close = float(candle["Close"])
         stop = today_high if side == "SELL" else today_low
         reward_distance = abs(trigger_close - stop) * self.rr
@@ -143,7 +138,7 @@ class OpenReversalEngine:
             "open_cross_level": round(today_open, 4), "stop_loss": round(stop, 4), "target": round(target, 2),
             "risk_reward": self.rr, "pdh": round(pdh, 4), "pdl": round(pdl, 4), "today_open": round(today_open, 4),
             "today_low": round(today_low, 4), "today_high": round(today_high, 4), "market_direction": nifty_direction,
-            "sector_direction": sector_direction, "stock_direction": stock_direction, "stock_today_direction": stock_direction,
+            "stock_direction": stock_direction, "stock_today_direction": stock_direction,
             "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL", "trigger_candle_open": round(float(candle["Open"]), 4),
             "trigger_candle_close": round(trigger_close, 4), "trigger_close": round(trigger_close, 4), "pdh_pdl_reached": True,
         }
