@@ -65,7 +65,8 @@ class ScannerEngine:
             if frame.empty:
                 frame.to_csv(path, index=False)
             else:
-                frame.sort_values("GapPercent", ascending=False).to_csv(path, index=False)
+                # Primary ordering is the strategy gap classification (PDH/PDL).
+                frame.sort_values(["GapType", "GapPercent"], ascending=[True, False]).to_csv(path, index=False)
         except Exception as error:
             print("Could not write gap analysis:", error)
 
@@ -107,8 +108,8 @@ class ScannerEngine:
             self._write_diagnostics()
             return pd.DataFrame()
 
-        # Gap board covers every stock with valid opening/reference data;
-        # liquidity is applied only to actual trade candidates.
+        # The pre-market gap board contains every stock with valid opening/reference data.
+        # Liquidity is applied only to actual trade candidates.
         cutoff = float(refs["PreviousDayTurnover"].median())
         refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= cutoff
         self.diagnostics["liquidity_passed"] = int(refs["LiquidityQualified"].sum())
@@ -134,11 +135,23 @@ class ScannerEngine:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
 
-            gap_percent = ((today_open - pdc) / pdc * 100.0) if pdc else 0.0
-            gap_type = "GAP_UP" if gap_percent > 0 else "GAP_DOWN" if gap_percent < 0 else "FLAT"
+            # Strategy gap classification is relative to PDH/PDL, not Previous Close.
+            if today_open > pdh:
+                gap_type = "GAP_UP_PDH"
+                setup = "BUY_PDH_TO_OPEN"
+            elif today_open < pdl:
+                gap_type = "GAP_DOWN_PDL"
+                setup = "SELL_PDL_TO_OPEN"
+            else:
+                gap_type = "INSIDE_PDH_PDL"
+                setup = "NO_GAP_SETUP"
+
+            # Keep previous-close gap as supplementary research data only.
+            gap_percent_from_close = ((today_open - pdc) / pdc * 100.0) if pdc else 0.0
             gap_rows.append({
                 "Symbol": symbol, "PreviousClose": round(pdc, 4), "TodayOpen": round(today_open, 4),
-                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3),
+                "GapFromPreviousClose": round(today_open - pdc, 4),
+                "GapPercentFromPreviousClose": round(gap_percent_from_close, 3),
                 "GapType": gap_type, "PDH": round(pdh, 4), "PDL": round(pdl, 4),
                 "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
                 "LiquidityQualified": bool(ref["LiquidityQualified"]),
@@ -147,17 +160,14 @@ class ScannerEngine:
 
             if not bool(ref["LiquidityQualified"]):
                 continue
-            if today_open > pdh:
-                setup = "SELL_PDH_TO_OPEN"
-            elif today_open < pdl:
-                setup = "BUY_PDL_TO_OPEN"
-            else:
+            if setup == "NO_GAP_SETUP":
                 self.diagnostics["rejections"]["opening_setup"] += 1
                 continue
             rows.append({
                 "Symbol": symbol, "PDH": round(pdh, 4), "PDL": round(pdl, 4),
                 "TodayOpen": round(today_open, 4), "PreviousDayClose": round(pdc, 4),
-                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3),
+                "GapFromPreviousClose": round(today_open - pdc, 4),
+                "GapPercentFromPreviousClose": round(gap_percent_from_close, 3),
                 "GapType": gap_type, "OpeningSetup": setup,
                 "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
                 "LiquidityQualified": True,
@@ -165,8 +175,8 @@ class ScannerEngine:
 
         self.gap_analysis = pd.DataFrame(gap_rows)
         self.diagnostics["gap_data_count"] = len(gap_rows)
-        self.diagnostics["gap_up_count"] = int(sum(r["GapType"] == "GAP_UP" for r in gap_rows))
-        self.diagnostics["gap_down_count"] = int(sum(r["GapType"] == "GAP_DOWN" for r in gap_rows))
+        self.diagnostics["gap_up_count"] = int(sum(r["GapType"] == "GAP_UP_PDH" for r in gap_rows))
+        self.diagnostics["gap_down_count"] = int(sum(r["GapType"] == "GAP_DOWN_PDL" for r in gap_rows))
         self._write_gap_analysis(gap_rows)
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         self.diagnostics["opening_setup_passed"] = len(result)
@@ -218,7 +228,7 @@ class ScannerEngine:
         market_direction = self._market_direction()
         selected = candidates.copy()
         if REQUIRE_MARKET_ALIGNMENT:
-            expected = selected["OpeningSetup"].map({"BUY_PDL_TO_OPEN": "BULLISH", "SELL_PDH_TO_OPEN": "BEARISH"})
+            expected = selected["OpeningSetup"].map({"BUY_PDH_TO_OPEN": "BULLISH", "SELL_PDL_TO_OPEN": "BEARISH"})
             selected = selected[expected.eq(market_direction)].copy() if market_direction in {"BULLISH", "BEARISH"} else selected.iloc[0:0].copy()
         else:
             selected = selected.copy()
@@ -241,7 +251,7 @@ class ScannerEngine:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
             opening = selected[selected["Symbol"].eq(symbol)].iloc[0]
-            expected_direction = "BULLISH" if opening["OpeningSetup"] == "BUY_PDL_TO_OPEN" else "BEARISH"
+            expected_direction = "BULLISH" if opening["OpeningSetup"] == "BUY_PDH_TO_OPEN" else "BEARISH"
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
             if REQUIRE_SECTOR_ALIGNMENT and sector_direction != expected_direction:
@@ -259,8 +269,11 @@ class ScannerEngine:
             stock_passed += 1
             signal.update({
                 "sector": sector, "industry": sector, "liquidity_qualified": True, "nifty500_universe": True,
-                "previous_day_close": opening.get("PreviousDayClose"), "gap": opening.get("Gap"),
-                "gap_percent": opening.get("GapPercent"), "gap_type": opening.get("GapType"),
+                "previous_day_close": opening.get("PreviousDayClose"),
+                "gap_from_previous_close": opening.get("GapFromPreviousClose"),
+                "gap_percent_from_previous_close": opening.get("GapPercentFromPreviousClose"),
+                "gap_type": opening.get("GapType"),
+                "pdh_pdl_gap": True,
             })
             signals.append(signal)
 
