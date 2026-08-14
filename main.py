@@ -1,4 +1,4 @@
-"""Core paper-trading bot for the NIFTY 100 Gap-Failure + Open-Reclaim strategy.
+"""Core paper-trading bot for the NIFTY 250 Gap-Failure + Open-Reclaim strategy.
 
 This module contains execution orchestration only. Strategy decisions come from
 ScannerEngine, risk approval comes from RiskEngine, and simulated execution is
@@ -151,17 +151,62 @@ class TradingBot:
             "stock_direction", "stock_today_direction", "previous_day_aligned",
             "previous_day_direction", "setup_type", "entry_candle_open",
             "entry_candle_close", "risk_per_share", "actual_risk", "position_value",
+            "trigger_entry_time", "market_entry_time", "trigger_close",
         )
         for field in context_fields:
             if field in signal:
                 position[field] = signal[field]
         return position
 
+    def _set_market_entry(self, signal):
+        """After a completed 1-minute trigger, enter at the latest available market price.
+
+        The trigger candle itself only confirms the setup. Its close is NOT used as
+        the execution price. The next available market price is used for paper entry,
+        then risk/quantity/target are recalculated from that actual entry.
+        """
+        side = str(signal.get("signal", "")).upper()
+        stop = float(signal.get("stop_loss", 0) or 0)
+        trigger_close = float(signal.get("entry_candle_close", signal.get("entry", 0)) or 0)
+        quote = self.price_data.get_latest_available_1m(str(signal.get("symbol", "")))
+        if not quote:
+            return False
+        market_price = quote.get("Close")
+        try:
+            market_price = float(market_price)
+        except (TypeError, ValueError):
+            return False
+        if market_price <= 0:
+            return False
+        if side == "BUY" and stop >= market_price:
+            return False
+        if side == "SELL" and stop <= market_price:
+            return False
+
+        signal["trigger_entry_time"] = signal.get("entry_time")
+        signal["trigger_close"] = trigger_close
+        signal["market_entry_time"] = self._now().isoformat(timespec="seconds")
+        signal["entry"] = round(market_price, 2)
+        signal["entry_time"] = signal["market_entry_time"]
+        signal["target"] = round(
+            market_price + (market_price - stop) * 1.25 if side == "BUY"
+            else market_price - (stop - market_price) * 1.25,
+            2,
+        )
+        signal["entry_distance_from_open_pct"] = round(
+            abs(market_price - float(signal.get("today_open", market_price)))
+            / float(signal.get("today_open", market_price)) * 100.0, 4
+        return True
+
     def process_signal(self, signal):
         if not isinstance(signal, dict):
             return
         symbol = str(signal.get("symbol", "")).strip().upper()
         if not symbol:
+            return
+        # The 1-minute candle is the trigger only. Execution happens at the
+        # latest available market price after that candle has closed.
+        if not self._set_market_entry(signal):
             return
         key = self.signal_key(signal)
         if key in self.processed_signals:
@@ -259,138 +304,10 @@ class TradingBot:
                     timestamps = timestamps.dt.tz_localize(INDIA_TZ)
                 else:
                     timestamps = timestamps.dt.tz_convert(INDIA_TZ)
-                frame = frame[timestamps < self._now().replace(second=0, microsecond=0)].copy()
-            else:
-                timestamps = pd.to_datetime(frame.index, errors="coerce")
-                if timestamps.tz is None:
-                    timestamps = timestamps.tz_localize(INDIA_TZ)
-                else:
-                    timestamps = timestamps.tz_convert(INDIA_TZ)
-                frame = frame[timestamps < self._now().replace(second=0, microsecond=0)].copy()
+                current_minute = self._now().replace(second=0, microsecond=0)
+                frame = frame[timestamps < current_minute].copy()
         except Exception:
-            if len(frame) > 1:
-                frame = frame.iloc[:-1]
+            pass
         if frame.empty:
             return None
-        row = frame.iloc[-1]
-        candle = row.to_dict()
-        candle.setdefault("Datetime", row.get("Datetime", row.name))
-        return candle
-
-    def monitor_position(self, symbol):
-        candle = self.latest_1m_candle(symbol)
-        if candle is None:
-            return
-        closed_trade = self.paper_engine.process_candle(symbol, candle)
-        if closed_trade is None:
-            return
-        pnl = float(closed_trade.get("pnl", 0) or 0)
-        self.daily_pnl = round(self.daily_pnl + pnl, 2)
-        if str(closed_trade.get("exit_reason", "")).upper() == "STOP_LOSS":
-            self.cooldown_until = self._now().replace(tzinfo=None) + timedelta(minutes=COOLDOWN_MINUTES)
-        saved = self.journal.log_trade(closed_trade)
-        print(
-            "PAPER CLOSED:", symbol, "reason=", closed_trade.get("exit_reason"),
-            "exit=", closed_trade.get("exit_price"), "P&L=", pnl,
-            "journal=", saved.get("saved", False),
-        )
-
-    def monitor_open_positions(self):
-        for symbol in list(self.paper_engine.open_positions.keys()):
-            self.monitor_position(symbol)
-
-    def force_square_off(self):
-        """Close every remaining position at the latest completed price."""
-        symbols = list(self.paper_engine.open_positions.keys())
-        if not symbols:
-            return
-        for symbol in symbols:
-            if self.paper_engine.open_positions.get(symbol) is None:
-                continue
-            candle = self.latest_1m_candle(symbol)
-            if candle is None:
-                print(symbol, "square-off retry pending: no completed 1-minute candle")
-                continue
-            exit_price = candle.get("Close", candle.get("close"))
-            exit_time = candle.get("Datetime", candle.get("datetime")) or self._now().replace(tzinfo=None)
-            try:
-                exit_price = float(exit_price)
-            except (TypeError, ValueError):
-                print(symbol, "square-off retry pending: invalid completed close")
-                continue
-            closed_trade = self.paper_engine.close_position(symbol, exit_price, exit_time, "SQUARE_OFF")
-            if closed_trade is None:
-                print(symbol, "square-off retry pending: position could not be closed")
-                continue
-            pnl = float(closed_trade.get("pnl", 0) or 0)
-            self.daily_pnl = round(self.daily_pnl + pnl, 2)
-            saved = self.journal.log_trade(closed_trade)
-            print("SQUARE OFF:", symbol, "exit=", exit_price, "P&L=", pnl, "journal=", saved.get("saved", False))
-
-    def display_status(self):
-        session = self.paper_engine.summary()
-        history = self.journal.summary()
-        missed = self.journal.get_trades()
-        missed_open = int((missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_OPEN").sum()) if not missed.empty and "status" in missed.columns else 0
-        missed_closed = int((missed["status"].astype(str).str.upper() == "MISSED_CAPITAL_CLOSED").sum()) if not missed.empty and "status" in missed.columns else 0
-        print(
-            "STATUS", self.current_time(), "open=", session.get("open_positions", 0),
-            "session_pnl=", session.get("total_pnl", 0), "daily_pnl=", round(self.daily_pnl, 2),
-            "journal_trades=", history.get("total_trades", 0), "journal_pnl=", history.get("total_pnl", 0),
-            "missed_capital_open=", missed_open, "missed_capital_closed=", missed_closed,
-        )
-
-    def run_cycle(self):
-        now = self.current_time()
-        self.missed_capital.monitor()
-        if now >= SQUARE_OFF_TIME:
-            if not self.square_off_done:
-                self.force_square_off()
-                if not self.paper_engine.open_positions:
-                    self.square_off_done = True
-                else:
-                    self.square_off_done = False
-                    print("MANDATORY SQUARE-OFF INCOMPLETE — will retry on next cycle.")
-            else:
-                # Defensive recovery: if an unexpected state leaves a position
-                # open after square_off_done, immediately re-enter the retry path.
-                if self.paper_engine.open_positions:
-                    self.square_off_done = False
-                    self.force_square_off()
-                    if not self.paper_engine.open_positions:
-                        self.square_off_done = True
-            self.display_status()
-            return
-        self.monitor_open_positions()
-        if self.current_time() < SQUARE_OFF_TIME:
-            self.scan_for_entries()
-        self.display_status()
-
-    def run(self):
-        print("=" * 90)
-        print("NSE CATALYST — NIFTY 100 GAP-FAILURE + OPEN-RECLAIM PAPER BOT")
-        print("Strategy: pure price action | Paper: ON | Live: OFF")
-        print(f"Entry: {TRADING_START}-{LAST_ENTRY_TIME} IST | Square-off: {SQUARE_OFF_TIME} IST | Scan: {SCAN_INTERVAL_SECONDS}s")
-        print("Pre-09:45 candidates: liquidity + previous-day direction + today's opening gap")
-        print("=" * 90)
-        try:
-            while self.running:
-                self.run_cycle()
-                if self.current_time() >= SQUARE_OFF_TIME and not self.paper_engine.open_positions:
-                    break
-                time.sleep(max(1, int(SCAN_INTERVAL_SECONDS)))
-        except KeyboardInterrupt:
-            print("Bot stopped manually.")
-        except Exception as error:
-            print(f"Bot fatal error: {type(error).__name__}: {error}")
-            raise
-
-
-def ensure_bot_running():
-    """Start the persistent paper bot when imported by the worker."""
-    bot = TradingBot()
-    bot.run()
-
-
-if __name__ == "__main__":
-    ensure_bot_running()
+        return frame.iloc[-1].to_dict()
