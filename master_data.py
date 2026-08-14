@@ -32,7 +32,6 @@ def _write(path, df):
 
 
 def _restore_if_missing(path, repo_path):
-    """Restore durable master data only when the local file is absent/empty."""
     if path.exists() and path.stat().st_size > 0:
         return
     try:
@@ -71,10 +70,7 @@ def _prune_to_last_six_months(path, date_columns):
     current_period = pd.Period(now.strftime("%Y-%m"), freq="M")
     first_period = current_period - (MASTER_MONTHS - 1)
     allowed = {str(p) for p in pd.period_range(first_period, current_period, freq="M")}
-    # Keep only valid six-month records. Undated/corrupt records must not survive
-    # forever and silently inflate the master dataset.
-    valid_dates = months.notna()
-    keep = valid_dates & months.isin(allowed)
+    keep = months.notna() & months.isin(allowed)
     trimmed = frame.loc[keep].copy()
     if len(trimmed) != len(frame):
         _write(path, trimmed)
@@ -128,23 +124,20 @@ def build_master_data():
             t = t.drop(columns=["TradeDate"])
         date_col = next((c for c in ["entry_time", "exit_time", "timestamp"] if c in t.columns), None)
         t.insert(0, "TradeDate", t[date_col].astype(str).str[:10] if date_col else today)
-        _merge(
-            MASTER_TRADES,
-            t,
-            ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"],
-        )
+        _merge(MASTER_TRADES, t, ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"])
 
     today_trades = _today_rows(trades, ["entry_time", "timestamp", "exit_time"], today)
     today_closed = _today_rows(trades, ["exit_time"], today)
     today_signals = _today_rows(signals, ["timestamp", "entry_time"], today)
     today_pnl = float(pd.to_numeric(today_closed.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    gap_types = gaps.get("GapType", pd.Series(dtype=str)).astype(str).str.upper()
 
     row = {
         "TradeDate": today,
         "PreparedAtIST": datetime.now(IST).isoformat(timespec="seconds"),
         "StocksInGapBoard": int(len(gaps)),
-        "GapUps": int((gaps.get("GapType", pd.Series(dtype=str)) == "GAP_UP").sum()),
-        "GapDowns": int((gaps.get("GapType", pd.Series(dtype=str)) == "GAP_DOWN").sum()),
+        "GapUps": int(gap_types.eq("GAP_UP_PDH").sum()),
+        "GapDowns": int(gap_types.eq("GAP_DOWN_PDL").sum()),
         "SignalsRecorded": int(len(today_signals)),
         "TradesRecorded": int(len(today_trades)),
         "ClosedTrades": int((today_closed.get("status", pd.Series(dtype=str)).astype(str).str.upper() == "CLOSED").sum()),
