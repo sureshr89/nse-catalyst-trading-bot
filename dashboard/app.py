@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 ROOT=Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 from dashboard.nav import render_nav
-from bot_runner import ensure_bot_running
+from worker_service import ensure_worker_process
 st.set_page_config(page_title="NSE Catalyst | Bot Status",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
 st_autorefresh(interval=5000,key="live")
 def load(p,kind="json"):
@@ -29,24 +29,18 @@ st.markdown("""
 render_nav()
 status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json")
 try:
-    live=ensure_bot_running()
+    live=ensure_worker_process()
     if isinstance(live,dict):status.update(live)
 except Exception as error:
-    status.setdefault("error",f"Worker status unavailable: {type(error).__name__}: {error}")
-def heartbeat_alive(value,max_age_seconds=180):
+    status.setdefault("error",f"Worker launcher unavailable: {type(error).__name__}: {error}
+def heartbeat_alive(value,max_age_seconds=90):
     try:
         stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
         if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
         age=(datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds()
         return 0 <= age <= max_age_seconds
     except Exception:return False
-# The dashboard can execute in a different Streamlit context from the persistent
-# worker. A fresh heartbeat or completed scan is therefore also a valid liveness
-# signal; the local thread object alone is not sufficient.
-local_worker=bool(status.get("worker_alive",False))
-recent_heartbeat=heartbeat_alive(status.get("heartbeat"))
-recent_scan=heartbeat_alive(status.get("last_scan")) or heartbeat_alive(status.get("last_scan_completed"))
-worker=local_worker or recent_heartbeat or recent_scan
+worker=bool(status.get("worker_alive",False)) and heartbeat_alive(status.get("heartbeat"))
 bot=str(status.get("status","STARTING")).upper()
 if worker and bot in {"WAITING","STOPPED","STARTING"}:st.warning("🟡 BOT READY • WORKER ALIVE • WAITING / RECOVERING")
 elif worker:st.success("🟢 BOT RUNNING • PAPER TRADING")
