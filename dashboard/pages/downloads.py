@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 from io import BytesIO
+from copy import copy
 import streamlit as st
 import pandas as pd
 from dashboard.nav import render_nav
@@ -40,21 +41,63 @@ def read_csv(name):
         return pd.DataFrame()
 
 
-def build_master_excel():
-    """Create one Excel workbook containing the complete master research data."""
+def _month_series(frame, columns):
+    """Return YYYY-MM values from the first usable date column."""
+    for column in columns:
+        if column in frame.columns:
+            values = pd.to_datetime(frame[column], errors="coerce")
+            if values.notna().any():
+                return values.dt.strftime("%Y-%m")
+    return pd.Series([None] * len(frame), index=frame.index, dtype="object")
+
+
+def available_master_months():
+    """Find months that actually have master records without loading huge data into Excel."""
+    months = set()
+    sources = [
+        ("MASTER_DAILY_STOCK_DATA.csv", ["TradeDate"]),
+        ("MASTER_TRADES.csv", ["TradeDate", "entry_time", "exit_time"]),
+        ("MASTER_DAILY_SUMMARY.csv", ["TradeDate"]),
+    ]
+    for filename, date_columns in sources:
+        frame = read_csv(filename)
+        if not frame.empty:
+            months.update(x for x in _month_series(frame, date_columns).dropna().unique() if x)
+    # Gap board/signals are included in the monthly workbook too.
+    for filename, date_columns in [
+        ("gap_analysis.csv", ["PreparedAtIST"]),
+        ("signals.csv", ["timestamp"]),
+    ]:
+        frame = read_csv(filename)
+        if not frame.empty:
+            months.update(x for x in _month_series(frame, date_columns).dropna().unique() if x)
+    return sorted(months, reverse=True)
+
+
+def filter_month(frame, month, date_columns):
+    if frame.empty:
+        return frame
+    keys = _month_series(frame, date_columns)
+    return frame.loc[keys.eq(month)].copy()
+
+
+def build_monthly_master_excel(month):
+    """Create only the selected month's workbook, keeping downloads small."""
     sheets = {
-        "Daily Stock Inputs": read_csv("MASTER_DAILY_STOCK_DATA.csv"),
-        "All Trades": read_csv("MASTER_TRADES.csv"),
-        "Daily Summary": read_csv("MASTER_DAILY_SUMMARY.csv"),
-        "Gap Board": read_csv("gap_analysis.csv"),
-        "Signals": read_csv("signals.csv"),
+        "Daily Stock Inputs": (read_csv("MASTER_DAILY_STOCK_DATA.csv"), ["TradeDate"]),
+        "All Trades": (read_csv("MASTER_TRADES.csv"), ["TradeDate", "entry_time", "exit_time"]),
+        "Daily Summary": (read_csv("MASTER_DAILY_SUMMARY.csv"), ["TradeDate"]),
+        "Gap Board": (read_csv("gap_analysis.csv"), ["PreparedAtIST"]),
+        "Signals": (read_csv("signals.csv"), ["timestamp"]),
     }
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
-            if frame.empty:
-                frame = pd.DataFrame({"Status": ["No data recorded yet"]})
-            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+        for sheet_name, (frame, date_columns) in sheets.items():
+            monthly = filter_month(frame, month, date_columns)
+            if monthly.empty:
+                monthly = pd.DataFrame({"Status": [f"No records for {month}"]})
+            monthly.to_excel(writer, sheet_name=sheet_name, index=False)
             ws = writer.book[sheet_name]
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
@@ -63,7 +106,20 @@ def build_master_excel():
                 width = min(max(max((len(v) for v in values), default=10) + 2, 10), 32)
                 ws.column_dimensions[column_cells[0].column_letter].width = width
             for cell in ws[1]:
-                cell.font = cell.font.copy(bold=True)
+                new_font = copy(cell.font)
+                new_font.bold = True
+                cell.font = new_font
+
+        # Small index sheet makes every monthly file self-explanatory.
+        info = pd.DataFrame([
+            ["Month", month],
+            ["Purpose", "NIFTY 500 paper-trading research master data"],
+            ["Sheets", "Daily Stock Inputs, All Trades, Daily Summary, Gap Board, Signals"],
+            ["Generated", pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")],
+        ], columns=["Field", "Value"])
+        info.to_excel(writer, sheet_name="README", index=False)
+        writer.book["README"].freeze_panes = "A2"
+
     output.seek(0)
     return output.getvalue()
 
@@ -84,18 +140,24 @@ status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive"
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
 diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "gap_up_count": 0, "gap_down_count": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
 
-st.subheader("⭐ Master Trading Data — One File")
-st.caption("One Excel workbook contains all master data. Download it weekly for backup and analysis.")
-master_excel = build_master_excel()
-st.download_button(
-    "⬇️ DOWNLOAD MASTER TRADING DATA — ALL DATA",
-    data=master_excel,
-    file_name="NSE_CATALYST_MASTER_TRADING_DATA.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key="download_master_all_excel",
-    width="stretch",
-)
-st.caption("One file • Sheets: Daily Stock Inputs • All Trades • Daily Summary • Gap Board • Signals")
+st.subheader("⭐ Master Trading Data — Month Wise")
+st.caption("Each download contains only the selected month. This keeps the Excel file small and fast to load on mobile.")
+
+months = available_master_months()
+if months:
+    selected_month = st.selectbox("📅 Select month", months, index=0, key="master_month_select")
+    monthly_excel = build_monthly_master_excel(selected_month)
+    st.download_button(
+        f"⬇️ DOWNLOAD MASTER — {selected_month}",
+        data=monthly_excel,
+        file_name=f"NSE_CATALYST_MASTER_TRADING_DATA_{selected_month}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_master_monthly_excel",
+        width="stretch",
+    )
+    st.caption("One monthly Excel file • Daily Stock Inputs • All Trades • Daily Summary • Gap Board • Signals • README")
+else:
+    st.info("No master trading month is available yet. The first trading data will appear here automatically.")
 
 st.subheader("Paper Trading Files")
 st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="nifty500_trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
