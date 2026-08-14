@@ -73,7 +73,11 @@ class ScannerEngine:
         path = Path(__file__).resolve().parents[1] / "outputs" / "gap_analysis.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            pd.DataFrame(rows).sort_values("GapPercent", ascending=False).to_csv(path, index=False)
+            frame = pd.DataFrame(rows)
+            if frame.empty:
+                frame.to_csv(path, index=False)
+            else:
+                frame.sort_values("GapPercent", ascending=False).to_csv(path, index=False)
         except Exception as error:
             print("Could not write gap analysis:", error)
 
@@ -116,14 +120,13 @@ class ScannerEngine:
             self._write_diagnostics()
             return pd.DataFrame()
 
+        # Liquidity is a trade filter, not a gap-board filter. We first build
+        # the gap board for every stock with valid opening/reference data, then
+        # apply liquidity to the actual reversal candidate list.
         cutoff = float(refs["PreviousDayTurnover"].median())
         refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= cutoff
         self.diagnostics["liquidity_passed"] = int(refs["LiquidityQualified"].sum())
         self.diagnostics["rejections"]["liquidity"] = int((~refs["LiquidityQualified"]).sum())
-        refs = refs[refs["LiquidityQualified"]].copy()
-        if refs.empty:
-            self._write_diagnostics()
-            return pd.DataFrame()
 
         market_data = self.price_data.get_multi_1m(refs["Symbol"].astype(str).str.upper().tolist())
         rows, gap_rows = [], []
@@ -149,11 +152,21 @@ class ScannerEngine:
             gap_percent = ((today_open - pdc) / pdc * 100.0) if pdc else 0.0
             gap_type = "GAP_UP" if gap_percent > 0 else "GAP_DOWN" if gap_percent < 0 else "FLAT"
             gap_rows.append({
-                "Symbol": symbol, "PreviousClose": round(pdc, 4), "TodayOpen": round(today_open, 4),
-                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3), "GapType": gap_type,
-                "PDH": round(pdh, 4), "PDL": round(pdl, 4), "PreparedAtIST": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "Symbol": symbol,
+                "PreviousClose": round(pdc, 4),
+                "TodayOpen": round(today_open, 4),
+                "Gap": round(today_open - pdc, 4),
+                "GapPercent": round(gap_percent, 3),
+                "GapType": gap_type,
+                "PDH": round(pdh, 4),
+                "PDL": round(pdl, 4),
+                "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
+                "LiquidityQualified": bool(ref["LiquidityQualified"]),
+                "PreparedAtIST": datetime.now().astimezone().isoformat(timespec="seconds"),
             })
 
+            if not bool(ref["LiquidityQualified"]):
+                continue
             if today_open > pdh:
                 setup = "SELL_PDH_TO_OPEN"
             elif today_open < pdl:
