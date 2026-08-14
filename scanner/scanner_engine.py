@@ -21,6 +21,7 @@ class ScannerEngine:
         self.sectors = pd.DataFrame()
         self.opening_candidates = pd.DataFrame()
         self.gap_analysis = pd.DataFrame()
+        self.universe_market_data = {}
         self._prepared_date = None
         self._opening_prepared_date = None
         self.diagnostics = self._empty_diagnostics()
@@ -33,6 +34,8 @@ class ScannerEngine:
             "sector_alignment_passed": 0, "strategy_setup_passed": 0,
             "stock_alignment_passed": 0, "final_signals": 0,
             "gap_up_count": 0, "gap_down_count": 0, "gap_data_count": 0,
+            "nifty500_bullish": 0, "nifty500_bearish": 0, "nifty500_neutral": 0,
+            "nifty500_coverage": 0,
             "rejections": {"missing_data": 0, "liquidity": 0, "opening_setup": 0,
                            "market_alignment": 0, "sector_alignment": 0,
                            "pdh_pdl_not_reached": 0, "no_open_cross": 0,
@@ -113,6 +116,9 @@ class ScannerEngine:
         self.diagnostics["rejections"]["liquidity"] = int((~refs["LiquidityQualified"]).sum())
         symbols = refs["Symbol"].astype(str).str.upper().tolist()
         market_data = self.price_data.get_multi_1m(symbols)
+        # Keep the full-universe intraday data so market and sector alignment are
+        # calculated from the NIFTY 500 universe, not only from selected candidates.
+        self.universe_market_data = market_data
         rows, gap_rows = [], []
 
         for _, ref in refs.iterrows():
@@ -132,7 +138,6 @@ class ScannerEngine:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
 
-            # Strategy gap classification is explicitly relative to PDH/PDL.
             if today_open > pdh:
                 gap_type = "GAP_UP_PDH"
                 setup = "BUY_PDH_TO_OPEN"
@@ -149,7 +154,6 @@ class ScannerEngine:
                 gap_value = 0.0
                 gap_percent = 0.0
 
-            # Previous-close gap remains available only as supplementary research data.
             gap_from_close = today_open - pdc
             gap_percent_from_close = (gap_from_close / pdc * 100.0) if pdc else 0.0
             gap_rows.append({
@@ -198,10 +202,28 @@ class ScannerEngine:
         opening, close = float(data.iloc[0]["Open"]), float(data.iloc[-1]["Close"])
         return "BULLISH" if close > opening else "BEARISH" if close < opening else "NEUTRAL"
 
-    def _market_direction(self):
-        return self._direction(self.price_data.get_index_1m("^NSEI"))
+    def _nifty500_direction(self, market_data):
+        """Calculate breadth direction from the full available NIFTY 500 universe."""
+        counts = {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0}
+        for df in market_data.values():
+            direction = self._direction(df)
+            if direction in counts:
+                counts[direction] += 1
+        coverage = counts["BULLISH"] + counts["BEARISH"] + counts["NEUTRAL"]
+        self.diagnostics["nifty500_bullish"] = counts["BULLISH"]
+        self.diagnostics["nifty500_bearish"] = counts["BEARISH"]
+        self.diagnostics["nifty500_neutral"] = counts["NEUTRAL"]
+        self.diagnostics["nifty500_coverage"] = coverage
+        if coverage == 0:
+            return "UNKNOWN"
+        if counts["BULLISH"] > counts["BEARISH"] and counts["BULLISH"] > counts["NEUTRAL"]:
+            return "BULLISH"
+        if counts["BEARISH"] > counts["BULLISH"] and counts["BEARISH"] > counts["NEUTRAL"]:
+            return "BEARISH"
+        return "NEUTRAL"
 
     def _sector_directions(self, market_data):
+        """Calculate each sector from all available NIFTY 500 stocks in that sector."""
         sector_map = dict(zip(self.sectors.get("Symbol", []), self.sectors.get("Sector", []))) if not self.sectors.empty else {}
         rows = []
         for symbol, df in market_data.items():
@@ -219,6 +241,16 @@ class ScannerEngine:
             result[sector] = "BULLISH" if bull > bear else "BEARISH" if bear > bull else "NEUTRAL"
         return result
 
+    @staticmethod
+    def _level_reached(candles, side, pdh, pdl, start_time):
+        if candles is None or candles.empty:
+            return False
+        data = candles.sort_values("Datetime")
+        data = data[data["Datetime"].dt.time >= start_time]
+        if side == "BUY":
+            return bool((pd.to_numeric(data["Low"], errors="coerce") < float(pdh)).any())
+        return bool((pd.to_numeric(data["High"], errors="coerce") > float(pdl)).any())
+
     def scan(self):
         print("=" * 100)
         print("NIFTY 500 PDH/PDL + TODAY OPEN 1-MINUTE REVERSAL SCANNER")
@@ -230,28 +262,27 @@ class ScannerEngine:
         if candidates.empty:
             return self._finish()
 
-        market_direction = self._market_direction()
+        # IMPORTANT: market alignment is NIFTY 500 breadth, not the NIFTY 50 index.
+        market_direction = self._nifty500_direction(self.universe_market_data)
         selected = candidates.copy()
         if REQUIRE_MARKET_ALIGNMENT:
             expected = selected["OpeningSetup"].map({"BUY_PDH_TO_OPEN": "BULLISH", "SELL_PDL_TO_OPEN": "BEARISH"})
             selected = selected[expected.eq(market_direction)].copy() if market_direction in {"BULLISH", "BEARISH"} else selected.iloc[0:0].copy()
-        else:
-            selected = selected.copy()
         self.diagnostics["market_alignment_passed"] = len(selected)
         self.diagnostics["rejections"]["market_alignment"] = max(0, len(candidates) - len(selected))
         if selected.empty:
             return self._finish()
 
-        symbols = selected["Symbol"].astype(str).str.upper().tolist()
-        market_data = self.price_data.get_multi_1m(symbols)
-        sector_directions = self._sector_directions(market_data)
+        # Use the full NIFTY 500 dataset for sector breadth, not candidate-only data.
+        sector_directions = self._sector_directions(self.universe_market_data)
         reference_by_symbol = self.references.set_index("Symbol").to_dict("index")
         sector_map = dict(zip(self.sectors.get("Symbol", []), self.sectors.get("Sector", []))) if not self.sectors.empty else {}
         signals = []
         sector_passed = strategy_passed = stock_passed = 0
 
-        for symbol in symbols:
-            candles, ref = market_data.get(symbol), reference_by_symbol.get(symbol)
+        for symbol in selected["Symbol"].astype(str).str.upper().tolist():
+            candles = self.universe_market_data.get(symbol)
+            ref = reference_by_symbol.get(symbol)
             if candles is None or candles.empty or not ref:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
@@ -265,6 +296,12 @@ class ScannerEngine:
             sector_passed += 1
             signal = self.strategy.build(symbol, candles, ref.get("PDH"), ref.get("PDL"), float(opening["TodayOpen"]), sector_direction, market_direction)
             if not signal:
+                side = "BUY" if expected_direction == "BULLISH" else "SELL"
+                reached = self._level_reached(candles, side, ref.get("PDH"), ref.get("PDL"), self.strategy.start)
+                if reached:
+                    self.diagnostics["rejections"]["no_open_cross"] += 1
+                else:
+                    self.diagnostics["rejections"]["pdh_pdl_not_reached"] += 1
                 self.diagnostics["rejections"]["strategy_setup"] += 1
                 continue
             strategy_passed += 1
