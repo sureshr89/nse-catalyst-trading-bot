@@ -2,35 +2,33 @@
 
 ## Active strategy — NIFTY 500 PDH/PDL + Today's Open Reversal
 
-A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The active strategy uses previous-day High/Low, today's Open, completed 1-minute candles, NIFTY market direction, sector direction and stock direction.
+A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The active strategy uses previous-day High/Low, today's Open, completed 1-minute candles, NIFTY market direction and stock direction.
 
 ### SELL setup
 
-1. Today's Open is **above PDH**.
-2. Price first **touches/reaches PDH from above**.
-3. The PDH interaction must happen before the trigger candle.
+1. Today's Open is **below PDL**.
+2. Price first **reaches PDL from below**.
+3. The PDL interaction must happen before the trigger candle.
 4. A completed **1-minute candle opens above today's Open and closes below today's Open**.
 5. The completed candle is the **trigger**; its close is not the execution price.
 6. Enter using the **latest available market price after the trigger**.
-7. NIFTY direction must be **BEARISH** when market alignment is enabled.
-8. Sector direction must be **BEARISH** when sector alignment is enabled.
-9. Stock direction must be **BEARISH** when stock alignment is enabled.
-10. Stop-loss = **today's High at the time of the setup**.
-11. Target = **1.25 × actual risk**.
+7. NIFTY direction must be **BEARISH**.
+8. Stock direction must be **BEARISH**.
+9. Stop-loss = **today's High at the time of the setup**.
+10. Target = **1.25 × actual risk**.
 
 ### BUY setup
 
-1. Today's Open is **below PDL**.
-2. Price first **touches/reaches PDL from below**.
-3. The PDL interaction must happen before the trigger candle.
+1. Today's Open is **above PDH**.
+2. Price first **reaches PDH from above**.
+3. The PDH interaction must happen before the trigger candle.
 4. A completed **1-minute candle opens below today's Open and closes above today's Open**.
 5. The completed candle is the **trigger**; its close is not the execution price.
 6. Enter using the **latest available market price after the trigger**.
-7. NIFTY direction must be **BULLISH** when market alignment is enabled.
-8. Sector direction must be **BULLISH** when sector alignment is enabled.
-9. Stock direction must be **BULLISH** when stock alignment is enabled.
-10. Stop-loss = **today's Low at the time of the setup**.
-11. Target = **1.25 × actual risk**.
+7. NIFTY direction must be **BULLISH**.
+8. Stock direction must be **BULLISH**.
+9. Stop-loss = **today's Low at the time of the setup**.
+10. Target = **1.25 × actual risk**.
 
 ### Risk controls
 
@@ -48,7 +46,7 @@ A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The act
 
 ### Clean data model
 
-Only the active strategy's data is retained in the runtime model: **PDH, PDL, today's Open, today's High/Low, 1-minute trigger information, market/sector/stock direction, risk and trade results**. Old strategy names, PDC-based setup data, and old strategy journals are not part of the active model.
+Only the active strategy's data is retained in the runtime model: **PDH, PDL, today's Open, today's High/Low, 1-minute trigger information, NIFTY/stock direction, liquidity, risk and trade results**. Old setup fields are not part of the active model.
 
 ### Main modules
 
@@ -58,7 +56,6 @@ Only the active strategy's data is retained in the runtime model: **PDH, PDL, to
 - `market/price_data.py` — NIFTY 500 and NIFTY market price data
 - `data/stock_universe.py` — NIFTY 500 universe
 - `data/reference_store.py` — PDH/PDL daily references
-- `data/sector_store.py` — NIFTY 500 sector mapping
 - `bot_runner.py` — persistent paper worker
 - `dashboard/` — status, current trading, analysis and downloads
 
