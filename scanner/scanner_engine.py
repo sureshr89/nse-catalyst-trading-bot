@@ -83,6 +83,29 @@ class ScannerEngine:
     def _today():
         return pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
 
+    def _set_loaded_gap_diagnostics(self, references, saved):
+        """Reconstruct filter counts when the pre-market candidate CSV is reused."""
+        total = len(self.universe) if self.universe is not None else len(references)
+        self.diagnostics["stocks_scanned"] = int(total)
+        refs = references.copy()
+        if refs.empty:
+            self.diagnostics["rejections"]["missing_data"] = int(total)
+            return
+        turnover = pd.to_numeric(refs.get("PreviousDayTurnover"), errors="coerce")
+        pdc = pd.to_numeric(refs.get("PDC"), errors="coerce")
+        valid = refs[turnover.notna() & pdc.notna()].copy()
+        missing = max(0, int(total) - len(valid))
+        self.diagnostics["rejections"]["missing_data"] = missing
+        if valid.empty:
+            return
+        cutoff = float(turnover.loc[valid.index].median())
+        liquidity_mask = turnover.loc[valid.index] >= cutoff
+        liquidity_passed = int(liquidity_mask.sum())
+        self.diagnostics["liquidity_passed"] = liquidity_passed
+        self.diagnostics["rejections"]["liquidity"] = max(0, len(valid) - liquidity_passed)
+        self.diagnostics["gap_previous_day_passed"] = int(len(saved))
+        self.diagnostics["rejections"]["gap_previous_day"] = max(0, liquidity_passed - int(len(saved)))
+
     def prepare_reference_data(self, force=False):
         today = self._today()
         if not force and self._prepared_date == today and not self.references.empty:
@@ -101,7 +124,9 @@ class ScannerEngine:
             "Symbol", "PDC", "TodayOpen", "GapPct", "GapDirection",
             "PreviousDayDirection", "PreviousDayTurnover", "LiquidityQualified",
         }
+        references = self.prepare_reference_data(force=force)
         if not force and self._gap_prepared_date == today and not self.gap_candidates.empty:
+            self._set_loaded_gap_diagnostics(references, self.gap_candidates)
             return self.gap_candidates
         if not force and output.exists():
             try:
@@ -109,12 +134,12 @@ class ScannerEngine:
                 if required.issubset(saved.columns) and not saved.empty:
                     self.gap_candidates = saved
                     self._gap_prepared_date = today
+                    self._set_loaded_gap_diagnostics(references, saved)
                     print("PRE-09:45 CANDIDATES LOADED:", len(saved), "stocks")
                     return saved
             except Exception as error:
                 print("Saved gap candidates could not be loaded:", error)
 
-        references = self.prepare_reference_data(force=force)
         if references.empty:
             print("Cannot prepare candidates: PDC references unavailable")
             return pd.DataFrame()
@@ -130,6 +155,7 @@ class ScannerEngine:
             self.diagnostics["rejections"]["missing_data"] = total
             return pd.DataFrame()
 
+        self.diagnostics["rejections"]["missing_data"] = max(0, total - len(refs))
         liquidity_cutoff = float(refs["PreviousDayTurnover"].median())
         refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= liquidity_cutoff
         liquidity_passed = int(refs["LiquidityQualified"].sum())
