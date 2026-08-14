@@ -2,15 +2,15 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-
 import pandas as pd
 import streamlit as st
-
 from dashboard.nav import render_nav
+from dashboard.style import load_css
 
 ROOT = Path(__file__).resolve().parents[2]
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 st.set_page_config(page_title="NSE Catalyst | Current Trading", page_icon="📌", layout="wide")
+st.markdown(load_css(), unsafe_allow_html=True)
 render_nav()
 
 
@@ -22,13 +22,17 @@ def read(path, kind):
 
 
 def grid(items):
-    st.markdown("<div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px'>" + "".join(f"<div style='background:#111b2d;border:1px solid #26344d;border-radius:10px;padding:8px'><div style='font-size:.58rem;color:#9fb0c7'>{a}</div><div style='font-size:.84rem;color:#f4f7fb;font-weight:750;margin-top:3px'>{b}</div></div>" for a, b in items) + "</div>", unsafe_allow_html=True)
+    html = "<div class='metric-grid'>" + "".join(
+        f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a, b in items
+    ) + "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def heartbeat_alive(value, max_age_seconds=90):
     try:
         stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if stamp.tzinfo is None: stamp = stamp.replace(tzinfo=INDIA_TZ)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=INDIA_TZ)
         return 0 <= (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() <= max_age_seconds
     except Exception:
         return False
@@ -40,7 +44,8 @@ trades = read(ROOT / "outputs/trades.csv", "csv")
 diag = read(ROOT / "outputs/scanner_diagnostics.json", "json")
 pos = state.get("open_positions", {}) if isinstance(state, dict) else {}
 closed = trades[trades["status"].astype(str).str.upper().eq("CLOSED")].copy() if not trades.empty and "status" in trades.columns else pd.DataFrame()
-if not closed.empty and "pnl" in closed.columns: closed["pnl"] = pd.to_numeric(closed["pnl"], errors="coerce").fillna(0)
+if not closed.empty and "pnl" in closed.columns:
+    closed["pnl"] = pd.to_numeric(closed["pnl"], errors="coerce").fillna(0)
 worker = bool(status.get("worker_alive")) and heartbeat_alive(status.get("heartbeat"))
 
 st.title("📌 Current Trading")
@@ -57,7 +62,7 @@ else:
     st.info("No open paper positions.")
 
 st.subheader("Scanner Filter Breakdown")
-if diag:
+if isinstance(diag, dict) and diag:
     grid([
         ("NIFTY 500 Scanned", diag.get("stocks_scanned", 0)),
         ("Liquidity Passed", diag.get("liquidity_passed", 0)),
@@ -69,19 +74,16 @@ if diag:
         ("FINAL SIGNALS", diag.get("final_signals", 0)),
     ])
     rejection_labels = [
-        ("PDH / PDL not reached", "pdh_pdl_not_reached"),
-        ("No Open Cross", "no_open_cross"),
-        ("Sector Alignment", "sector_alignment"),
-        ("Stock Alignment", "stock_alignment"),
-        ("Strategy Setup", "strategy_setup"),
-        ("NIFTY Alignment", "market_alignment"),
-        ("Opening Setup", "opening_setup"),
-        ("Liquidity", "liquidity"),
-        ("Missing Data", "missing_data"),
+        ("PDH / PDL not reached", "pdh_pdl_not_reached"), ("No Open Cross", "no_open_cross"),
+        ("Sector Alignment", "sector_alignment"), ("Stock Alignment", "stock_alignment"),
+        ("Strategy Setup", "strategy_setup"), ("NIFTY Alignment", "market_alignment"),
+        ("Opening Setup", "opening_setup"), ("Liquidity", "liquidity"), ("Missing Data", "missing_data"),
     ]
     ranked = sorted(((label, int((diag.get("rejections", {}) or {}).get(key, 0) or 0)) for label, key in rejection_labels), key=lambda x: x[1], reverse=True)
     ranked = [x for x in ranked if x[1] > 0]
-    if ranked: grid(ranked)
+    if ranked:
+        st.subheader("Top Rejection Reasons")
+        grid(ranked)
 else:
     st.info("Scanner diagnostics will appear after the next cycle.")
 
