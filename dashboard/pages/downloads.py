@@ -15,7 +15,7 @@ from master_data import build_master_data
 ROOT = Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Downloads", page_icon="⬇️", layout="wide")
 st.markdown(load_css(), unsafe_allow_html=True)
-render_nav()
+render_nav(24)
 try:
     ensure_worker_process()
 except Exception as error:
@@ -88,8 +88,6 @@ def monthly_record_counts():
 
 
 def build_monthly_master_excel(month):
-    # The Gap Board sheet uses the durable daily-stock master, not only the
-    # current day's gap_analysis.csv, so historical gap data is retained.
     daily_stock = read_csv("MASTER_DAILY_STOCK_DATA.csv")
     sheets = {
         "Daily Stock Inputs": (daily_stock, ["TradeDate"]),
