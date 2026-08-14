@@ -90,7 +90,6 @@ class TradingBot:
             return None
 
     def signal_key(self, signal):
-        # Use the immutable trigger identity, not the later market-entry time.
         return (
             str(signal.get("symbol", "")).strip().upper(),
             str(signal.get("signal", "")).strip().upper(),
@@ -112,11 +111,7 @@ class TradingBot:
 
     def log_signal(self, signal, risk_result):
         row = dict(signal)
-        row.update({
-            "risk_per_share": risk_result.get("risk_per_share", ""),
-            "actual_risk": risk_result.get("actual_risk", ""),
-            "position_value": risk_result.get("position_value", ""),
-        })
+        row.update({"risk_per_share": risk_result.get("risk_per_share", ""), "actual_risk": risk_result.get("actual_risk", ""), "position_value": risk_result.get("position_value", "")})
         row["timestamp"] = signal.get("entry_time") or self._now().isoformat()
         row["approved"] = bool(risk_result.get("approved", False))
         reasons = risk_result.get("reasons", [])
@@ -128,13 +123,11 @@ class TradingBot:
 
     def _attach_trade_context(self, position, signal):
         fields = (
-            "industry", "sector", "open_cross_level", "pdh", "pdl", "today_open",
-            "today_low", "today_high", "market_direction", "sector_direction",
-            "stock_direction", "stock_today_direction", "setup_type",
-            "trigger_candle_open", "trigger_candle_close", "trigger_close",
-            "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe",
-            "risk_per_share", "actual_risk", "position_value", "previous_day_close",
-            "gap", "gap_percent", "gap_type",
+            "open_cross_level", "pdh", "pdl", "today_open", "today_low", "today_high",
+            "market_direction", "stock_direction", "stock_today_direction", "setup_type",
+            "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached",
+            "liquidity_qualified", "nifty500_universe", "risk_per_share", "actual_risk",
+            "position_value", "previous_day_close", "gap", "gap_percent", "gap_type",
         )
         for field in fields:
             if field in signal:
@@ -142,7 +135,6 @@ class TradingBot:
         return position
 
     def _set_market_entry(self, signal):
-        """Use the next available market price after the completed trigger candle."""
         side = str(signal.get("signal", "")).upper()
         stop = float(signal.get("stop_loss", 0) or 0)
         trigger_close = float(signal.get("trigger_candle_close", signal.get("entry", 0)) or 0)
@@ -159,7 +151,6 @@ class TradingBot:
             return False
         if side == "SELL" and stop <= market_price:
             return False
-
         signal["trigger_entry_time"] = signal.get("entry_time")
         signal["trigger_close"] = trigger_close
         signal["market_entry_time"] = self._now().isoformat(timespec="seconds")
@@ -172,8 +163,6 @@ class TradingBot:
     def process_signal(self, signal):
         if not isinstance(signal, dict):
             return
-        # Capture the immutable trigger before changing entry_time to the
-        # actual market execution time.
         signal["trigger_entry_time"] = signal.get("entry_time")
         key = self.signal_key(signal)
         if key in self.processed_signals:
@@ -185,13 +174,11 @@ class TradingBot:
             return
         if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):
             return
-
         risk_result = self.risk_engine.approve_trade(signal)
         self.log_signal(signal, risk_result)
         if not risk_result.get("approved", False):
             self.processed_signals.add(key)
             return
-
         approved_trade = dict(signal)
         approved_trade.update(risk_result)
         approved_trade["approved"] = True
@@ -207,7 +194,6 @@ class TradingBot:
                 pass
             self.processed_signals.add(key)
             return
-
         self.processed_signals.add(key)
         position = self.paper_engine.open_positions.get(symbol)
         if position is None:
@@ -224,8 +210,6 @@ class TradingBot:
             if closed is not None:
                 self.journal.log_trade(closed)
                 self.daily_pnl = self._restore_daily_pnl()
-        # Keep capital-blocked qualifying setups in the research journal and
-        # resolve them later as hypothetical outcomes without affecting risk.
         self.missed_capital.monitor()
 
     def _persist_master_data(self):
@@ -274,7 +258,6 @@ class TradingBot:
         return df.iloc[-1].to_dict()
 
     def run_cycle(self):
-        """One worker cycle: manage open positions, then look for new entries."""
         now = self.current_time()
         if now >= SQUARE_OFF_TIME:
             if not self.square_off_done:
