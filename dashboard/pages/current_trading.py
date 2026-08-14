@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
@@ -12,6 +13,7 @@ from worker_service import ensure_worker_process
 ROOT = Path(__file__).resolve().parents[2]
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 st.set_page_config(page_title="NSE Catalyst | Current Trading", page_icon="📌", layout="wide")
+st_autorefresh(interval=5000, key="current_live")
 st.markdown(load_css(), unsafe_allow_html=True)
 render_nav()
 
@@ -57,7 +59,7 @@ if not closed.empty and "pnl" in closed.columns:
 worker = bool(status.get("worker_alive")) and heartbeat_alive(status.get("heartbeat"))
 
 st.title("📌 Current Trading")
-st.caption("NIFTY 500 • pre-9:45 gap preparation → PDH/PDL reaction → today's Open 1-minute reversal")
+st.caption("NIFTY 500 • opening-gap preparation → PDH/PDL reaction → today's Open 1-minute reversal")
 grid([
     ("Bot", status.get("status", "WAITING")),
     ("Worker", "ALIVE" if worker else "OFFLINE"),
@@ -69,7 +71,7 @@ grid([
 if status.get("error"):
     st.warning(str(status.get("error")))
 
-st.subheader("Pre-9:45 Gap Board")
+st.subheader("Opening Gap Board — ready before 09:45")
 if not gaps.empty and "GapType" in gaps.columns:
     g = gaps.copy()
     g["GapPercent"] = pd.to_numeric(g["GapPercent"], errors="coerce")
@@ -83,7 +85,7 @@ if not gaps.empty and "GapType" in gaps.columns:
         st.markdown("**🔴 Gap Downs**")
         st.dataframe(downs[[c for c in ["Symbol","PreviousClose","TodayOpen","GapPercent","PDH","PDL"] if c in downs.columns]].head(25), width="stretch", hide_index=True, height=320)
 else:
-    st.info("Gap board will be prepared automatically during the pre-entry phase and completed before 09:45 IST.")
+    st.info("The opening gap board is prepared automatically after the 09:15 market open and before the 09:45 entry window.")
 
 st.subheader("Open Positions")
 if pos:
