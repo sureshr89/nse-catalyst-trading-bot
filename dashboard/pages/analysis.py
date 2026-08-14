@@ -14,15 +14,15 @@ if str(ROOT) not in sys.path:
 from nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from worker_service import ensure_worker_process
+from bot_runner import ensure_bot_running
 
 st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
 st.markdown(load_css(), unsafe_allow_html=True)
 render_nav(24)
 try:
-    ensure_worker_process()
+    ensure_bot_running()
 except Exception as error:
-    st.warning(f"Worker launcher: {type(error).__name__}: {error}")
+    st.warning(f"Bot launcher: {type(error).__name__}: {error}")
 
 st.markdown('<style>[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}</style>', unsafe_allow_html=True)
 _original_set_page_config = st.set_page_config
