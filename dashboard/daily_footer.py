@@ -1,5 +1,8 @@
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import streamlit as st
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 QUOTES = [
     "Trade the setup, not the emotion.",
@@ -26,7 +29,10 @@ QUOTES = [
 
 
 def render_daily_footer():
-    quote = QUOTES[(date.today() - date(2026, 1, 1)).days % len(QUOTES)]
+    # Use India time so the quote changes at the Indian calendar day boundary,
+    # not at UTC midnight on Streamlit Cloud.
+    india_today = datetime.now(INDIA_TZ).date()
+    quote = QUOTES[(india_today - date(2026, 1, 1)).days % len(QUOTES)]
     st.markdown(
         f'''<div class="daily-motivation">
             <div class="daily-motivation-label">🧠 DAILY TRADING REMINDER</div>
