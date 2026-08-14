@@ -1,8 +1,8 @@
-"""Build persistent master datasets for weekly download/research.
+"""Build persistent master datasets for the rolling six-month research window.
 
-The master files are append/upsert style: rerunning the worker does not duplicate
-records for the same trading day and symbol. They are intentionally local CSVs so
-Streamlit Cloud can expose them as downloads; Google Drive can be added later.
+The master files are append/upsert style and automatically retain only the
+current month plus the previous five calendar months. This keeps the Streamlit
+Cloud files small while always preserving the latest six months of data.
 """
 from pathlib import Path
 from datetime import datetime
@@ -13,6 +13,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "outputs"
 IST = ZoneInfo("Asia/Kolkata")
+MASTER_MONTHS = 6
 
 MASTER_STOCK = OUTPUT / "MASTER_DAILY_STOCK_DATA.csv"
 MASTER_TRADES = OUTPUT / "MASTER_TRADES.csv"
@@ -45,8 +46,45 @@ def _merge(path, new, keys):
     _write(path, combined)
 
 
+def _prune_to_last_six_months(path, date_columns):
+    """Keep only the current calendar month and five preceding months."""
+    frame = _read(path)
+    if frame.empty:
+        return
+
+    date_values = None
+    for column in date_columns:
+        if column in frame.columns:
+            parsed = pd.to_datetime(frame[column], errors="coerce")
+            if parsed.notna().any():
+                date_values = parsed
+                break
+
+    if date_values is None:
+        return
+
+    now = datetime.now(IST)
+    current_period = pd.Period(now.strftime("%Y-%m"), freq="M")
+    first_period = current_period - (MASTER_MONTHS - 1)
+    row_periods = date_values.dt.to_period("M")
+
+    # Keep undated rows rather than deleting them accidentally.
+    keep = date_values.isna() | ((row_periods >= first_period) & (row_periods <= current_period))
+    trimmed = frame.loc[keep].copy()
+
+    if len(trimmed) != len(frame):
+        _write(path, trimmed)
+
+
+def enforce_six_month_retention():
+    """Prune all durable master datasets to a rolling six-month window."""
+    _prune_to_last_six_months(MASTER_STOCK, ["TradeDate", "DataSnapshotIST"])
+    _prune_to_last_six_months(MASTER_TRADES, ["TradeDate", "entry_time", "exit_time", "timestamp"])
+    _prune_to_last_six_months(MASTER_DAILY, ["TradeDate", "PreparedAtIST"])
+
+
 def build_master_data():
-    """Snapshot today's gap/scanner/trade data into durable master CSVs."""
+    """Snapshot today's gap/scanner/trade data and enforce six-month retention."""
     today = datetime.now(IST).strftime("%Y-%m-%d")
     gaps = _read(OUTPUT / "gap_analysis.csv")
     trades = _read(OUTPUT / "trades.csv")
@@ -56,8 +94,6 @@ def build_master_data():
     except Exception:
         diag = {}
 
-    # One row per stock/day. Gap analysis is the strongest premarket source
-    # currently persisted by the scanner, so preserve all of its columns.
     if not gaps.empty and "Symbol" in gaps.columns:
         stock = gaps.copy()
         stock.insert(0, "TradeDate", today)
@@ -68,9 +104,12 @@ def build_master_data():
         t = trades.copy()
         date_col = next((c for c in ["entry_time", "exit_time", "timestamp"] if c in t.columns), None)
         t.insert(0, "TradeDate", t[date_col].astype(str).str[:10] if date_col else today)
-        _merge(MASTER_TRADES, t, ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"])
+        _merge(
+            MASTER_TRADES,
+            t,
+            ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"],
+        )
 
-    # Daily summary is deliberately compact and stable for later data analysis.
     row = {
         "TradeDate": today,
         "PreparedAtIST": datetime.now(IST).isoformat(timespec="seconds"),
@@ -91,4 +130,8 @@ def build_master_data():
         "DailyPnL": float(pd.to_numeric(trades.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()),
     }
     _merge(MASTER_DAILY, pd.DataFrame([row]), ["TradeDate"])
+
+    # Retention runs after every refresh, so old master records cannot grow indefinitely.
+    enforce_six_month_retention()
+
     return {"stock": str(MASTER_STOCK), "trades": str(MASTER_TRADES), "daily": str(MASTER_DAILY)}
