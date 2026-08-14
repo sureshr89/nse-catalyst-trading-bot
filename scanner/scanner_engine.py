@@ -201,25 +201,49 @@ class ScannerEngine:
         opening, close = float(data.iloc[0]["Open"]), float(data.iloc[-1]["Close"])
         return "BULLISH" if close > opening else "BEARISH" if close < opening else "NEUTRAL"
 
-    def _nifty500_direction(self):
-        """Use the actual NIFTY 500 index candle: green=open<close, red=open>close."""
+    @staticmethod
+    def _direction_asof(df, as_of=None):
+        if df is None or df.empty:
+            return "UNKNOWN"
+        data = df.sort_values("Datetime").copy()
+        if as_of is not None and "Datetime" in data.columns:
+            stamp = pd.Timestamp(as_of)
+            if getattr(data["Datetime"].dt, "tz", None) is not None and stamp.tzinfo is None:
+                stamp = stamp.tz_localize("Asia/Kolkata")
+            elif getattr(data["Datetime"].dt, "tz", None) is not None:
+                stamp = stamp.tz_convert("Asia/Kolkata")
+            data = data[data["Datetime"] <= stamp]
+        return ScannerEngine._direction(data)
+
+    def _nifty500_direction(self, as_of=None):
+        """Use the actual NIFTY 500 index candle, limited to the decision timestamp."""
         data = self.price_data.get_index_1m("^CRSLDX")
+        if as_of is not None:
+            data = data.copy()
+            if not data.empty:
+                stamp = pd.Timestamp(as_of)
+                if getattr(data["Datetime"].dt, "tz", None) is not None and stamp.tzinfo is None:
+                    stamp = stamp.tz_localize("Asia/Kolkata")
+                elif getattr(data["Datetime"].dt, "tz", None) is not None:
+                    stamp = stamp.tz_convert("Asia/Kolkata")
+                data = data[data["Datetime"] <= stamp]
         self.nifty500_market_data = data
         direction = self._direction(data)
-        self.diagnostics["nifty500_direction"] = direction
-        self.diagnostics["nifty500_coverage"] = 1 if direction in {"BULLISH", "BEARISH", "NEUTRAL"} else 0
-        self.diagnostics["nifty500_bullish"] = 1 if direction == "BULLISH" else 0
-        self.diagnostics["nifty500_bearish"] = 1 if direction == "BEARISH" else 0
-        self.diagnostics["nifty500_neutral"] = 1 if direction == "NEUTRAL" else 0
+        if as_of is None:
+            self.diagnostics["nifty500_direction"] = direction
+            self.diagnostics["nifty500_coverage"] = 1 if direction in {"BULLISH", "BEARISH", "NEUTRAL"} else 0
+            self.diagnostics["nifty500_bullish"] = 1 if direction == "BULLISH" else 0
+            self.diagnostics["nifty500_bearish"] = 1 if direction == "BEARISH" else 0
+            self.diagnostics["nifty500_neutral"] = 1 if direction == "NEUTRAL" else 0
         return direction
 
-    def _sector_directions(self, market_data):
-        """Calculate each sector from all available NIFTY 500 stocks in that sector."""
+    def _sector_directions(self, market_data, as_of=None):
+        """Calculate each sector using only candles available at the decision timestamp."""
         sector_map = dict(zip(self.sectors.get("Symbol", []), self.sectors.get("Sector", []))) if not self.sectors.empty else {}
         rows = []
         for symbol, df in market_data.items():
             sector = str(sector_map.get(symbol, "UNKNOWN"))
-            direction = self._direction(df)
+            direction = self._direction_asof(df, as_of)
             if sector != "UNKNOWN" and direction in {"BULLISH", "BEARISH"}:
                 rows.append((sector, direction))
         if not rows:
@@ -253,39 +277,31 @@ class ScannerEngine:
         if candidates.empty:
             return self._finish()
 
-        # NIFTY 500 alignment is the actual NIFTY 500 index candle, not breadth.
-        market_direction = self._nifty500_direction()
-        selected = candidates.copy()
-        if REQUIRE_MARKET_ALIGNMENT:
-            expected = selected["OpeningSetup"].map({"BUY_PDH_TO_OPEN": "BULLISH", "SELL_PDL_TO_OPEN": "BEARISH"})
-            selected = selected[expected.eq(market_direction)].copy() if market_direction in {"BULLISH", "BEARISH"} else selected.iloc[0:0].copy()
-        self.diagnostics["market_alignment_passed"] = len(selected)
-        self.diagnostics["rejections"]["market_alignment"] = max(0, len(candidates) - len(selected))
-        if selected.empty:
-            return self._finish()
-
-        # Sector alignment remains calculated from the full NIFTY 500 universe.
-        sector_directions = self._sector_directions(self.universe_market_data)
+        # Keep the dashboard's live NIFTY 500 direction, but do not use it to
+        # pre-filter signals: each signal must be checked at its own trigger time.
+        live_market_direction = self._nifty500_direction()
         reference_by_symbol = self.references.set_index("Symbol").to_dict("index")
         sector_map = dict(zip(self.sectors.get("Symbol", []), self.sectors.get("Sector", []))) if not self.sectors.empty else {}
         signals = []
-        sector_passed = strategy_passed = stock_passed = 0
+        market_passed = sector_passed = strategy_passed = stock_passed = 0
 
-        for symbol in selected["Symbol"].astype(str).str.upper().tolist():
+        for symbol in candidates["Symbol"].astype(str).str.upper().tolist():
             candles = self.universe_market_data.get(symbol)
             ref = reference_by_symbol.get(symbol)
             if candles is None or candles.empty or not ref:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
-            opening = selected[selected["Symbol"].eq(symbol)].iloc[0]
+
+            opening = candidates[candidates["Symbol"].eq(symbol)].iloc[0]
             expected_direction = "BULLISH" if opening["OpeningSetup"] == "BUY_PDH_TO_OPEN" else "BEARISH"
             sector = str(sector_map.get(symbol, "UNKNOWN"))
-            sector_direction = sector_directions.get(sector, "UNKNOWN")
-            if REQUIRE_SECTOR_ALIGNMENT and sector_direction != expected_direction:
-                self.diagnostics["rejections"]["sector_alignment"] += 1
-                continue
-            sector_passed += 1
-            signal = self.strategy.build(symbol, candles, ref.get("PDH"), ref.get("PDL"), float(opening["TodayOpen"]), sector_direction, market_direction)
+
+            # Build first so the trigger timestamp is known. Alignment is then
+            # calculated using only market/sector/stock data available at that timestamp.
+            signal = self.strategy.build(
+                symbol, candles, ref.get("PDH"), ref.get("PDL"),
+                float(opening["TodayOpen"]), "UNKNOWN", "UNKNOWN"
+            )
             if not signal:
                 side = "BUY" if expected_direction == "BULLISH" else "SELL"
                 reached = self._level_reached(candles, side, ref.get("PDH"), ref.get("PDL"), self.strategy.start)
@@ -296,23 +312,47 @@ class ScannerEngine:
                 self.diagnostics["rejections"]["strategy_setup"] += 1
                 continue
             strategy_passed += 1
+
+            trigger_time = signal.get("entry_time")
+            market_direction = self._nifty500_direction(trigger_time)
+            if REQUIRE_MARKET_ALIGNMENT and market_direction != expected_direction:
+                self.diagnostics["rejections"]["market_alignment"] += 1
+                continue
+            market_passed += 1
+
+            sector_directions = self._sector_directions(self.universe_market_data, trigger_time)
+            sector_direction = sector_directions.get(sector, "UNKNOWN")
+            if REQUIRE_SECTOR_ALIGNMENT and sector_direction != expected_direction:
+                self.diagnostics["rejections"]["sector_alignment"] += 1
+                continue
+            sector_passed += 1
+
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") != expected_direction:
                 self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             stock_passed += 1
+
             signal.update({
-                "sector": sector, "industry": sector, "liquidity_qualified": True, "nifty500_universe": True,
+                "market_direction": market_direction,
+                "nifty500_direction": market_direction,
+                "sector_direction": sector_direction,
+                "sector": sector,
+                "industry": sector,
+                "liquidity_qualified": True,
+                "nifty500_universe": True,
                 "previous_day_close": opening.get("PreviousDayClose"),
-                "gap": opening.get("Gap"), "gap_percent": opening.get("GapPercent"),
+                "gap": opening.get("Gap"),
+                "gap_percent": opening.get("GapPercent"),
                 "gap_type": opening.get("GapType"),
                 "gap_from_previous_close": opening.get("GapFromPreviousClose"),
                 "gap_percent_from_previous_close": opening.get("GapPercentFromPreviousClose"),
                 "pdh_pdl_gap": True,
-                "nifty500_direction": market_direction,
             })
             signals.append(signal)
 
+        self.diagnostics["market_alignment_passed"] = market_passed
         self.diagnostics["sector_alignment_passed"] = sector_passed
         self.diagnostics["strategy_setup_passed"] = strategy_passed
         self.diagnostics["stock_alignment_passed"] = stock_passed
+        self.diagnostics["nifty500_direction"] = live_market_direction
         return self._finish(signals)
