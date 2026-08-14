@@ -30,6 +30,7 @@ class ScannerEngine:
         self.references = pd.DataFrame()
         self.sectors = pd.DataFrame()
         self.opening_candidates = pd.DataFrame()
+        self.gap_analysis = pd.DataFrame()
         self._prepared_date = None
         self._opening_prepared_date = None
         self.diagnostics = self._empty_diagnostics()
@@ -37,25 +38,16 @@ class ScannerEngine:
     @staticmethod
     def _empty_diagnostics():
         return {
-            "timestamp": None,
-            "stocks_scanned": 0,
-            "liquidity_passed": 0,
-            "opening_setup_passed": 0,
-            "market_alignment_passed": 0,
-            "sector_alignment_passed": 0,
-            "strategy_setup_passed": 0,
-            "stock_alignment_passed": 0,
-            "final_signals": 0,
+            "timestamp": None, "stocks_scanned": 0, "liquidity_passed": 0,
+            "opening_setup_passed": 0, "market_alignment_passed": 0,
+            "sector_alignment_passed": 0, "strategy_setup_passed": 0,
+            "stock_alignment_passed": 0, "final_signals": 0,
+            "gap_up_count": 0, "gap_down_count": 0, "gap_data_count": 0,
             "rejections": {
-                "missing_data": 0,
-                "liquidity": 0,
-                "opening_setup": 0,
-                "market_alignment": 0,
-                "sector_alignment": 0,
-                "pdh_pdl_not_reached": 0,
-                "no_open_cross": 0,
-                "strategy_setup": 0,
-                "stock_alignment": 0,
+                "missing_data": 0, "liquidity": 0, "opening_setup": 0,
+                "market_alignment": 0, "sector_alignment": 0,
+                "pdh_pdl_not_reached": 0, "no_open_cross": 0,
+                "strategy_setup": 0, "stock_alignment": 0,
             },
         }
 
@@ -76,6 +68,14 @@ class ScannerEngine:
             temp.replace(path)
         except Exception as error:
             print("Could not write scanner diagnostics:", error)
+
+    def _write_gap_analysis(self, rows):
+        path = Path(__file__).resolve().parents[1] / "outputs" / "gap_analysis.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pd.DataFrame(rows).sort_values("GapPercent", ascending=False).to_csv(path, index=False)
+        except Exception as error:
+            print("Could not write gap analysis:", error)
 
     def _finish(self, signals=None):
         result = signals or []
@@ -106,10 +106,10 @@ class ScannerEngine:
             return pd.DataFrame()
 
         refs = references.copy()
-        for column in ["PreviousDayTurnover", "PDH", "PDL"]:
+        for column in ["PreviousDayClose", "PreviousDayTurnover", "PDH", "PDL"]:
             refs[column] = pd.to_numeric(refs[column], errors="coerce")
         total = len(refs)
-        refs = refs.dropna(subset=["PDH", "PDL", "PreviousDayTurnover"])
+        refs = refs.dropna(subset=["PDH", "PDL", "PreviousDayClose", "PreviousDayTurnover"])
         self.diagnostics["stocks_scanned"] = len(self.universe)
         self.diagnostics["rejections"]["missing_data"] = max(0, total - len(refs))
         if refs.empty:
@@ -126,7 +126,7 @@ class ScannerEngine:
             return pd.DataFrame()
 
         market_data = self.price_data.get_multi_1m(refs["Symbol"].astype(str).str.upper().tolist())
-        rows = []
+        rows, gap_rows = [], []
         for _, ref in refs.iterrows():
             symbol = str(ref["Symbol"]).upper()
             candles = market_data.get(symbol)
@@ -139,11 +139,20 @@ class ScannerEngine:
                 continue
             try:
                 today_open = float(today_data.iloc[0]["Open"])
+                pdc = float(ref["PreviousDayClose"])
                 pdh = float(ref["PDH"])
                 pdl = float(ref["PDL"])
             except (TypeError, ValueError):
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
+
+            gap_percent = ((today_open - pdc) / pdc * 100.0) if pdc else 0.0
+            gap_type = "GAP_UP" if gap_percent > 0 else "GAP_DOWN" if gap_percent < 0 else "FLAT"
+            gap_rows.append({
+                "Symbol": symbol, "PreviousClose": round(pdc, 4), "TodayOpen": round(today_open, 4),
+                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3), "GapType": gap_type,
+                "PDH": round(pdh, 4), "PDL": round(pdl, 4), "PreparedAtIST": datetime.now().astimezone().isoformat(timespec="seconds"),
+            })
 
             if today_open > pdh:
                 setup = "SELL_PDH_TO_OPEN"
@@ -154,14 +163,19 @@ class ScannerEngine:
                 continue
 
             rows.append({
-                "Symbol": symbol,
-                "PDH": round(pdh, 4),
-                "PDL": round(pdl, 4),
-                "TodayOpen": round(today_open, 4),
-                "OpeningSetup": setup,
+                "Symbol": symbol, "PDH": round(pdh, 4), "PDL": round(pdl, 4),
+                "TodayOpen": round(today_open, 4), "PreviousDayClose": round(pdc, 4),
+                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3),
+                "GapType": gap_type, "OpeningSetup": setup,
                 "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
                 "LiquidityQualified": True,
             })
+
+        self.gap_analysis = pd.DataFrame(gap_rows)
+        self.diagnostics["gap_data_count"] = len(gap_rows)
+        self.diagnostics["gap_up_count"] = int(sum(1 for r in gap_rows if r["GapType"] == "GAP_UP"))
+        self.diagnostics["gap_down_count"] = int(sum(1 for r in gap_rows if r["GapType"] == "GAP_DOWN"))
+        self._write_gap_analysis(gap_rows)
 
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         self.diagnostics["opening_setup_passed"] = len(result)
@@ -236,31 +250,29 @@ class ScannerEngine:
             if candles is None or candles.empty or not ref:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
-
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
             if REQUIRE_SECTOR_ALIGNMENT and sector_direction != market_direction:
                 self.diagnostics["rejections"]["sector_alignment"] += 1
                 continue
             sector_passed += 1
-
             today_open = float(selected.loc[selected["Symbol"].eq(symbol), "TodayOpen"].iloc[0])
             signal = self.strategy.build(symbol, candles, ref.get("PDH"), ref.get("PDL"), today_open, sector_direction, market_direction)
             if not signal:
                 self.diagnostics["rejections"]["strategy_setup"] += 1
                 continue
             strategy_passed += 1
-
             expected_direction = "BULLISH" if signal.get("signal") == "BUY" else "BEARISH"
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") != expected_direction:
                 self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             stock_passed += 1
+            opening = selected[selected["Symbol"].eq(symbol)].iloc[0]
             signal.update({
-                "sector": sector,
-                "industry": sector,
-                "liquidity_qualified": True,
-                "nifty500_universe": True,
+                "sector": sector, "industry": sector, "liquidity_qualified": True,
+                "nifty500_universe": True, "previous_day_close": opening.get("PreviousDayClose"),
+                "gap": opening.get("Gap"), "gap_percent": opening.get("GapPercent"),
+                "gap_type": opening.get("GapType"),
             })
             signals.append(signal)
 
