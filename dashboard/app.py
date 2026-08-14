@@ -32,7 +32,7 @@ try:
     live=ensure_worker_process()
     if isinstance(live,dict):status.update(live)
 except Exception as error:
-    status.setdefault("error",f"Worker launcher unavailable: {type(error).__name__}: {error}
+    status.setdefault("error", "Worker launcher unavailable: " + type(error).__name__ + ": " + str(error))
 def heartbeat_alive(value,max_age_seconds=90):
     try:
         stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
