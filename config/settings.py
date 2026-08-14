@@ -43,7 +43,9 @@ COOLDOWN_MINUTES = 15
 POSITION_SIZE_METHOD = "RISK_AND_CAPITAL"
 PAPER_TRADING = True
 LIVE_TRADING = False
-SCAN_INTERVAL_SECONDS = 30
+# One scan per completed 1-minute bar is enough for this strategy and reduces
+# unnecessary Yahoo Finance traffic/rate-limit risk.
+SCAN_INTERVAL_SECONDS = 60
 
 TRADE_LOG_FILE = "outputs/trades.csv"
 SIGNAL_LOG_FILE = "outputs/signals.csv"
