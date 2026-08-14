@@ -1,4 +1,4 @@
-"""Cached sector grouping for the NIFTY 100 price-action filter."""
+"""Cached sector grouping for the NIFTY 250 scanner universe."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -7,17 +7,16 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 MIN_COVERAGE = 0.95
 
 
 class SectorStore:
-    """Prepare sector buckets once per IST date and cache them locally."""
+    """Prepare sector buckets once per IST date for the active scanner universe."""
 
     def __init__(self, universe_df):
         self.universe = universe_df.copy()
-        self.path = Path("data") / "nifty100_sectors.csv"
+        self.path = Path("data") / "nifty250_sectors.csv"
 
     @staticmethod
     def _yahoo_sector(symbol):
@@ -34,7 +33,7 @@ class SectorStore:
 
     def prepare(self, force=False):
         if self.universe.empty or "Symbol" not in self.universe.columns:
-            return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource"])
+            return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource", "PreparedAtIST"])
 
         today = self._today_key()
         required = {"Symbol", "Sector", "SectorSource", "PreparedAtIST"}
@@ -49,7 +48,8 @@ class SectorStore:
                     and prepared.notna().all()
                     and prepared.dt.strftime("%Y-%m-%d").eq(today).all()
                 )
-                if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows:
+                symbols_match = set(cached.get("Symbol", pd.Series(dtype=str)).astype(str).str.upper()) >= set(self.universe["Symbol"].astype(str).str.upper())
+                if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows and symbols_match:
                     return cached
             except Exception:
                 pass
@@ -81,7 +81,6 @@ class SectorStore:
         result["PreparedAtIST"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         result = result[["Symbol", "Sector", "SectorSource", "PreparedAtIST"]].drop_duplicates("Symbol").reset_index(drop=True)
 
-        # Never replace a good cache with a materially incomplete mapping.
         if len(result) < minimum_rows:
             print(f"Sector mapping incomplete: {len(result)}/{len(self.universe)}. No cache written.")
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource", "PreparedAtIST"])
