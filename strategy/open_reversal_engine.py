@@ -11,7 +11,7 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
-    """Build a fresh signal after the PDH/PDL reaction and completed Open cross."""
+    """Build a fresh signal after a PDH/PDL reaction and completed Open cross."""
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
@@ -64,17 +64,18 @@ class OpenReversalEngine:
         latest_trigger = None
         for _, candle in completed.iterrows():
             candle_time = candle["Datetime"].time()
-            if candle_time < self.start:
-                continue
             if candle_time > self.end:
                 break
 
+            # The PDH/PDL reaction may occur after the 09:15 market open but
+            # before the 09:45 entry window. The reversal trigger itself must
+            # still occur inside the configured entry window.
             if side == "SELL":
                 if not level_reached and float(candle["Low"]) <= pdh:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
-                if level_reached and candle["Datetime"] > level_reached_time:
+                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) > today_open and float(candle["Close"]) < today_open:
                         latest_trigger = candle
             else:
@@ -82,7 +83,7 @@ class OpenReversalEngine:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
-                if level_reached and candle["Datetime"] > level_reached_time:
+                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
                         latest_trigger = candle
         return latest_trigger
