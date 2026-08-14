@@ -11,13 +11,10 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
-    """Build a signal only after the required PDH/PDL reaction and Open cross.
+    """Build a signal after the PDH/PDL reaction and completed Open cross.
 
-    SELL: today's Open is above PDH, price first touches/reaches PDH from above,
-    then a completed 1-minute candle opens above today's Open and closes below it.
-
-    BUY: today's Open is below PDL, price first touches/reaches PDL from below,
-    then a completed 1-minute candle opens below today's Open and closes above it.
+    Direction/alignment filters are deliberately handled by ScannerEngine so
+    the ENABLE/REQUIRE_* settings remain effective and testable in one place.
     """
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
@@ -74,7 +71,6 @@ class OpenReversalEngine:
 
         level_reached = False
         level_reached_time = None
-
         for _, candle in completed.iterrows():
             candle_time = candle["Datetime"].time()
             if candle_time < self.start:
@@ -116,29 +112,27 @@ class OpenReversalEngine:
         stock_direction = self._direction(today_data)
 
         if ENABLE_SHORT and today_open > pdh:
-            if sector_direction == "BEARISH" and nifty_direction == "BEARISH" and stock_direction == "BEARISH":
-                trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
-                if trigger is not None:
-                    # SL is based only on price information available through
-                    # the trigger candle, never on later candles from the scan.
-                    setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                    today_low = float(setup_data["Low"].min())
-                    today_high = float(setup_data["High"].max())
-                    return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
+            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
+            if trigger is not None:
+                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
+                today_low = float(setup_data["Low"].min())
+                today_high = float(setup_data["High"].max())
+                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
 
         if ENABLE_LONG and today_open < pdl:
-            if sector_direction == "BULLISH" and nifty_direction == "BULLISH" and stock_direction == "BULLISH":
-                trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
-                if trigger is not None:
-                    setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                    today_low = float(setup_data["Low"].min())
-                    today_high = float(setup_data["High"].max())
-                    return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
+            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
+            if trigger is not None:
+                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
+                today_low = float(setup_data["Low"].min())
+                today_high = float(setup_data["High"].max())
+                return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction)
         return None
 
     def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction):
         trigger_close = float(candle["Close"])
         stop = today_high if side == "SELL" else today_low
+        reward_distance = abs(trigger_close - stop) * self.rr
+        target = trigger_close + reward_distance if side == "BUY" else trigger_close - reward_distance
         return {
             "symbol": symbol,
             "signal": side,
@@ -146,7 +140,7 @@ class OpenReversalEngine:
             "entry": round(trigger_close, 2),
             "open_cross_level": round(today_open, 4),
             "stop_loss": round(stop, 4),
-            "target": round(trigger_close + (trigger_close - stop) * self.rr, 2) if side == "BUY" else round(trigger_close - (stop - trigger_close) * self.rr, 2),
+            "target": round(target, 2),
             "risk_reward": self.rr,
             "pdh": round(pdh, 4),
             "pdl": round(pdl, 4),
