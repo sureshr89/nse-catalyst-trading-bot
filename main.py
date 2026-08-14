@@ -1,11 +1,5 @@
-"""Core paper-trading bot for the NIFTY 250 Gap-Failure + Open-Reclaim strategy.
+"""Core paper-trading orchestration for the NIFTY 500 open-reversal strategy."""
 
-This module contains execution orchestration only. Strategy decisions come from
-ScannerEngine, risk approval comes from RiskEngine, and simulated execution is
-handled by PaperTradeEngine. All time comparisons are IST-safe.
-"""
-
-import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -13,9 +7,8 @@ import pandas as pd
 
 from config.settings import (
     PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME,
-    SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS, MAX_OPEN_POSITIONS,
-    DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES,
-    RISK_REWARD_RATIO,
+    SQUARE_OFF_TIME, MAX_OPEN_POSITIONS, DAILY_MAX_LOSS,
+    DAILY_PROFIT_TARGET, COOLDOWN_MINUTES, RISK_REWARD_RATIO,
 )
 from scanner.scanner_engine import ScannerEngine
 from strategy.risk_engine import RiskEngine
@@ -28,11 +21,11 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class TradingBot:
-    """Orchestrate one paper-trading session without changing strategy rules."""
+    """Run one NIFTY 500 paper-trading session without live execution."""
 
     def __init__(self):
         if LIVE_TRADING:
-            raise RuntimeError("LIVE_TRADING must be False. This bot is paper trading only.")
+            raise RuntimeError("LIVE_TRADING must be False. This application is paper trading only.")
         if not PAPER_TRADING:
             raise RuntimeError("PAPER_TRADING must be True.")
         self.scanner = ScannerEngine()
@@ -59,19 +52,18 @@ class TradingBot:
             df = self.journal.get_trades()
             if df.empty or "pnl" not in df.columns or "exit_time" not in df.columns:
                 return 0.0
-            raw_exits = pd.to_datetime(df["exit_time"], errors="coerce")
-            today = self._now().date()
-            pnl = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
-            if getattr(raw_exits.dt, "tz", None) is None:
-                dates = raw_exits.dt.date
+            exits = pd.to_datetime(df["exit_time"], errors="coerce")
+            if getattr(exits.dt, "tz", None) is None:
+                dates = exits.dt.date
             else:
-                dates = raw_exits.dt.tz_convert(INDIA_TZ).dt.date
-            closed_mask = dates == today
+                dates = exits.dt.tz_convert(INDIA_TZ).dt.date
+            mask = dates == self._now().date()
             if "status" in df.columns:
-                closed_mask &= df["status"].astype(str).str.upper().eq("CLOSED")
-            return round(float(pnl[closed_mask].sum()), 2)
+                mask &= df["status"].astype(str).str.upper().eq("CLOSED")
+            pnl = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
+            return round(float(pnl[mask].sum()), 2)
         except Exception as error:
-            print(f"Daily P&L restore skipped: {type(error).__name__}: {error}")
+            print("Daily P&L restore skipped:", error)
             return 0.0
 
     def _restore_cooldown(self):
@@ -79,11 +71,8 @@ class TradingBot:
             df = self.journal.get_trades()
             if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:
                 return None
-            today = self._now().date()
-            closed = df.copy()
-            if "status" in closed.columns:
-                closed = closed[closed["status"].astype(str).str.upper() == "CLOSED"]
-            closed = closed[closed["exit_reason"].astype(str).str.upper() == "STOP_LOSS"]
+            closed = df[df.get("status", "").astype(str).str.upper().eq("CLOSED")].copy()
+            closed = closed[closed["exit_reason"].astype(str).str.upper().eq("STOP_LOSS")]
             if closed.empty:
                 return None
             times = pd.to_datetime(closed["exit_time"], errors="coerce")
@@ -91,15 +80,12 @@ class TradingBot:
                 times = times.dt.tz_localize(INDIA_TZ)
             else:
                 times = times.dt.tz_convert(INDIA_TZ)
-            times = times[times.dt.date == today].dropna()
+            times = times[times.dt.date == self._now().date()].dropna()
             if times.empty:
                 return None
-            cooldown_end = times.max().to_pydatetime() + timedelta(minutes=COOLDOWN_MINUTES)
-            if cooldown_end <= self._now():
-                return None
-            return cooldown_end.replace(tzinfo=None)
-        except Exception as error:
-            print(f"Cooldown restore skipped: {type(error).__name__}: {error}")
+            end = times.max().to_pydatetime() + timedelta(minutes=COOLDOWN_MINUTES)
+            return end.replace(tzinfo=None) if end > self._now() else None
+        except Exception:
             return None
 
     def signal_key(self, signal):
@@ -107,8 +93,20 @@ class TradingBot:
             str(signal.get("symbol", "")).strip().upper(),
             str(signal.get("signal", "")).strip().upper(),
             str(signal.get("entry_time", "")),
-            str(signal.get("breakout_level", "")),
+            str(signal.get("open_cross_level", "")),
         )
+
+    def daily_limit_reached(self):
+        return self.daily_pnl <= -float(DAILY_MAX_LOSS) or self.daily_pnl >= float(DAILY_PROFIT_TARGET)
+
+    def cooldown_active(self):
+        if self.cooldown_until is None:
+            return False
+        now = self._now().replace(tzinfo=None)
+        if now >= self.cooldown_until:
+            self.cooldown_until = None
+            return False
+        return True
 
     def log_signal(self, signal, risk_result):
         row = dict(signal)
@@ -124,52 +122,27 @@ class TradingBot:
         try:
             self.journal.log_signal(row)
         except Exception as error:
-            print(f"Signal journal save failed: {type(error).__name__}: {error}")
-
-    def daily_limit_reached(self):
-        if self.daily_pnl <= -float(DAILY_MAX_LOSS):
-            print("Daily max loss reached.")
-            return True
-        if self.daily_pnl >= float(DAILY_PROFIT_TARGET):
-            print("Daily profit target reached.")
-            return True
-        return False
-
-    def cooldown_active(self):
-        if self.cooldown_until is None:
-            return False
-        now = self._now().replace(tzinfo=None)
-        if now >= self.cooldown_until:
-            self.cooldown_until = None
-            return False
-        return True
+            print("Signal journal save failed:", error)
 
     def _attach_trade_context(self, position, signal):
-        context_fields = (
-            "stock", "industry", "sector", "buy_sell", "breakout_level", "pdc",
-            "today_open", "today_low", "today_high", "market_direction",
-            "nifty100_direction", "industry_direction", "sector_direction",
-            "stock_direction", "stock_today_direction", "previous_day_aligned",
-            "previous_day_direction", "setup_type", "entry_candle_open",
-            "entry_candle_close", "risk_per_share", "actual_risk", "position_value",
-            "trigger_entry_time", "market_entry_time", "trigger_close",
-            "entry_distance_from_open_pct",
+        fields = (
+            "industry", "sector", "open_cross_level", "pdh", "pdl", "today_open",
+            "today_low", "today_high", "market_direction", "sector_direction",
+            "stock_direction", "stock_today_direction", "setup_type",
+            "trigger_candle_open", "trigger_candle_close", "trigger_close",
+            "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe",
+            "risk_per_share", "actual_risk", "position_value",
         )
-        for field in context_fields:
+        for field in fields:
             if field in signal:
                 position[field] = signal[field]
         return position
 
     def _set_market_entry(self, signal):
-        """Use the latest market price after a completed 1-minute trigger.
-
-        The trigger candle only confirms the old Gap-Failure + Open-Reclaim setup.
-        Its close is never used as the execution price. The latest available market
-        price becomes the actual paper entry, and target/risk are recalculated from it.
-        """
+        """Use the next available market price after the completed trigger candle."""
         side = str(signal.get("signal", "")).upper()
         stop = float(signal.get("stop_loss", 0) or 0)
-        trigger_close = float(signal.get("entry_candle_close", signal.get("entry", 0)) or 0)
+        trigger_close = float(signal.get("trigger_candle_close", signal.get("entry", 0)) or 0)
         quote = self.price_data.get_latest_available_1m(str(signal.get("symbol", "")))
         if not quote:
             return False
@@ -190,52 +163,36 @@ class TradingBot:
         signal["entry"] = round(market_price, 2)
         signal["entry_time"] = signal["market_entry_time"]
         reward_distance = abs(market_price - stop) * float(RISK_REWARD_RATIO)
-        signal["target"] = round(
-            market_price + reward_distance if side == "BUY" else market_price - reward_distance,
-            2,
-        )
-        today_open = float(signal.get("today_open", market_price) or market_price)
-        signal["entry_distance_from_open_pct"] = round(
-            abs(market_price - today_open) / today_open * 100.0, 4
-        ) if today_open > 0 else None
+        signal["target"] = round(market_price + reward_distance if side == "BUY" else market_price - reward_distance, 2)
         return True
 
     def process_signal(self, signal):
         if not isinstance(signal, dict):
             return
         symbol = str(signal.get("symbol", "")).strip().upper()
-        if not symbol:
-            return
-        # The completed 1-minute candle is the trigger. The next available
-        # market price is the actual paper-trading entry.
-        if not self._set_market_entry(signal):
+        if not symbol or not self._set_market_entry(signal):
             return
         key = self.signal_key(signal)
         if key in self.processed_signals:
             return
         if self.daily_limit_reached() or self.cooldown_active():
             return
-        if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
-            return
-        if self.paper_engine.has_open_position(symbol):
+        if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):
             return
 
         risk_result = self.risk_engine.approve_trade(signal)
         self.log_signal(signal, risk_result)
         if not risk_result.get("approved", False):
             self.processed_signals.add(key)
-            print("Risk rejected", symbol, risk_result.get("reasons", []))
             return
 
         approved_trade = dict(signal)
         approved_trade.update(risk_result)
         approved_trade["approved"] = True
-        open_result = self.paper_engine.open_trade(approved_trade)
-        if not open_result.get("opened", False):
-            reason = str(open_result.get("reason", ""))
-            if reason == "Insufficient available capital":
-                self.missed_capital.record(signal, risk_result, reason)
-                print("QUALIFIED BUT MISSED (CAPITAL):", symbol, "position_value=", risk_result.get("position_value"))
+        result = self.paper_engine.open_trade(approved_trade)
+        if not result.get("opened", False):
+            if str(result.get("reason", "")) == "Insufficient available capital":
+                self.missed_capital.record(signal, risk_result, result["reason"])
             try:
                 count = self.risk_engine.get_trade_count(symbol)
                 if count > 0:
@@ -246,21 +203,34 @@ class TradingBot:
             return
 
         self.processed_signals.add(key)
-        live_position = self.paper_engine.open_positions.get(symbol)
-        if live_position is None:
-            print("Paper trade opened but live position is missing:", symbol)
+        position = self.paper_engine.open_positions.get(symbol)
+        if position is None:
             return
-        self._attach_trade_context(live_position, approved_trade)
-        live_position["status"] = "OPEN"
-        saved = self.journal.log_trade(live_position.copy())
-        print(
-            "PAPER OPENED:", symbol, approved_trade.get("signal"),
-            "entry=", live_position.get("entry"), "SL=", live_position.get("stop_loss"),
-            "target=", live_position.get("target"), "qty=", live_position.get("quantity"),
-            "risk=", live_position.get("actual_risk"), "R:R=", live_position.get("rr"),
-            "trigger_close=", signal.get("trigger_close"),
-            "journal=", saved.get("saved", False),
-        )
+        self._attach_trade_context(position, approved_trade)
+        self.journal.log_trade(position.copy())
+
+    def _process_open_positions(self):
+        for symbol in list(self.paper_engine.open_positions):
+            candle = self.latest_1m_candle(symbol)
+            if candle is None:
+                continue
+            closed = self.paper_engine.process_candle(symbol, candle)
+            if closed is not None:
+                self.journal.log_trade(closed)
+                self.daily_pnl = self._restore_daily_pnl()
+
+    def square_off_all(self):
+        for symbol in list(self.paper_engine.open_positions):
+            quote = self.price_data.get_latest_available_1m(symbol)
+            if not quote:
+                continue
+            price = quote.get("Close")
+            stamp = quote.get("Datetime") or self._now().replace(second=0, microsecond=0)
+            closed = self.paper_engine.close_position(symbol, price, stamp, "SQUARE_OFF")
+            if closed is not None:
+                self.journal.log_trade(closed)
+        self.daily_pnl = self._restore_daily_pnl()
+        self.square_off_done = True
 
     def scan_for_entries(self):
         now = self.current_time()
@@ -270,47 +240,29 @@ class TradingBot:
             return
         if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
             return
-        try:
-            signals = self.scanner.scan() or []
-        except Exception as error:
-            print(f"Scanner error: {type(error).__name__}: {error}")
-            raise
-        if not isinstance(signals, list):
-            raise TypeError("Scanner returned unexpected data; expected a list of signals")
+        signals = self.scanner.scan() or []
         for signal in signals:
             if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
                 break
             self.process_signal(signal)
 
     def latest_1m_candle(self, symbol):
-        """Return the latest completed 1-minute candle for exit monitoring."""
         try:
-            df = self.price_data.get_1m(symbol)
+            df = self.price_data.today_only(self.price_data.get_1m(symbol))
         except Exception as error:
             print(symbol, "1-minute data error:", error)
             return None
         if df is None or df.empty:
             return None
-        try:
-            today_df = self.price_data.today_only(df)
-            if today_df is not None and not today_df.empty:
-                df = today_df
-        except Exception as error:
-            print(symbol, "today filter warning:", error)
-        if df is None or df.empty:
-            return None
-        frame = df.copy()
-        try:
-            if "Datetime" in frame.columns:
-                timestamps = pd.to_datetime(frame["Datetime"], errors="coerce")
-                if timestamps.dt.tz is None:
-                    timestamps = timestamps.dt.tz_localize(INDIA_TZ)
-                else:
-                    timestamps = timestamps.dt.tz_convert(INDIA_TZ)
-                current_minute = self._now().replace(second=0, microsecond=0)
-                frame = frame[timestamps < current_minute].copy()
-        except Exception:
-            pass
-        if frame.empty:
-            return None
-        return frame.iloc[-1].to_dict()
+        return df.iloc[-1].to_dict()
+
+    def run_cycle(self):
+        """One worker cycle: manage open positions, then look for new entries."""
+        now = self.current_time()
+        if now >= SQUARE_OFF_TIME:
+            if not self.square_off_done:
+                self.square_off_all()
+            return
+        self.square_off_done = False
+        self._process_open_positions()
+        self.scan_for_entries()
