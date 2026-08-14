@@ -1,6 +1,6 @@
 """Sector classification for the active NIFTY 500 scanner universe."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -9,10 +9,11 @@ import yfinance as yf
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 MIN_COVERAGE = 0.95
+CACHE_MAX_AGE_DAYS = 7
 
 
 class SectorStore:
-    """Prepare sector buckets once per IST date for NIFTY 500."""
+    """Prepare sector buckets for NIFTY 500 and refresh them at most weekly."""
 
     def __init__(self, universe_df):
         self.universe = universe_df.copy()
@@ -31,21 +32,33 @@ class SectorStore:
     def _today_key():
         return datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
 
+    def _valid_cached(self, cached, minimum_rows):
+        required = {"Symbol", "Sector", "SectorSource", "PreparedAtIST"}
+        if not required.issubset(cached.columns) or len(cached) < minimum_rows:
+            return False
+        universe_symbols = set(self.universe["Symbol"].astype(str).str.upper())
+        cached_symbols = set(cached["Symbol"].astype(str).str.upper())
+        if not universe_symbols.issubset(cached_symbols):
+            return False
+        prepared = pd.to_datetime(cached["PreparedAtIST"], errors="coerce")
+        if prepared.isna().all():
+            return False
+        latest = prepared.max()
+        if latest.tzinfo is None:
+            latest = latest.tz_localize(INDIA_TZ)
+        else:
+            latest = latest.tz_convert(INDIA_TZ)
+        return datetime.now(INDIA_TZ) - latest.to_pydatetime() <= timedelta(days=CACHE_MAX_AGE_DAYS)
+
     def prepare(self, force=False):
         if self.universe.empty or "Symbol" not in self.universe.columns:
             return pd.DataFrame(columns=["Symbol", "Sector", "SectorSource", "PreparedAtIST"])
 
-        today = self._today_key()
-        required = {"Symbol", "Sector", "SectorSource", "PreparedAtIST"}
         minimum_rows = max(1, int(len(self.universe) * MIN_COVERAGE))
-
         if not force and self.path.exists():
             try:
                 cached = pd.read_csv(self.path)
-                prepared = pd.to_datetime(cached.get("PreparedAtIST"), errors="coerce")
-                cache_is_today = bool(not prepared.empty and prepared.notna().all() and prepared.dt.strftime("%Y-%m-%d").eq(today).all())
-                symbols_match = set(cached.get("Symbol", pd.Series(dtype=str)).astype(str).str.upper()) >= set(self.universe["Symbol"].astype(str).str.upper())
-                if required.issubset(cached.columns) and cache_is_today and len(cached) >= minimum_rows and symbols_match:
+                if self._valid_cached(cached, minimum_rows):
                     return cached
             except Exception:
                 pass
