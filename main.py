@@ -73,7 +73,7 @@ class TradingBot:
         if not risk_result.get("approved",False):self.processed_signals.add(key);return
         approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True;result=self.paper_engine.open_trade(approved_trade)
         if not result.get("opened",False):
-            if str(result.get("reason","")=="Insufficient available capital"):self.missed_capital.record(signal,risk_result,result["reason"])
+            if result.get("reason","")=="Insufficient available capital":self.missed_capital.record(signal,risk_result,result["reason"])
             try:
                 count=self.risk_engine.get_trade_count(symbol)
                 if count>0:self.risk_engine.trade_counts[symbol]=count-1
