@@ -25,7 +25,7 @@ def _heartbeat_fresh(status, max_age=90):
         stamp = datetime.fromisoformat(str(status.get("heartbeat", "")).replace("Z", "+00:00"))
         if stamp.tzinfo is None:
             stamp = stamp.replace(tzinfo=INDIA_TZ)
-        return (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() <= max_age
+        return 0 <= (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() <= max_age
     except Exception:
         return False
 
@@ -48,7 +48,7 @@ def _pid_alive():
 
 
 def ensure_worker_process():
-    """Return a status dict and start exactly one independent worker if needed."""
+    """Return status and start one independent worker without a launch race."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     status = _read_status()
     pid = _pid_alive()
@@ -57,50 +57,60 @@ def ensure_worker_process():
         status["worker_pid"] = pid
         return status
 
-    # If another worker owns the lock, it is the authoritative worker even if
-    # this Streamlit script runs in a different process.
     lock_handle = None
     try:
         lock_handle = open(WORKER_LOCK_FILE, "a+", encoding="utf-8")
         try:
             import fcntl
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            acquired = True
         except (ImportError, BlockingIOError):
-            acquired = False
-        if not acquired:
             lock_handle.close()
             status = _read_status()
             status["worker_alive"] = _heartbeat_fresh(status)
             return status
 
-        # We only use this lock probe to prevent a race. Release before spawning;
-        # the child acquires and holds the real lock for its entire lifetime.
-        try:
-            import fcntl
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        lock_handle.close()
-
+        # Keep the probe lock until the child has acquired the real worker lock.
+        # This prevents two Streamlit processes from launching duplicate workers.
         log_path = OUTPUT_DIR / "paper_bot_worker.log"
         log = open(log_path, "a", encoding="utf-8")
-        child = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--worker"],
-            cwd=str(Path(__file__).resolve().parent),
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
-            close_fds=True,
-        )
-        PID_FILE.write_text(str(child.pid), encoding="utf-8")
-        time.sleep(1)
-        status = _read_status()
-        status["worker_alive"] = True
-        status["worker_pid"] = child.pid
-        status["status"] = status.get("status", "STARTING")
-        return status
+        child = None
+        try:
+            child = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), "--worker"],
+                cwd=str(Path(__file__).resolve().parent),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+                close_fds=True,
+            )
+            PID_FILE.write_text(str(child.pid), encoding="utf-8")
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                child_status = _read_status()
+                child_pid = _pid_alive()
+                if child_pid == child.pid and _heartbeat_fresh(child_status, max_age=10):
+                    child_status["worker_alive"] = True
+                    child_status["worker_pid"] = child.pid
+                    return child_status
+                if child.poll() is not None:
+                    break
+            status = _read_status()
+            status["worker_alive"] = bool(_pid_alive())
+            status["worker_pid"] = child.pid
+            return status
+        finally:
+            try:
+                log.close()
+            except Exception:
+                pass
+            try:
+                import fcntl
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
     except Exception as error:
         try:
             if lock_handle:
@@ -115,7 +125,7 @@ def ensure_worker_process():
 
 def run_worker():
     """Child-process entry point; keep the worker lock for its full lifetime."""
-    from bot_runner import _run_bot, _with_file_lock, _worker_lock_handle
+    from bot_runner import _run_bot, _with_file_lock
     import bot_runner
     lock = _with_file_lock(WORKER_LOCK_FILE)
     if lock is None:
