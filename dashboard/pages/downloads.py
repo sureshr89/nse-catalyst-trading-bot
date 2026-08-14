@@ -5,6 +5,7 @@ import pandas as pd
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
+from master_data import build_master_data
 
 ROOT = Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Downloads", page_icon="⬇️", layout="wide")
@@ -24,14 +25,32 @@ def json_bytes(name, fallback):
     data = existing_bytes(name)
     return data if data is not None else json.dumps(fallback, indent=2).encode("utf-8")
 
+# Refresh the durable master datasets from all currently persisted bot files
+# whenever the Downloads page is opened. This makes weekly downloads safe even
+# when the user has not opened the page during the trading session.
+try:
+    build_master_data()
+except Exception as error:
+    st.warning(f"Master data refresh warning: {type(error).__name__}: {error}")
+
 st.title("⬇️ Downloads")
-st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records and premarket gap board.")
+st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records, premarket gap board and master research datasets.")
+
 trades_data = csv_bytes("trades.csv", ["status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl", "setup_type"])
 signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type", "approved", "reason"])
 gap_data = csv_bytes("gap_analysis.csv", ["Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "PreparedAtIST"])
+master_stock_data = csv_bytes("MASTER_DAILY_STOCK_DATA.csv", ["TradeDate", "Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "DataSnapshotIST"])
+master_trade_data = csv_bytes("MASTER_TRADES.csv", ["TradeDate", "status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl", "setup_type"])
+master_daily_data = csv_bytes("MASTER_DAILY_SUMMARY.csv", ["TradeDate", "PreparedAtIST", "StocksInGapBoard", "GapUps", "GapDowns", "SignalsRecorded", "TradesRecorded", "ClosedTrades", "FinalSignals", "StocksScanned", "LiquidityPassed", "OpeningSetupPassed", "MarketAlignmentPassed", "SectorAlignmentPassed", "StrategySetupPassed", "StockAlignmentPassed", "DailyPnL"])
 status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive": False})
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
 diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "gap_up_count": 0, "gap_down_count": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
+
+st.subheader("⭐ Master Trading Data — Weekly Download")
+st.caption("These files are the long-term research records. Download them weekly for your own backup/analysis.")
+st.download_button("⬇️ MASTER DAILY STOCK DATA — ALL STOCK INPUTS", data=master_stock_data, file_name="NSE_CATALYST_MASTER_DAILY_STOCK_DATA.csv", mime="text/csv", key="download_master_stock", width="stretch")
+st.download_button("⬇️ MASTER TRADES — ALL TRADES", data=master_trade_data, file_name="NSE_CATALYST_MASTER_TRADES.csv", mime="text/csv", key="download_master_trades", width="stretch")
+st.download_button("⬇️ MASTER DAILY SUMMARY", data=master_daily_data, file_name="NSE_CATALYST_MASTER_DAILY_SUMMARY.csv", mime="text/csv", key="download_master_daily", width="stretch")
 
 st.subheader("Paper Trading Files")
 st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="nifty500_trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
