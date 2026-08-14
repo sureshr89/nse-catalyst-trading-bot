@@ -1,6 +1,6 @@
 from pathlib import Path
-import json,importlib.util,sys
-from datetime import datetime,timezone
+import json,sys
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -8,6 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 ROOT=Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 from dashboard.nav import render_nav
+from bot_runner import ensure_bot_running
 st.set_page_config(page_title="NSE Catalyst | Bot Status",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
 st_autorefresh(interval=5000,key="live")
 def load(p,kind="json"):
@@ -28,18 +29,11 @@ st.markdown("""
 render_nav()
 status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json")
 try:
-    spec=importlib.util.spec_from_file_location("runner",ROOT/"bot_runner.py");mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
-    live=mod.ensure_bot_running() if hasattr(mod,"ensure_bot_running") else mod.get_status()
+    live=ensure_bot_running()
     if isinstance(live,dict):status.update(live)
 except Exception as error:
-    status.setdefault("error",f"Worker status unavailable: {type(error).__name__}: {error}")
-def heartbeat_alive(value,max_age_seconds=90):
-    try:
-        stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"))
-        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
-        return (datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds()<=max_age_seconds
-    except Exception:return False
-worker=bool(status.get("worker_alive",False)) or heartbeat_alive(status.get("heartbeat"));bot=str(status.get("status","STARTING")).upper()
+    status["error"]=f"Worker startup/status error: {type(error).__name__}: {error}"
+worker=bool(status.get("worker_alive",False)); bot=str(status.get("status","STARTING")).upper()
 if worker and bot=="WAITING":st.warning("🟡 BOT READY • WAITING FOR MARKET SESSION")
 elif worker:st.success("🟢 BOT RUNNING • PAPER TRADING")
 else:st.warning("🟠 WORKER NOT CONFIRMED ALIVE")
