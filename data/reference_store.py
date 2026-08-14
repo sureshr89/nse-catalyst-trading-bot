@@ -1,4 +1,4 @@
-"""Daily PDH/PDL reference data for the NIFTY 500 open-reversal strategy."""
+"""Daily PDH/PDL and previous-close reference data for the NIFTY 500 strategy."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -46,10 +46,10 @@ class ReferenceStore:
         if self.path.exists():
             try:
                 saved = pd.read_csv(self.path)
-                required = {"Symbol", "PDH", "PDL", "PreviousDayVolume", "PreviousDayTurnover"}
+                required = {"Symbol", "PDH", "PDL", "PreviousDayClose", "PreviousDayVolume", "PreviousDayTurnover"}
                 if self._coverage_ok(saved) and required.issubset(saved.columns): return saved
             except Exception as error:
-                print("Saved NIFTY 500 open-reversal references could not be loaded:", error)
+                print("Saved NIFTY 500 references could not be loaded:", error)
 
         symbols = self.universe["Symbol"].astype(str).str.upper().tolist()
         tickers = [self._ticker(s) for s in symbols]
@@ -85,7 +85,14 @@ class ReferenceStore:
                         if completed.empty: continue
                         prev = completed.iloc[-1]
                         close = float(prev["Close"]); volume = float(prev.get("Volume", 0) or 0)
-                        rows.append({"Symbol": symbol, "PDH": round(float(prev["High"]), 4), "PDL": round(float(prev["Low"]), 4), "PreviousDayVolume": volume, "PreviousDayTurnover": round(close * volume, 2)})
+                        rows.append({
+                            "Symbol": symbol,
+                            "PDH": round(float(prev["High"]), 4),
+                            "PDL": round(float(prev["Low"]), 4),
+                            "PreviousDayClose": round(close, 4),
+                            "PreviousDayVolume": volume,
+                            "PreviousDayTurnover": round(close * volume, 2),
+                        })
                     except Exception as error:
                         print("Reference error", symbol, error)
 
