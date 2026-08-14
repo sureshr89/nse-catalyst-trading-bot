@@ -71,7 +71,8 @@ class TradingBot:
             df = self.journal.get_trades()
             if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:
                 return None
-            closed = df[df.get("status", "").astype(str).str.upper().eq("CLOSED")].copy()
+            status = df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("", index=df.index)
+            closed = df[status.eq("CLOSED")].copy()
             closed = closed[closed["exit_reason"].astype(str).str.upper().eq("STOP_LOSS")]
             if closed.empty:
                 return None
@@ -89,10 +90,11 @@ class TradingBot:
             return None
 
     def signal_key(self, signal):
+        # Use the immutable trigger identity, not the later market-entry time.
         return (
             str(signal.get("symbol", "")).strip().upper(),
             str(signal.get("signal", "")).strip().upper(),
-            str(signal.get("entry_time", "")),
+            str(signal.get("trigger_entry_time", signal.get("entry_time", ""))),
             str(signal.get("open_cross_level", "")),
         )
 
@@ -131,7 +133,8 @@ class TradingBot:
             "stock_direction", "stock_today_direction", "setup_type",
             "trigger_candle_open", "trigger_candle_close", "trigger_close",
             "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe",
-            "risk_per_share", "actual_risk", "position_value",
+            "risk_per_share", "actual_risk", "position_value", "previous_day_close",
+            "gap", "gap_percent", "gap_type",
         )
         for field in fields:
             if field in signal:
@@ -169,11 +172,14 @@ class TradingBot:
     def process_signal(self, signal):
         if not isinstance(signal, dict):
             return
-        symbol = str(signal.get("symbol", "")).strip().upper()
-        if not symbol or not self._set_market_entry(signal):
-            return
+        # Capture the immutable trigger before changing entry_time to the
+        # actual market execution time.
+        signal["trigger_entry_time"] = signal.get("entry_time")
         key = self.signal_key(signal)
         if key in self.processed_signals:
+            return
+        symbol = str(signal.get("symbol", "")).strip().upper()
+        if not symbol or not self._set_market_entry(signal):
             return
         if self.daily_limit_reached() or self.cooldown_active():
             return
@@ -218,6 +224,16 @@ class TradingBot:
             if closed is not None:
                 self.journal.log_trade(closed)
                 self.daily_pnl = self._restore_daily_pnl()
+        # Keep capital-blocked qualifying setups in the research journal and
+        # resolve them later as hypothetical outcomes without affecting risk.
+        self.missed_capital.monitor()
+
+    def _persist_master_data(self):
+        try:
+            from master_data import build_master_data
+            build_master_data()
+        except Exception as error:
+            print("Master data finalization skipped:", type(error).__name__, error)
 
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
@@ -230,6 +246,7 @@ class TradingBot:
             if closed is not None:
                 self.journal.log_trade(closed)
         self.daily_pnl = self._restore_daily_pnl()
+        self._persist_master_data()
         self.square_off_done = True
 
     def scan_for_entries(self):
