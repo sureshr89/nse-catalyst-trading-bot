@@ -11,7 +11,7 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
-    """Build a fresh signal after a PDH/PDL reaction and completed Open cross."""
+    """Build a fresh signal after the correct PDH/PDL break and completed Open cross."""
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
@@ -67,24 +67,25 @@ class OpenReversalEngine:
             if candle_time > self.end:
                 break
 
-            # The PDH/PDL reaction may occur after the 09:15 market open but
-            # before the 09:45 entry window. The reversal trigger itself must
-            # still occur inside the configured entry window.
-            if side == "SELL":
-                if not level_reached and float(candle["Low"]) <= pdh:
-                    level_reached = True
-                    level_reached_time = candle["Datetime"]
-                    continue
-                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
-                    if float(candle["Open"]) > today_open and float(candle["Close"]) < today_open:
-                        latest_trigger = candle
-            else:
-                if not level_reached and float(candle["High"]) >= pdl:
+            # BUY: open above PDH -> price comes below PDH -> later
+            # a completed 1-minute candle opens below today's Open and closes above it.
+            if side == "BUY":
+                if not level_reached and float(candle["Low"]) < pdh:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
                 if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
+                        latest_trigger = candle
+            # SELL: open below PDL -> price comes above PDL -> later
+            # a completed 1-minute candle opens above today's Open and closes below it.
+            else:
+                if not level_reached and float(candle["High"]) > pdl:
+                    level_reached = True
+                    level_reached_time = candle["Datetime"]
+                    continue
+                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
+                    if float(candle["Open"]) > today_open and float(candle["Close"]) < today_open:
                         latest_trigger = candle
         return latest_trigger
 
@@ -104,17 +105,19 @@ class OpenReversalEngine:
         today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Open"])
         stock_direction = self._direction(today_data)
 
-        if ENABLE_SHORT and today_open > pdh:
-            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
-            if trigger is not None and self._fresh(trigger):
-                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
-
-        if ENABLE_LONG and today_open < pdl:
+        # BUY: stock opens above PDH, then breaks below PDH, then reclaims today's Open.
+        if ENABLE_LONG and today_open > pdh:
             trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
             if trigger is not None and self._fresh(trigger):
                 setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
                 return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
+
+        # SELL: stock opens below PDL, then breaks above PDL, then loses today's Open.
+        if ENABLE_SHORT and today_open < pdl:
+            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
+            if trigger is not None and self._fresh(trigger):
+                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
+                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
         return None
 
     def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction):
