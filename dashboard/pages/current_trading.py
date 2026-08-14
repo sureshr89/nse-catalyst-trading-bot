@@ -55,65 +55,48 @@ def candle_pct(candle):
 
 
 def candle_label(pct):
-    if pct is None:
-        return "—"
-    return f"{pct:+.2f}%"
+    return "—" if pct is None else f"{pct:+.2f}%"
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def live_alignment_for_positions(symbols, trigger_times):
-    """Fetch only the small set needed for the live traded-position table.
-
-    Stock and NIFTY 500 values are the latest completed 1-minute candle. Sector
-    percentage is the equal-weight average 1-minute return of the sector's
-    NIFTY 500 constituents. This is display/monitoring data; it does not alter
-    the entry engine.
-    """
+def live_alignment_for_positions(symbols):
+    """Display-only live alignment for the small set of signaled/open stocks."""
     symbols = [str(s).upper().replace(".NS", "") for s in symbols if str(s).strip()]
     if not symbols:
         return pd.DataFrame()
     price = PriceData()
     universe = StockUniverse().get_dataframe(refresh=False)
     sectors = SectorStore(universe).prepare(force=False)
-    latest_nifty = price.get_index_1m("^CRSLDX")
-    nifty = None if latest_nifty.empty else latest_nifty.iloc[-1].to_dict()
-    rows = []
+    nifty_df = price.get_index_1m("^CRSLDX")
+    nifty = None if nifty_df.empty else nifty_df.iloc[-1].to_dict()
     stock_data = price.get_multi_1m(symbols)
+    sector_members_by_name = {}
+    if not sectors.empty and "Sector" in sectors.columns:
+        for sector, group in sectors.groupby("Sector"):
+            sector_members_by_name[str(sector)] = group["Symbol"].astype(str).str.upper().tolist()
+    needed_members = sorted({m for symbol in symbols for m in sector_members_by_name.get(str(sectors.loc[sectors["Symbol"].astype(str).str.upper().eq(symbol), "Sector"].iloc[0]) if not sectors.empty and not sectors.loc[sectors["Symbol"].astype(str).str.upper().eq(symbol)].empty else "UNKNOWN", [])})
+    member_data = price.get_multi_1m(needed_members) if needed_members else {}
+    rows = []
+    nifty_pct = candle_pct(nifty)
     for symbol in symbols:
-        candle = None
         df = stock_data.get(symbol, pd.DataFrame())
-        if df is not None and not df.empty:
-            candle = df.iloc[-1].to_dict()
-        sector = "UNKNOWN"
-        if not sectors.empty:
-            match = sectors[sectors["Symbol"].astype(str).str.upper().eq(symbol)]
-            if not match.empty:
-                sector = str(match.iloc[0].get("Sector", "UNKNOWN"))
-        sector_members = []
-        if not sectors.empty and sector != "UNKNOWN":
-            sector_members = sectors[sectors["Sector"].astype(str).eq(sector)]["Symbol"].astype(str).str.upper().tolist()
-        member_data = price.get_multi_1m(sector_members) if sector_members else {}
-        member_pcts = []
-        for member in sector_members:
-            mdf = member_data.get(member, pd.DataFrame())
-            if mdf is None or mdf.empty:
-                continue
-            pct = candle_pct(mdf.iloc[-1].to_dict())
-            if pct is not None:
-                member_pcts.append(pct)
+        stock_candle = df.iloc[-1].to_dict() if df is not None and not df.empty else None
+        match = sectors[sectors["Symbol"].astype(str).str.upper().eq(symbol)] if not sectors.empty else pd.DataFrame()
+        sector = str(match.iloc[0].get("Sector", "UNKNOWN")) if not match.empty else "UNKNOWN"
+        members = sector_members_by_name.get(sector, [])
+        member_pcts = [candle_pct(member_data[m].iloc[-1].to_dict()) for m in members if m in member_data and member_data[m] is not None and not member_data[m].empty]
+        member_pcts = [v for v in member_pcts if v is not None]
         sector_pct = sum(member_pcts) / len(member_pcts) if member_pcts else None
-        stock_pct = candle_pct(candle)
-        nifty_pct = candle_pct(nifty)
+        stock_pct = candle_pct(stock_candle)
         rows.append({
             "Stock": symbol,
             "Sector": sector,
             "NIFTY 500 1m %": candle_label(nifty_pct),
             "Sector 1m %": candle_label(sector_pct),
             "Stock 1m %": candle_label(stock_pct),
-            "NIFTY 500": "GREEN" if nifty_pct is not None and nifty_pct > 0 else "RED" if nifty_pct is not None and nifty_pct < 0 else "NEUTRAL",
-            "Sector": sector,
-            "Stock Candle": "GREEN" if stock_pct is not None and stock_pct > 0 else "RED" if stock_pct is not None and stock_pct < 0 else "NEUTRAL",
-            "Candle Time": candle.get("Datetime") if candle else (nifty.get("Datetime") if nifty else "—"),
+            "NIFTY 500": "GREEN" if nifty_pct and nifty_pct > 0 else "RED" if nifty_pct and nifty_pct < 0 else "NEUTRAL",
+            "Stock Candle": "GREEN" if stock_pct and stock_pct > 0 else "RED" if stock_pct and stock_pct < 0 else "NEUTRAL",
+            "Candle Time": stock_candle.get("Datetime") if stock_candle else (nifty.get("Datetime") if nifty else "—"),
         })
     return pd.DataFrame(rows)
 
@@ -138,21 +121,13 @@ worker = bool(status.get("worker_alive")) and heartbeat_alive(status.get("heartb
 
 st.title("📌 Current Trading")
 st.caption("NIFTY 500 • PDH/PDL-relative gap preparation → level break → today's Open 1-minute reversal")
-grid([
-    ("Bot", status.get("status", "WAITING")),
-    ("Worker", "ALIVE" if worker else "OFFLINE"),
-    ("Open Positions", len(pos)),
-    ("Available Capital", f"₹{float(status.get('available_capital', 250000) or 0):,.0f}"),
-    ("Last Scan", status.get("last_scan_completed", "—")),
-    ("Scan Duration", f"{float(status.get('scan_duration_seconds', 0) or 0):.1f}s"),
-])
+grid([("Bot", status.get("status", "WAITING")), ("Worker", "ALIVE" if worker else "OFFLINE"), ("Open Positions", len(pos)), ("Available Capital", f"₹{float(status.get('available_capital', 250000) or 0):,.0f}"), ("Last Scan", status.get("last_scan_completed", "—")), ("Scan Duration", f"{float(status.get('scan_duration_seconds', 0) or 0):.1f}s")])
 if status.get("error"):
     st.warning(str(status.get("error")))
 
 st.subheader("Opening Gap Board — PDH/PDL based, ready before 09:45")
 if not gaps.empty and "GapType" in gaps.columns:
-    g = gaps.copy()
-    g["GapPercent"] = pd.to_numeric(g.get("GapPercent"), errors="coerce")
+    g = gaps.copy(); g["GapPercent"] = pd.to_numeric(g.get("GapPercent"), errors="coerce")
     ups = g[g["GapType"].eq("GAP_UP_PDH")].sort_values("GapPercent", ascending=False)
     downs = g[g["GapType"].eq("GAP_DOWN_PDL")].sort_values("GapPercent")
     a, b = st.columns(2)
@@ -167,45 +142,32 @@ else:
 
 st.subheader("Open Positions")
 if pos:
-    rows = []
-    for symbol, p in pos.items():
-        rows.append({"Stock": symbol, "Side": p.get("signal", ""), "Entry": p.get("entry"), "SL": p.get("stop_loss"), "Target": p.get("target"), "Qty": p.get("quantity"), "Risk": p.get("actual_risk", p.get("risk")), "R:R": p.get("rr", 1.25), "Entry Time": p.get("entry_time"), "Trigger Time": p.get("trigger_entry_time", "—"), "Setup": p.get("setup_type", "NIFTY_500_PDH_PDL_OPEN_REVERSAL"), "Gap % vs PDH/PDL": p.get("gap_percent", "—"), "PDH": p.get("pdh", "—"), "PDL": p.get("pdl", "—"), "Open": p.get("today_open", "—")})
+    rows = [{"Stock": symbol, "Side": p.get("signal", ""), "Entry": p.get("entry"), "SL": p.get("stop_loss"), "Target": p.get("target"), "Qty": p.get("quantity"), "Risk": p.get("actual_risk", p.get("risk")), "R:R": p.get("rr", 1.25), "Entry Time": p.get("entry_time"), "Trigger Time": p.get("trigger_entry_time", "—"), "Setup": p.get("setup_type", "NIFTY_500_PDH_PDL_OPEN_REVERSAL"), "Gap % vs PDH/PDL": p.get("gap_percent", "—"), "PDH": p.get("pdh", "—"), "PDL": p.get("pdl", "—"), "Open": p.get("today_open", "—")} for symbol, p in pos.items()]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-    st.subheader("Live Alignment — Latest Completed 1-Minute Candle")
-    st.caption("Percentages are candle Open → Close. NIFTY 500, sector and stock are shown for the currently traded stocks. Data refreshes every 5 seconds; market data is cached for 30 seconds to avoid slowing the bot.")
-    try:
-        live_df = live_alignment_for_positions(list(pos.keys()), [p.get("entry_time") for p in pos.values()])
-        if not live_df.empty:
-            st.dataframe(live_df[["Stock", "Sector", "NIFTY 500 1m %", "Sector 1m %", "Stock 1m %", "NIFTY 500", "Stock Candle", "Candle Time"]], width="stretch", hide_index=True)
-        else:
-            st.info("Live alignment will appear when completed 1-minute candles are available.")
-    except Exception as error:
-        st.warning(f"Live alignment temporarily unavailable: {type(error).__name__}: {error}")
 else:
     st.info("No open paper positions.")
 
+st.subheader("Live Alignment — Signaled Stocks")
+st.caption("NIFTY 500, sector and stock percentages use the latest completed 1-minute candle. The page refreshes every 5 seconds; market data is cached for 30 seconds.")
+signaled = list(pos.keys())
+if not trades.empty and "symbol" in trades.columns:
+    recent_symbols = trades["symbol"].dropna().astype(str).tail(20).tolist()
+    signaled = list(dict.fromkeys(signaled + recent_symbols))
+if signaled:
+    try:
+        live_df = live_alignment_for_positions(signaled)
+        if not live_df.empty:
+            st.dataframe(live_df[["Stock", "Sector", "NIFTY 500 1m %", "Sector 1m %", "Stock 1m %", "NIFTY 500", "Stock Candle", "Candle Time"]], width="stretch", hide_index=True)
+        else:
+            st.info("Live alignment data is temporarily unavailable.")
+    except Exception as error:
+        st.warning(f"Live alignment temporarily unavailable: {type(error).__name__}: {error}")
+else:
+    st.info("No signaled stocks yet. The alignment table will appear automatically after the first signal.")
+
 st.subheader("Scanner Filter Breakdown")
 if isinstance(diag, dict) and diag:
-    grid([
-        ("NIFTY 500 Scanned", diag.get("stocks_scanned", 0)),
-        ("Gap Data Ready", diag.get("gap_data_count", 0)),
-        ("Gap Ups > PDH", diag.get("gap_up_count", 0)),
-        ("Gap Downs < PDL", diag.get("gap_down_count", 0)),
-        ("Liquidity Passed", diag.get("liquidity_passed", 0)),
-        ("PDH / PDL Open Setup", diag.get("opening_setup_passed", 0)),
-        ("NIFTY Market Alignment", diag.get("market_alignment_passed", 0)),
-        ("Sector Alignment", diag.get("sector_alignment_passed", 0)),
-        ("Strategy Setup", diag.get("strategy_setup_passed", 0)),
-        ("Stock Alignment", diag.get("stock_alignment_passed", 0)),
-        ("FINAL SIGNALS", diag.get("final_signals", 0)),
-    ])
-    labels = [("PDH / PDL not reached", "pdh_pdl_not_reached"), ("No Open Cross", "no_open_cross"), ("Sector Alignment", "sector_alignment"), ("Stock Alignment", "stock_alignment"), ("Strategy Setup", "strategy_setup"), ("NIFTY Alignment", "market_alignment"), ("Opening Setup", "opening_setup"), ("Liquidity", "liquidity"), ("Missing Data", "missing_data")]
-    ranked = sorted(((label, int((diag.get("rejections", {}) or {}).get(key, 0) or 0)) for label, key in labels), key=lambda x: x[1], reverse=True)
-    ranked = [x for x in ranked if x[1] > 0]
-    if ranked:
-        st.subheader("Top Rejection Reasons")
-        grid(ranked)
+    grid([("NIFTY 500 Scanned", diag.get("stocks_scanned", 0)), ("Gap Data Ready", diag.get("gap_data_count", 0)), ("Gap Ups > PDH", diag.get("gap_up_count", 0)), ("Gap Downs < PDL", diag.get("gap_down_count", 0)), ("Liquidity Passed", diag.get("liquidity_passed", 0)), ("PDH / PDL Open Setup", diag.get("opening_setup_passed", 0)), ("NIFTY Market Alignment", diag.get("market_alignment_passed", 0)), ("Sector Alignment", diag.get("sector_alignment_passed", 0)), ("Strategy Setup", diag.get("strategy_setup_passed", 0)), ("Stock Alignment", diag.get("stock_alignment_passed", 0)), ("FINAL SIGNALS", diag.get("final_signals", 0))])
 else:
     st.info("Scanner diagnostics will appear after the next cycle.")
 
