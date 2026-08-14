@@ -12,25 +12,13 @@ from papertrade.persistent_storage import restore, sync
 
 class TradeJournal:
     TRADE_COLUMNS = [
-        "trade_id", "symbol", "stock", "industry", "sector", "signal", "buy_sell",
-        "entry_time", "entry", "stop_loss", "target", "quantity", "exit_time", "exit_price", "exit_reason",
-        "risk", "reward", "rr", "pnl", "risk_per_share", "actual_risk", "position_value",
-        "open_cross_level", "pdh", "pdl", "today_open", "today_low", "today_high",
-        "market_direction", "sector_direction", "stock_direction", "stock_today_direction",
-        "setup_type", "trigger_candle_open", "trigger_candle_close", "trigger_close",
-        "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe", "status",
+        "trade_id", "symbol", "stock", "industry", "sector", "signal", "buy_sell", "entry_time", "entry", "stop_loss", "target", "quantity", "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr", "pnl", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "pdh", "pdl", "today_open", "today_low", "today_high", "market_direction", "sector_direction", "stock_direction", "stock_today_direction", "setup_type", "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe", "status"
     ]
-
     SIGNAL_COLUMNS = [
-        "timestamp", "symbol", "industry", "sector", "signal", "market_direction",
-        "sector_direction", "stock_direction", "stock_today_direction", "pdh", "pdl",
-        "today_open", "today_low", "today_high", "entry", "stop_loss", "target", "quantity",
-        "risk_reward", "risk_per_share", "actual_risk", "position_value", "open_cross_level",
-        "setup_type", "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached",
-        "liquidity_qualified", "nifty500_universe", "approved", "reason",
+        "timestamp", "symbol", "industry", "sector", "signal", "market_direction", "sector_direction", "stock_direction", "stock_today_direction", "pdh", "pdl", "today_open", "today_low", "today_high", "entry", "stop_loss", "target", "quantity", "risk_reward", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "setup_type", "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached", "liquidity_qualified", "nifty500_universe", "approved", "reason"
     ]
-
     EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status"}
+    LEGACY_COLUMNS = {"nifty100_direction", "pdc", "previous_day_direction", "gap_direction", "gap_percent", "gap_failure", "open_reclaim"}
 
     def __init__(self, trade_file=TRADE_LOG_FILE, signal_file=SIGNAL_LOG_FILE):
         self.trade_file = trade_file
@@ -45,17 +33,25 @@ class TradeJournal:
             directory = os.path.dirname(path)
             if directory: os.makedirs(directory, exist_ok=True)
             if not os.path.exists(path):
-                with open(path, "w", newline="", encoding="utf-8") as file: csv.DictWriter(file, fieldnames=columns).writeheader()
+                self._write_header(path, columns)
                 continue
             try:
                 df = pd.read_csv(path)
+                if self.LEGACY_COLUMNS.intersection(set(df.columns)):
+                    print("Legacy strategy journal detected; clearing:", path)
+                    self._write_header(path, columns)
+                    continue
                 for column in columns:
                     if column not in df.columns: df[column] = ""
                 df = df.reindex(columns=columns)
                 if path == self.signal_file: df = self._deduplicate_signal_history(df)
                 df.to_csv(path, index=False)
             except (FileNotFoundError, pd.errors.EmptyDataError):
-                with open(path, "w", newline="", encoding="utf-8") as file: csv.DictWriter(file, fieldnames=columns).writeheader()
+                self._write_header(path, columns)
+
+    @staticmethod
+    def _write_header(path, columns):
+        with open(path, "w", newline="", encoding="utf-8") as file: csv.DictWriter(file, fieldnames=columns).writeheader()
 
     @staticmethod
     def _value(value):
@@ -122,8 +118,7 @@ class TradeJournal:
         return self.upsert_trade(trade)
 
     def log_signal(self, signal):
-        if not isinstance(signal, dict) or not bool(signal.get("approved", False)):
-            return {"saved": False, "reason": "Only approved signals are journaled"}
+        if not isinstance(signal, dict) or not bool(signal.get("approved", False)): return {"saved": False, "reason": "Only approved signals are journaled"}
         if self.signal_exists(signal): return {"saved": False, "duplicate": True, "reason": "Duplicate daily setup"}
         row = {column: self._value(signal.get(column, "")) for column in self.SIGNAL_COLUMNS}
         if not row["timestamp"]: row["timestamp"] = datetime.now().isoformat()
@@ -146,4 +141,4 @@ class TradeJournal:
         if closed.empty: return {"total_trades": 0, "winning_trades": 0, "losing_trades": 0, "breakeven_trades": 0, "win_rate": 0.0, "total_pnl": 0.0, "average_pnl": 0.0}
         pnl = pd.to_numeric(closed["pnl"], errors="coerce").fillna(0.0)
         total = len(pnl); winning = int((pnl > 0).sum()); losing = int((pnl < 0).sum()); breakeven = int((pnl == 0).sum())
-        return {"total_trades": total, "winning_trades": winning, "losing_trades": losing, "breakeven_trades": breakeven, "win_rate": round(winning / total * 100, 2) if total else 0.0, "total_pnl": round(float(pnl.sum()), 2), "average_pnl": round(float(pnl.mean()), 2)}
+        return {"total_trades": total, "winning_trades": winning, "losing_trades": losing, "breakeven_trades": breakeven, "win_rate": round(winning / total * 100, 2), "total_pnl": round(float(pnl.sum()), 2), "average_pnl": round(float(pnl.mean()), 2)}
