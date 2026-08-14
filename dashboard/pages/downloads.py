@@ -28,13 +28,14 @@ def json_bytes(name, fallback):
 
 
 st.title("⬇️ Downloads")
-st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records.")
+st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records and premarket gap board.")
 
 trades_data = csv_bytes("trades.csv", ["status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl", "setup_type"])
 signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type", "approved", "reason"])
+gap_data = csv_bytes("gap_analysis.csv", ["Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "PreparedAtIST"])
 status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive": False})
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
-diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "liquidity_passed": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
+diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "gap_up_count": 0, "gap_down_count": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
 
 st.subheader("Paper Trading Files")
 st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="nifty500_trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
@@ -42,6 +43,24 @@ st.download_button("⬇️ SIGNALS CSV", data=signals_data, file_name="nifty500_
 st.download_button("⬇️ BOT STATUS JSON", data=status_data, file_name="nifty500_bot_status.json", mime="application/json", key="download_bot_status_json", width="stretch")
 st.download_button("⬇️ PAPER STATE JSON", data=engine_data, file_name="nifty500_paper_engine_state.json", mime="application/json", key="download_paper_engine_json", width="stretch")
 st.download_button("⬇️ SCANNER DIAGNOSTICS JSON", data=diag_data, file_name="nifty500_scanner_diagnostics.json", mime="application/json", key="download_scanner_diagnostics_json", width="stretch")
+st.download_button("⬇️ PREMARKET GAP BOARD CSV", data=gap_data, file_name="nifty500_premarket_gap_board.csv", mime="text/csv", key="download_gap_board_csv", width="stretch")
+
+st.subheader("Premarket Gap Board")
+try:
+    gaps = pd.read_csv(ROOT / "outputs/gap_analysis.csv")
+except Exception:
+    gaps = pd.DataFrame()
+if not gaps.empty:
+    gaps["GapPercent"] = pd.to_numeric(gaps["GapPercent"], errors="coerce")
+    a,b = st.columns(2)
+    with a:
+        st.markdown("**🟢 Gap Ups**")
+        st.dataframe(gaps[gaps["GapType"].eq("GAP_UP")].sort_values("GapPercent", ascending=False).head(30), width="stretch", hide_index=True, height=350)
+    with b:
+        st.markdown("**🔴 Gap Downs**")
+        st.dataframe(gaps[gaps["GapType"].eq("GAP_DOWN")].sort_values("GapPercent").head(30), width="stretch", hide_index=True, height=350)
+else:
+    st.info("The gap board is created automatically from the first market data after 09:15 and prepared before the 09:45 entry window.")
 
 st.subheader("NIFTY 500 Sector Classification")
 try:
