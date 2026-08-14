@@ -67,8 +67,6 @@ class OpenReversalEngine:
             if candle_time > self.end:
                 break
 
-            # BUY: open above PDH -> price comes below PDH -> later
-            # a completed 1-minute candle opens below today's Open and closes above it.
             if side == "BUY":
                 if not level_reached and float(candle["Low"]) < pdh:
                     level_reached = True
@@ -77,8 +75,6 @@ class OpenReversalEngine:
                 if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
                         latest_trigger = candle
-            # SELL: open below PDL -> price comes above PDL -> later
-            # a completed 1-minute candle opens above today's Open and closes below it.
             else:
                 if not level_reached and float(candle["High"]) > pdl:
                     level_reached = True
@@ -103,21 +99,28 @@ class OpenReversalEngine:
         if today_data.empty:
             return None
         today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Open"])
-        stock_direction = self._direction(today_data)
 
-        # BUY: stock opens above PDH, then breaks below PDH, then reclaims today's Open.
         if ENABLE_LONG and today_open > pdh:
             trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
             if trigger is not None and self._fresh(trigger):
                 setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
+                stock_direction = self._direction(setup_data)
+                return self._trade(
+                    "BUY", symbol, trigger, today_open, pdh, pdl,
+                    float(setup_data["Low"].min()), float(setup_data["High"].max()),
+                    sector_direction, nifty_direction, stock_direction,
+                )
 
-        # SELL: stock opens below PDL, then breaks above PDL, then loses today's Open.
         if ENABLE_SHORT and today_open < pdl:
             trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
             if trigger is not None and self._fresh(trigger):
                 setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), sector_direction, nifty_direction, stock_direction)
+                stock_direction = self._direction(setup_data)
+                return self._trade(
+                    "SELL", symbol, trigger, today_open, pdh, pdl,
+                    float(setup_data["Low"].min()), float(setup_data["High"].max()),
+                    sector_direction, nifty_direction, stock_direction,
+                )
         return None
 
     def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, sector_direction, nifty_direction, stock_direction):
