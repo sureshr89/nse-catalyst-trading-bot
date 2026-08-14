@@ -2,6 +2,8 @@ from pathlib import Path
 import json
 from io import BytesIO
 from copy import copy
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 import streamlit as st
 import pandas as pd
 from dashboard.nav import render_nav
@@ -51,9 +53,23 @@ def _month_series(frame, columns):
     return pd.Series([None] * len(frame), index=frame.index, dtype="object")
 
 
-def available_master_months():
-    """Find months that actually have master records without loading huge data into Excel."""
-    months = set()
+def filter_month(frame, month, date_columns):
+    if frame.empty:
+        return frame
+    keys = _month_series(frame, date_columns)
+    return frame.loc[keys.eq(month)].copy()
+
+
+def last_six_calendar_months():
+    """Always show six recent calendar months, even if some have no records yet."""
+    now = datetime.now()
+    first = now.replace(day=1)
+    return [(first - relativedelta(months=i)).strftime("%Y-%m") for i in range(6)]
+
+
+def monthly_record_counts():
+    """Small record-count lookup used by the six-month download table."""
+    counts = {m: 0 for m in last_six_calendar_months()}
     sources = [
         ("MASTER_DAILY_STOCK_DATA.csv", ["TradeDate"]),
         ("MASTER_TRADES.csv", ["TradeDate", "entry_time", "exit_time"]),
@@ -61,24 +77,12 @@ def available_master_months():
     ]
     for filename, date_columns in sources:
         frame = read_csv(filename)
-        if not frame.empty:
-            months.update(x for x in _month_series(frame, date_columns).dropna().unique() if x)
-    # Gap board/signals are included in the monthly workbook too.
-    for filename, date_columns in [
-        ("gap_analysis.csv", ["PreparedAtIST"]),
-        ("signals.csv", ["timestamp"]),
-    ]:
-        frame = read_csv(filename)
-        if not frame.empty:
-            months.update(x for x in _month_series(frame, date_columns).dropna().unique() if x)
-    return sorted(months, reverse=True)
-
-
-def filter_month(frame, month, date_columns):
-    if frame.empty:
-        return frame
-    keys = _month_series(frame, date_columns)
-    return frame.loc[keys.eq(month)].copy()
+        if frame.empty:
+            continue
+        keys = _month_series(frame, date_columns)
+        for month in counts:
+            counts[month] += int(keys.eq(month).sum())
+    return counts
 
 
 def build_monthly_master_excel(month):
@@ -110,7 +114,6 @@ def build_monthly_master_excel(month):
                 new_font.bold = True
                 cell.font = new_font
 
-        # Small index sheet makes every monthly file self-explanatory.
         info = pd.DataFrame([
             ["Month", month],
             ["Purpose", "NIFTY 500 paper-trading research master data"],
@@ -124,7 +127,6 @@ def build_monthly_master_excel(month):
     return output.getvalue()
 
 
-# Refresh durable master datasets whenever Downloads is opened.
 try:
     build_master_data()
 except Exception as error:
@@ -140,24 +142,39 @@ status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive"
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
 diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "gap_up_count": 0, "gap_down_count": 0, "final_signals": 0, "strategy": "NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
 
-st.subheader("⭐ Master Trading Data — Month Wise")
-st.caption("Each download contains only the selected month. This keeps the Excel file small and fast to load on mobile.")
+st.subheader("⭐ Master Trading Data — Last 6 Months")
+st.caption("Six monthly files are listed below. Only the month you choose is generated for download, keeping file size and mobile loading small.")
 
-months = available_master_months()
-if months:
-    selected_month = st.selectbox("📅 Select month", months, index=0, key="master_month_select")
-    monthly_excel = build_monthly_master_excel(selected_month)
-    st.download_button(
-        f"⬇️ DOWNLOAD MASTER — {selected_month}",
-        data=monthly_excel,
-        file_name=f"NSE_CATALYST_MASTER_TRADING_DATA_{selected_month}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_master_monthly_excel",
-        width="stretch",
-    )
-    st.caption("One monthly Excel file • Daily Stock Inputs • All Trades • Daily Summary • Gap Board • Signals • README")
-else:
-    st.info("No master trading month is available yet. The first trading data will appear here automatically.")
+six_months = last_six_calendar_months()
+counts = monthly_record_counts()
+month_rows = pd.DataFrame([
+    {
+        "Month": pd.Timestamp(month + "-01").strftime("%B %Y"),
+        "File": f"NSE_CATALYST_MASTER_TRADING_DATA_{month}.xlsx",
+        "Records": counts.get(month, 0),
+        "Status": "Available" if counts.get(month, 0) else "No data yet",
+    }
+    for month in six_months
+])
+st.dataframe(month_rows, use_container_width=True, hide_index=True, height=255)
+
+selected_month = st.selectbox(
+    "📅 Select a month to download",
+    six_months,
+    format_func=lambda x: pd.Timestamp(x + "-01").strftime("%B %Y"),
+    index=0,
+    key="master_month_select",
+)
+monthly_excel = build_monthly_master_excel(selected_month)
+st.download_button(
+    f"⬇️ DOWNLOAD MASTER — {pd.Timestamp(selected_month + '-01').strftime('%B %Y')}",
+    data=monthly_excel,
+    file_name=f"NSE_CATALYST_MASTER_TRADING_DATA_{selected_month}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key="download_master_monthly_excel",
+    width="stretch",
+)
+st.caption("Each monthly file contains: Daily Stock Inputs • All Trades • Daily Summary • Gap Board • Signals • README")
 
 st.subheader("Paper Trading Files")
 st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="nifty500_trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
