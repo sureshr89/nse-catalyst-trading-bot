@@ -27,7 +27,7 @@ def json_bytes(name, fallback):
     data=existing_bytes(name)
     if data is not None:return data
     return json.dumps(fallback, indent=2).encode("utf-8")
-st.title("⬇️ Downloads");st.caption("Trading records, scanner data and sector classification.");st.subheader("Trading Data")
+st.title("⬇️ Downloads");st.caption("Trading records, scanner data and NIFTY 250 sector classification.");st.subheader("Trading Data")
 trades_data=csv_bytes("trades.csv",["status","symbol","entry_time","exit_time","pnl","sector"]);signals_data=csv_bytes("signals.csv",["timestamp","symbol","signal","price","sector"]);status_data=json_bytes("bot_status.json",{"status":"WAITING","worker_alive":False,"message":"No runtime status file yet."});engine_data=json_bytes("paper_engine_state.json",{"open_positions":{},"available_capital":250000})
 st.download_button("⬇️ ACTUAL / CAPITAL-MISSED TRADES CSV",data=trades_data,file_name="trades.csv",mime="text/csv",key="download_trades_csv",width="stretch")
 st.download_button("⬇️ SCANNER SIGNALS CSV",data=signals_data,file_name="signals.csv",mime="text/csv",key="download_signals_csv",width="stretch")
@@ -43,8 +43,8 @@ try:
 except Exception:mapping=pd.DataFrame()
 if not mapping.empty:
     mapping=mapping.drop_duplicates("Symbol").sort_values(["Sector","Symbol"]);summary=mapping.groupby("Sector",dropna=False).agg(Stocks=("Symbol","count")).reset_index().sort_values("Stocks",ascending=False)
-    st.success(f"{len(mapping)} NIFTY 100 stocks classified across {len(summary)} sectors.");st.dataframe(summary,width="stretch",hide_index=True)
-    st.download_button("⬇️ SECTOR-WISE STOCK LIST CSV",data=mapping.to_csv(index=False).encode("utf-8"),file_name="sector_wise_stock_list.csv",mime="text/csv",key="download_sector_stock_list",width="stretch")
-    st.download_button("⬇️ SECTOR SUMMARY CSV",data=summary.to_csv(index=False).encode("utf-8"),file_name="sector_summary.csv",mime="text/csv",key="download_sector_summary",width="stretch")
+    st.success(f"{len(mapping)} NIFTY 250 stocks classified across {len(summary)} sectors.");st.dataframe(summary,width="stretch",hide_index=True)
+    st.download_button("⬇️ SECTOR-WISE STOCK LIST CSV",data=mapping.to_csv(index=False).encode("utf-8"),file_name="nifty250_sector_wise_stock_list.csv",mime="text/csv",key="download_sector_stock_list",width="stretch")
+    st.download_button("⬇️ SECTOR SUMMARY CSV",data=summary.to_csv(index=False).encode("utf-8"),file_name="nifty250_sector_summary.csv",mime="text/csv",key="download_sector_summary",width="stretch")
     st.markdown("**Stocks classified by sector**");cols=[c for c in ["Sector","Symbol","SectorSource"] if c in mapping.columns];st.dataframe(mapping[cols],width="stretch",hide_index=True)
-else:st.warning("Sector mapping is not available yet. The page will retry from the NIFTY 100 universe on the next refresh.")
+else:st.warning("NIFTY 250 sector mapping is not available yet. The page will retry on the next refresh.")
