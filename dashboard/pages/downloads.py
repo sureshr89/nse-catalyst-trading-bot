@@ -3,16 +3,20 @@ import json
 import streamlit as st
 import pandas as pd
 from dashboard.nav import render_nav
+from dashboard.style import load_css
 
 ROOT = Path(__file__).resolve().parents[2]
 st.set_page_config(page_title="NSE Catalyst | Downloads", page_icon="⬇️", layout="wide")
-render_nav(24)
+st.markdown(load_css(), unsafe_allow_html=True)
+render_nav()
 
 
 def existing_bytes(name):
     path = ROOT / "outputs" / name
-    try: return path.read_bytes() if path.exists() else None
-    except Exception: return None
+    try:
+        return path.read_bytes() if path.exists() else None
+    except Exception:
+        return None
 
 
 def csv_bytes(name, columns):
@@ -26,14 +30,15 @@ def json_bytes(name, fallback):
 
 
 st.title("⬇️ Downloads")
-st.caption("NIFTY 500 paper-trading records, scanner diagnostics and sector classification.")
+st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records.")
 
-trades_data = csv_bytes("trades.csv", ["status", "symbol", "entry_time", "exit_time", "pnl", "setup_type"])
-signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type"])
+trades_data = csv_bytes("trades.csv", ["status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl", "setup_type"])
+signals_data = csv_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "setup_type", "approved", "reason"])
 status_data = json_bytes("bot_status.json", {"status": "WAITING", "worker_alive": False})
 engine_data = json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000})
-diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "final_signals": 0})
+diag_data = json_bytes("scanner_diagnostics.json", {"stocks_scanned": 0, "liquidity_passed": 0, "final_signals": 0})
 
+st.subheader("Paper Trading Files")
 st.download_button("⬇️ TRADES CSV", data=trades_data, file_name="trades.csv", mime="text/csv", key="download_trades_csv", width="stretch")
 st.download_button("⬇️ SIGNALS CSV", data=signals_data, file_name="signals.csv", mime="text/csv", key="download_signals_csv", width="stretch")
 st.download_button("⬇️ BOT STATUS JSON", data=status_data, file_name="bot_status.json", mime="application/json", key="download_bot_status_json", width="stretch")
@@ -45,7 +50,8 @@ try:
     from data.stock_universe import StockUniverse
     from data.sector_store import SectorStore
     universe = StockUniverse().get_dataframe(refresh=False)
-    if universe.empty: universe = StockUniverse().get_dataframe(refresh=True)
+    if universe.empty:
+        universe = StockUniverse().get_dataframe(refresh=True)
     mapping = SectorStore(universe).load()
 except Exception:
     mapping = pd.DataFrame()
