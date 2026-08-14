@@ -59,7 +59,7 @@ if not closed.empty and "pnl" in closed.columns:
 worker = bool(status.get("worker_alive")) and heartbeat_alive(status.get("heartbeat"))
 
 st.title("📌 Current Trading")
-st.caption("NIFTY 500 • opening-gap preparation → PDH/PDL reaction → today's Open 1-minute reversal")
+st.caption("NIFTY 500 • PDH/PDL-relative gap preparation → level break → today's Open 1-minute reversal")
 grid([
     ("Bot", status.get("status", "WAITING")),
     ("Worker", "ALIVE" if worker else "OFFLINE"),
@@ -71,27 +71,27 @@ grid([
 if status.get("error"):
     st.warning(str(status.get("error")))
 
-st.subheader("Opening Gap Board — ready before 09:45")
+st.subheader("Opening Gap Board — PDH/PDL based, ready before 09:45")
 if not gaps.empty and "GapType" in gaps.columns:
     g = gaps.copy()
-    g["GapPercent"] = pd.to_numeric(g["GapPercent"], errors="coerce")
-    ups = g[g["GapType"].eq("GAP_UP")].sort_values("GapPercent", ascending=False)
-    downs = g[g["GapType"].eq("GAP_DOWN")].sort_values("GapPercent")
+    g["GapPercent"] = pd.to_numeric(g.get("GapPercent"), errors="coerce")
+    ups = g[g["GapType"].eq("GAP_UP_PDH")].sort_values("GapPercent", ascending=False)
+    downs = g[g["GapType"].eq("GAP_DOWN_PDL")].sort_values("GapPercent")
     a, b = st.columns(2)
     with a:
-        st.markdown("**🟢 Gap Ups**")
-        st.dataframe(ups[[c for c in ["Symbol","PreviousClose","TodayOpen","GapPercent","PDH","PDL"] if c in ups.columns]].head(25), width="stretch", hide_index=True, height=320)
+        st.markdown("**🟢 Gap Ups — Open > PDH**")
+        st.dataframe(ups[[c for c in ["Symbol","TodayOpen","PDH","Gap","GapPercent","PreviousClose","PDL"] if c in ups.columns]].head(25), width="stretch", hide_index=True, height=320)
     with b:
-        st.markdown("**🔴 Gap Downs**")
-        st.dataframe(downs[[c for c in ["Symbol","PreviousClose","TodayOpen","GapPercent","PDH","PDL"] if c in downs.columns]].head(25), width="stretch", hide_index=True, height=320)
+        st.markdown("**🔴 Gap Downs — Open < PDL**")
+        st.dataframe(downs[[c for c in ["Symbol","TodayOpen","PDL","Gap","GapPercent","PreviousClose","PDH"] if c in downs.columns]].head(25), width="stretch", hide_index=True, height=320)
 else:
-    st.info("The opening gap board is prepared automatically after the 09:15 market open and before the 09:45 entry window.")
+    st.info("The PDH/PDL opening gap board is prepared automatically after the 09:15 market open and before the 09:45 entry window.")
 
 st.subheader("Open Positions")
 if pos:
     rows = []
     for symbol, p in pos.items():
-        rows.append({"Stock": symbol, "Side": p.get("signal", ""), "Entry": p.get("entry"), "SL": p.get("stop_loss"), "Target": p.get("target"), "Qty": p.get("quantity"), "Risk": p.get("actual_risk", p.get("risk")), "R:R": p.get("rr", 1.25), "Entry Time": p.get("entry_time"), "Trigger Time": p.get("trigger_entry_time", "—"), "Setup": p.get("setup_type", "NIFTY_500_PDH_PDL_OPEN_REVERSAL"), "Gap %": p.get("gap_percent", "—"), "PDH": p.get("pdh", "—"), "PDL": p.get("pdl", "—"), "Open": p.get("today_open", "—")})
+        rows.append({"Stock": symbol, "Side": p.get("signal", ""), "Entry": p.get("entry"), "SL": p.get("stop_loss"), "Target": p.get("target"), "Qty": p.get("quantity"), "Risk": p.get("actual_risk", p.get("risk")), "R:R": p.get("rr", 1.25), "Entry Time": p.get("entry_time"), "Trigger Time": p.get("trigger_entry_time", "—"), "Setup": p.get("setup_type", "NIFTY_500_PDH_PDL_OPEN_REVERSAL"), "Gap % vs PDH/PDL": p.get("gap_percent", "—"), "PDH": p.get("pdh", "—"), "PDL": p.get("pdl", "—"), "Open": p.get("today_open", "—")})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 else:
     st.info("No open paper positions.")
@@ -101,8 +101,8 @@ if isinstance(diag, dict) and diag:
     grid([
         ("NIFTY 500 Scanned", diag.get("stocks_scanned", 0)),
         ("Gap Data Ready", diag.get("gap_data_count", 0)),
-        ("Gap Ups", diag.get("gap_up_count", 0)),
-        ("Gap Downs", diag.get("gap_down_count", 0)),
+        ("Gap Ups > PDH", diag.get("gap_up_count", 0)),
+        ("Gap Downs < PDL", diag.get("gap_down_count", 0)),
         ("Liquidity Passed", diag.get("liquidity_passed", 0)),
         ("PDH / PDL Open Setup", diag.get("opening_setup_passed", 0)),
         ("NIFTY Market Alignment", diag.get("market_alignment_passed", 0)),
@@ -123,7 +123,7 @@ else:
 st.subheader("Latest Closed Trade")
 if not closed.empty:
     t = closed.iloc[-1]
-    grid([("Stock", t.get("symbol", "—")), ("Side", t.get("signal", "—")), ("Entry", t.get("entry", "—")), ("Exit", t.get("exit_price", "—")), ("P&L", f"₹{float(t.get('pnl', 0) or 0):,.2f}"), ("Exit Reason", t.get("exit_reason", "—")), ("PDH", t.get("pdh", "—")), ("PDL", t.get("pdl", "—")), ("Open", t.get("today_open", "—")), ("Gap %", t.get("gap_percent", "—")), ("Setup", t.get("setup_type", "—")), ("Sector", t.get("sector", "—")), ("Market", t.get("market_direction", "—"))])
+    grid([("Stock", t.get("symbol", "—")), ("Side", t.get("signal", "—")), ("Entry", t.get("entry", "—")), ("Exit", t.get("exit_price", "—")), ("P&L", f"₹{float(t.get('pnl', 0) or 0):,.2f}"), ("Exit Reason", t.get("exit_reason", "—")), ("PDH", t.get("pdh", "—")), ("PDL", t.get("pdl", "—")), ("Open", t.get("today_open", "—")), ("Gap % vs PDH/PDL", t.get("gap_percent", "—")), ("Setup", t.get("setup_type", "—")), ("Sector", t.get("sector", "—")), ("Market", t.get("market_direction", "—"))])
 else:
     st.info("No closed paper trade yet.")
 
