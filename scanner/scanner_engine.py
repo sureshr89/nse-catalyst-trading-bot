@@ -1,19 +1,9 @@
 """NIFTY 500 scanner for the PDH/PDL + today's Open reversal strategy."""
-
 from datetime import datetime
 from pathlib import Path
 import json
-
 import pandas as pd
-
-from config.settings import (
-    REQUIRE_MARKET_ALIGNMENT,
-    REQUIRE_SECTOR_ALIGNMENT,
-    REQUIRE_STOCK_ALIGNMENT,
-    TRADING_START,
-    LAST_ENTRY_TIME,
-    RISK_REWARD_RATIO,
-)
+from config.settings import REQUIRE_MARKET_ALIGNMENT, REQUIRE_SECTOR_ALIGNMENT, REQUIRE_STOCK_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO
 from data.reference_store import ReferenceStore
 from data.sector_store import SectorStore
 from data.stock_universe import StockUniverse
@@ -43,12 +33,10 @@ class ScannerEngine:
             "sector_alignment_passed": 0, "strategy_setup_passed": 0,
             "stock_alignment_passed": 0, "final_signals": 0,
             "gap_up_count": 0, "gap_down_count": 0, "gap_data_count": 0,
-            "rejections": {
-                "missing_data": 0, "liquidity": 0, "opening_setup": 0,
-                "market_alignment": 0, "sector_alignment": 0,
-                "pdh_pdl_not_reached": 0, "no_open_cross": 0,
-                "strategy_setup": 0, "stock_alignment": 0,
-            },
+            "rejections": {"missing_data": 0, "liquidity": 0, "opening_setup": 0,
+                           "market_alignment": 0, "sector_alignment": 0,
+                           "pdh_pdl_not_reached": 0, "no_open_cross": 0,
+                           "strategy_setup": 0, "stock_alignment": 0},
         }
 
     @staticmethod
@@ -102,7 +90,6 @@ class ScannerEngine:
         today = self._today()
         if not force and self._opening_prepared_date == today and not self.opening_candidates.empty:
             return self.opening_candidates
-
         references = self.prepare_reference_data(force=force)
         if references.empty:
             self.diagnostics["rejections"]["missing_data"] = len(self.universe)
@@ -120,16 +107,16 @@ class ScannerEngine:
             self._write_diagnostics()
             return pd.DataFrame()
 
-        # Liquidity is a trade filter, not a gap-board filter. We first build
-        # the gap board for every stock with valid opening/reference data, then
-        # apply liquidity to the actual reversal candidate list.
+        # Gap board covers every stock with valid opening/reference data;
+        # liquidity is applied only to actual trade candidates.
         cutoff = float(refs["PreviousDayTurnover"].median())
         refs["LiquidityQualified"] = refs["PreviousDayTurnover"] >= cutoff
         self.diagnostics["liquidity_passed"] = int(refs["LiquidityQualified"].sum())
         self.diagnostics["rejections"]["liquidity"] = int((~refs["LiquidityQualified"]).sum())
-
-        market_data = self.price_data.get_multi_1m(refs["Symbol"].astype(str).str.upper().tolist())
+        symbols = refs["Symbol"].astype(str).str.upper().tolist()
+        market_data = self.price_data.get_multi_1m(symbols)
         rows, gap_rows = [], []
+
         for _, ref in refs.iterrows():
             symbol = str(ref["Symbol"]).upper()
             candles = market_data.get(symbol)
@@ -142,9 +129,7 @@ class ScannerEngine:
                 continue
             try:
                 today_open = float(today_data.iloc[0]["Open"])
-                pdc = float(ref["PreviousDayClose"])
-                pdh = float(ref["PDH"])
-                pdl = float(ref["PDL"])
+                pdc, pdh, pdl = float(ref["PreviousDayClose"]), float(ref["PDH"]), float(ref["PDL"])
             except (TypeError, ValueError):
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
@@ -152,14 +137,9 @@ class ScannerEngine:
             gap_percent = ((today_open - pdc) / pdc * 100.0) if pdc else 0.0
             gap_type = "GAP_UP" if gap_percent > 0 else "GAP_DOWN" if gap_percent < 0 else "FLAT"
             gap_rows.append({
-                "Symbol": symbol,
-                "PreviousClose": round(pdc, 4),
-                "TodayOpen": round(today_open, 4),
-                "Gap": round(today_open - pdc, 4),
-                "GapPercent": round(gap_percent, 3),
-                "GapType": gap_type,
-                "PDH": round(pdh, 4),
-                "PDL": round(pdl, 4),
+                "Symbol": symbol, "PreviousClose": round(pdc, 4), "TodayOpen": round(today_open, 4),
+                "Gap": round(today_open - pdc, 4), "GapPercent": round(gap_percent, 3),
+                "GapType": gap_type, "PDH": round(pdh, 4), "PDL": round(pdl, 4),
                 "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
                 "LiquidityQualified": bool(ref["LiquidityQualified"]),
                 "PreparedAtIST": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -174,7 +154,6 @@ class ScannerEngine:
             else:
                 self.diagnostics["rejections"]["opening_setup"] += 1
                 continue
-
             rows.append({
                 "Symbol": symbol, "PDH": round(pdh, 4), "PDL": round(pdl, 4),
                 "TodayOpen": round(today_open, 4), "PreviousDayClose": round(pdc, 4),
@@ -186,10 +165,9 @@ class ScannerEngine:
 
         self.gap_analysis = pd.DataFrame(gap_rows)
         self.diagnostics["gap_data_count"] = len(gap_rows)
-        self.diagnostics["gap_up_count"] = int(sum(1 for r in gap_rows if r["GapType"] == "GAP_UP"))
-        self.diagnostics["gap_down_count"] = int(sum(1 for r in gap_rows if r["GapType"] == "GAP_DOWN"))
+        self.diagnostics["gap_up_count"] = int(sum(r["GapType"] == "GAP_UP" for r in gap_rows))
+        self.diagnostics["gap_down_count"] = int(sum(r["GapType"] == "GAP_DOWN" for r in gap_rows))
         self._write_gap_analysis(gap_rows)
-
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         self.diagnostics["opening_setup_passed"] = len(result)
         self.opening_candidates = result
@@ -202,8 +180,7 @@ class ScannerEngine:
         if df is None or df.empty:
             return "UNKNOWN"
         data = df.sort_values("Datetime") if "Datetime" in df.columns else df
-        opening = float(data.iloc[0]["Open"])
-        close = float(data.iloc[-1]["Close"])
+        opening, close = float(data.iloc[0]["Open"]), float(data.iloc[-1]["Close"])
         return "BULLISH" if close > opening else "BEARISH" if close < opening else "NEUTRAL"
 
     def _market_direction(self):
@@ -234,16 +211,17 @@ class ScannerEngine:
         self.diagnostics = self._empty_diagnostics()
         self.prepare_reference_data()
         self.diagnostics["stocks_scanned"] = len(self.universe)
-
         candidates = self.prepare_opening_candidates()
         if candidates.empty:
             return self._finish()
 
         market_direction = self._market_direction()
         selected = candidates.copy()
-        if REQUIRE_MARKET_ALIGNMENT and market_direction in {"BULLISH", "BEARISH"}:
-            expected = "BUY_PDL_TO_OPEN" if market_direction == "BULLISH" else "SELL_PDH_TO_OPEN"
-            selected = selected[selected["OpeningSetup"].eq(expected)].copy()
+        if REQUIRE_MARKET_ALIGNMENT:
+            expected = selected["OpeningSetup"].map({"BUY_PDL_TO_OPEN": "BULLISH", "SELL_PDH_TO_OPEN": "BEARISH"})
+            selected = selected[expected.eq(market_direction)].copy() if market_direction in {"BULLISH", "BEARISH"} else selected.iloc[0:0].copy()
+        else:
+            selected = selected.copy()
         self.diagnostics["market_alignment_passed"] = len(selected)
         self.diagnostics["rejections"]["market_alignment"] = max(0, len(candidates) - len(selected))
         if selected.empty:
@@ -258,34 +236,31 @@ class ScannerEngine:
         sector_passed = strategy_passed = stock_passed = 0
 
         for symbol in symbols:
-            candles = market_data.get(symbol)
-            ref = reference_by_symbol.get(symbol)
+            candles, ref = market_data.get(symbol), reference_by_symbol.get(symbol)
             if candles is None or candles.empty or not ref:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
+            opening = selected[selected["Symbol"].eq(symbol)].iloc[0]
+            expected_direction = "BULLISH" if opening["OpeningSetup"] == "BUY_PDL_TO_OPEN" else "BEARISH"
             sector = str(sector_map.get(symbol, "UNKNOWN"))
             sector_direction = sector_directions.get(sector, "UNKNOWN")
-            if REQUIRE_SECTOR_ALIGNMENT and sector_direction != market_direction:
+            if REQUIRE_SECTOR_ALIGNMENT and sector_direction != expected_direction:
                 self.diagnostics["rejections"]["sector_alignment"] += 1
                 continue
             sector_passed += 1
-            today_open = float(selected.loc[selected["Symbol"].eq(symbol), "TodayOpen"].iloc[0])
-            signal = self.strategy.build(symbol, candles, ref.get("PDH"), ref.get("PDL"), today_open, sector_direction, market_direction)
+            signal = self.strategy.build(symbol, candles, ref.get("PDH"), ref.get("PDL"), float(opening["TodayOpen"]), sector_direction, market_direction)
             if not signal:
                 self.diagnostics["rejections"]["strategy_setup"] += 1
                 continue
             strategy_passed += 1
-            expected_direction = "BULLISH" if signal.get("signal") == "BUY" else "BEARISH"
             if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") != expected_direction:
                 self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             stock_passed += 1
-            opening = selected[selected["Symbol"].eq(symbol)].iloc[0]
             signal.update({
-                "sector": sector, "industry": sector, "liquidity_qualified": True,
-                "nifty500_universe": True, "previous_day_close": opening.get("PreviousDayClose"),
-                "gap": opening.get("Gap"), "gap_percent": opening.get("GapPercent"),
-                "gap_type": opening.get("GapType"),
+                "sector": sector, "industry": sector, "liquidity_qualified": True, "nifty500_universe": True,
+                "previous_day_close": opening.get("PreviousDayClose"), "gap": opening.get("Gap"),
+                "gap_percent": opening.get("GapPercent"), "gap_type": opening.get("GapType"),
             })
             signals.append(signal)
 
