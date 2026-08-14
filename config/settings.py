@@ -1,4 +1,4 @@
-"""NIFTY 100 Gap-Failure + Open-Reclaim paper trading strategy."""
+"""NIFTY 250 Gap-Failure + Open-Reclaim paper trading strategy."""
 
 import os
 import time
@@ -7,8 +7,8 @@ os.environ["TZ"] = "Asia/Kolkata"
 if hasattr(time, "tzset"):
     time.tzset()
 
-STOCK_UNIVERSE = "NIFTY_100"
-MAX_STOCKS = 100
+STOCK_UNIVERSE = "NIFTY_250"
+MAX_STOCKS = 250
 MARKET_OPEN = "09:15"
 OBSERVATION_START = "09:15"
 PREMARKET_PREP_TIME = "09:25"
