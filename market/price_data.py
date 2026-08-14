@@ -1,4 +1,4 @@
-"""Price data engine for the pure price-action paper strategy."""
+"""Market price data for the NIFTY 500 price-action paper strategy."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-a = ZoneInfo("Asia/Kolkata")
-INDIA_TZ = a
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+
 
 class PriceData:
     def __init__(self):
@@ -20,6 +20,8 @@ class PriceData:
 
     def yahoo_symbol(self, symbol):
         symbol = str(symbol).strip().upper()
+        if symbol.startswith("^"):
+            return symbol
         return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
 
     @staticmethod
@@ -91,16 +93,9 @@ class PriceData:
             return pd.DataFrame()
 
     def get_1m(self, symbol):
-        """Return completed 1-minute candles for strategy/exit monitoring."""
         return self.get_candles(symbol, "1m", "1d")
 
     def get_latest_available_1m(self, symbol):
-        """Return the latest available 1-minute row, including the current minute.
-
-        This is used only for the mandatory 15:00 square-off price. Strategy
-        decisions continue to use completed candles so an unfinished candle can
-        never create an entry signal.
-        """
         try:
             data = self._clean_data(yf.download(
                 tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
@@ -176,7 +171,6 @@ class PriceData:
             extracted = self._extract_batch(batch, raw)
             missing = [s for s in batch if s not in extracted]
             if missing:
-                print("Retrying missing Yahoo symbols:", len(missing))
                 retry_raw = self._download_multi_batch([f"{s}.NS" for s in missing], "1m", "1d")
                 extracted.update(self._extract_batch(missing, retry_raw))
             return extracted
@@ -184,7 +178,6 @@ class PriceData:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {executor.submit(download_with_retry, batch): batch for batch in batches}
             for future in as_completed(futures):
-                batch = futures[future]
                 try:
                     result.update(future.result())
                 except Exception as error:
@@ -194,7 +187,7 @@ class PriceData:
             result.setdefault(symbol, pd.DataFrame())
         return result
 
-    def get_index_1m(self, ticker="^CNX100"):
+    def get_index_1m(self, ticker="^NSEI"):
         try:
             data = self._clean_data(yf.download(
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
@@ -202,7 +195,7 @@ class PriceData:
             ))
             return self._completed_1m(data)
         except Exception as error:
-            print("Nifty 100 data failed:", error)
+            print("NIFTY market-index data failed:", error)
             return pd.DataFrame()
 
     def today_only(self, df):
