@@ -327,7 +327,10 @@ class ScannerEngine:
                 continue
             sector_passed += 1
 
-            if REQUIRE_STOCK_ALIGNMENT and signal.get("stock_today_direction") != expected_direction:
+            # Stock alignment must use only stock candles available at the
+            # trigger, never the remainder of today's session.
+            stock_direction = self._direction_asof(candles, trigger_time)
+            if REQUIRE_STOCK_ALIGNMENT and stock_direction != expected_direction:
                 self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             stock_passed += 1
@@ -336,6 +339,8 @@ class ScannerEngine:
                 "market_direction": market_direction,
                 "nifty500_direction": market_direction,
                 "sector_direction": sector_direction,
+                "stock_direction": stock_direction,
+                "stock_today_direction": stock_direction,
                 "sector": sector,
                 "industry": sector,
                 "liquidity_qualified": True,
