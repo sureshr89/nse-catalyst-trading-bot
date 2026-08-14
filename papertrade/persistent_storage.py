@@ -1,8 +1,7 @@
 """Persistence bridge for Streamlit's ephemeral filesystem.
 
-CSV journal files and paper-engine runtime state can be restored from and
-synchronized to the GitHub repository when GITHUB_TOKEN is configured in the
-Streamlit deployment secrets.
+Runtime CSV/JSON state is stored on a dedicated Git branch so data persistence
+does not trigger a redeployment of the Streamlit app's ``main`` branch.
 """
 
 import base64
@@ -14,7 +13,9 @@ import urllib.request
 from pathlib import Path
 
 REPO = os.getenv("GITHUB_REPOSITORY", "sureshr89/nse-catalyst-trading-bot")
-BRANCH = os.getenv("GITHUB_BRANCH", "main")
+# Data must not be written to the code/deployment branch. A separate branch
+# prevents a trade update from causing a Streamlit Cloud redeploy.
+BRANCH = os.getenv("GITHUB_DATA_BRANCH", "data")
 TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 API_ROOT = f"https://api.github.com/repos/{REPO}/contents"
 _LAST_SIGNAL_SYNC = 0.0
@@ -61,7 +62,11 @@ def restore(local_path, repo_path):
 
 
 def sync(local_path, repo_path, message):
-    """Push local data to GitHub; scanner signals are rate-limited to once/minute."""
+    """Push local data to the dedicated data branch.
+
+    Scanner-signal writes are rate-limited to once/minute. Code remains on main;
+    this branch is intentionally data-only so persistence cannot redeploy the app.
+    """
     global _LAST_SIGNAL_SYNC
     if not enabled():
         return False
