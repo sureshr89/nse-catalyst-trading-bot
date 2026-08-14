@@ -1,14 +1,11 @@
-"""Build persistent master datasets for the rolling six-month research window.
-
-The master files are append/upsert style and automatically retain only the
-current month plus the previous five calendar months. This keeps the Streamlit
-Cloud files small while always preserving the latest six months of data.
-"""
+"""Build persistent master datasets for the rolling six-month research window."""
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import json
 import pandas as pd
+
+from papertrade.persistent_storage import restore, sync
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "outputs"
@@ -34,6 +31,16 @@ def _write(path, df):
     tmp.replace(path)
 
 
+def _restore_if_missing(path, repo_path):
+    """Restore durable master data only when the local file is absent/empty."""
+    if path.exists() and path.stat().st_size > 0:
+        return
+    try:
+        restore(path, repo_path)
+    except Exception as error:
+        print("Master restore skipped:", error)
+
+
 def _merge(path, new, keys):
     if new.empty:
         return
@@ -46,45 +53,57 @@ def _merge(path, new, keys):
     _write(path, combined)
 
 
+def _month_values(frame, columns):
+    for column in columns:
+        if column in frame.columns:
+            values = pd.to_datetime(frame[column], errors="coerce")
+            if values.notna().any():
+                return values.dt.strftime("%Y-%m")
+    return pd.Series([None] * len(frame), index=frame.index, dtype="object")
+
+
 def _prune_to_last_six_months(path, date_columns):
-    """Keep only the current calendar month and five preceding months."""
     frame = _read(path)
     if frame.empty:
         return
-
-    date_values = None
-    for column in date_columns:
-        if column in frame.columns:
-            parsed = pd.to_datetime(frame[column], errors="coerce")
-            if parsed.notna().any():
-                date_values = parsed
-                break
-
-    if date_values is None:
-        return
-
+    months = _month_values(frame, date_columns)
     now = datetime.now(IST)
     current_period = pd.Period(now.strftime("%Y-%m"), freq="M")
     first_period = current_period - (MASTER_MONTHS - 1)
-    row_periods = date_values.dt.to_period("M")
-
-    # Keep undated rows rather than deleting them accidentally.
-    keep = date_values.isna() | ((row_periods >= first_period) & (row_periods <= current_period))
+    parsed_months = pd.PeriodIndex(months.dropna().unique(), freq="M") if months.notna().any() else pd.PeriodIndex([], freq="M")
+    allowed = {str(p) for p in pd.period_range(first_period, current_period, freq="M")}
+    keep = months.isna() | months.isin(allowed)
     trimmed = frame.loc[keep].copy()
-
     if len(trimmed) != len(frame):
         _write(path, trimmed)
 
 
 def enforce_six_month_retention():
-    """Prune all durable master datasets to a rolling six-month window."""
     _prune_to_last_six_months(MASTER_STOCK, ["TradeDate", "DataSnapshotIST"])
     _prune_to_last_six_months(MASTER_TRADES, ["TradeDate", "entry_time", "exit_time", "timestamp"])
     _prune_to_last_six_months(MASTER_DAILY, ["TradeDate", "PreparedAtIST"])
 
 
+def _today_rows(frame, date_columns, today):
+    if frame.empty:
+        return frame
+    keys = _month_values(frame, date_columns)  # placeholder for stable empty handling
+    for column in date_columns:
+        if column in frame.columns:
+            values = pd.to_datetime(frame[column], errors="coerce")
+            if values.notna().any():
+                dates = values.dt.strftime("%Y-%m-%d")
+                return frame.loc[dates.eq(today)].copy()
+    return frame.iloc[0:0].copy()
+
+
 def build_master_data():
-    """Snapshot today's gap/scanner/trade data and enforce six-month retention."""
+    """Snapshot today's data, keep six months, and persist master files."""
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    _restore_if_missing(MASTER_STOCK, "outputs/MASTER_DAILY_STOCK_DATA.csv")
+    _restore_if_missing(MASTER_TRADES, "outputs/MASTER_TRADES.csv")
+    _restore_if_missing(MASTER_DAILY, "outputs/MASTER_DAILY_SUMMARY.csv")
+
     today = datetime.now(IST).strftime("%Y-%m-%d")
     gaps = _read(OUTPUT / "gap_analysis.csv")
     trades = _read(OUTPUT / "trades.csv")
@@ -96,12 +115,16 @@ def build_master_data():
 
     if not gaps.empty and "Symbol" in gaps.columns:
         stock = gaps.copy()
+        if "TradeDate" in stock.columns:
+            stock = stock.drop(columns=["TradeDate"])
         stock.insert(0, "TradeDate", today)
         stock["DataSnapshotIST"] = datetime.now(IST).isoformat(timespec="seconds")
         _merge(MASTER_STOCK, stock, ["TradeDate", "Symbol"])
 
     if not trades.empty:
         t = trades.copy()
+        if "TradeDate" in t.columns:
+            t = t.drop(columns=["TradeDate"])
         date_col = next((c for c in ["entry_time", "exit_time", "timestamp"] if c in t.columns), None)
         t.insert(0, "TradeDate", t[date_col].astype(str).str[:10] if date_col else today)
         _merge(
@@ -110,15 +133,19 @@ def build_master_data():
             ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"],
         )
 
+    today_trades = _today_rows(trades, ["exit_time", "entry_time", "timestamp"], today)
+    today_signals = _today_rows(signals, ["timestamp", "entry_time"], today)
+    today_pnl = float(pd.to_numeric(today_trades.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+
     row = {
         "TradeDate": today,
         "PreparedAtIST": datetime.now(IST).isoformat(timespec="seconds"),
         "StocksInGapBoard": int(len(gaps)),
         "GapUps": int((gaps.get("GapType", pd.Series(dtype=str)) == "GAP_UP").sum()),
         "GapDowns": int((gaps.get("GapType", pd.Series(dtype=str)) == "GAP_DOWN").sum()),
-        "SignalsRecorded": int(len(signals)),
-        "TradesRecorded": int(len(trades)),
-        "ClosedTrades": int((trades.get("status", pd.Series(dtype=str)).astype(str).str.upper() == "CLOSED").sum()),
+        "SignalsRecorded": int(len(today_signals)),
+        "TradesRecorded": int(len(today_trades)),
+        "ClosedTrades": int((today_trades.get("status", pd.Series(dtype=str)).astype(str).str.upper() == "CLOSED").sum()),
         "FinalSignals": int(diag.get("final_signals", 0) or 0),
         "StocksScanned": int(diag.get("stocks_scanned", 0) or 0),
         "LiquidityPassed": int(diag.get("liquidity_passed", 0) or 0),
@@ -127,11 +154,17 @@ def build_master_data():
         "SectorAlignmentPassed": int(diag.get("sector_alignment_passed", 0) or 0),
         "StrategySetupPassed": int(diag.get("strategy_setup_passed", 0) or 0),
         "StockAlignmentPassed": int(diag.get("stock_alignment_passed", 0) or 0),
-        "DailyPnL": float(pd.to_numeric(trades.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()),
+        "DailyPnL": round(today_pnl, 2),
     }
     _merge(MASTER_DAILY, pd.DataFrame([row]), ["TradeDate"])
 
-    # Retention runs after every refresh, so old master records cannot grow indefinitely.
     enforce_six_month_retention()
+
+    # Persist the durable research files to the non-deployment data branch.
+    for path in (MASTER_STOCK, MASTER_TRADES, MASTER_DAILY):
+        try:
+            sync(path, f"outputs/{path.name}", f"Update master trading data {today}")
+        except Exception as error:
+            print("Master data sync skipped:", error)
 
     return {"stock": str(MASTER_STOCK), "trades": str(MASTER_TRADES), "daily": str(MASTER_DAILY)}
