@@ -93,6 +93,7 @@ class ScannerEngine:
         return None if completed.empty else completed.iloc[-1].to_dict()
 
     def scan(self):
+        self.diagnostics = self._empty_diagnostics()
         candidates=self.prepare_opening_candidates()
         if candidates.empty: return self._finish([])
         signals=[]
