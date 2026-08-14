@@ -96,13 +96,14 @@ class PriceData:
         return self.get_candles(symbol, "1m", "1d")
 
     def get_latest_available_1m(self, symbol):
+        """Return the latest completed 1-minute candle, never the live candle."""
         try:
             data = self._clean_data(yf.download(
                 tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
                 auto_adjust=False, progress=False, threads=False, prepost=False,
                 timeout=self.download_timeout,
             ))
-            data = self.today_only(data)
+            data = self._completed_1m(self.today_only(data))
             return None if data.empty else data.iloc[-1].to_dict()
         except Exception as error:
             print(f"Latest available price failed for {symbol}: {error}")
