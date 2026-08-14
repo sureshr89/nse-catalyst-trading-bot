@@ -9,6 +9,9 @@ from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from worker_service import ensure_worker_process
+from market.price_data import PriceData
+from data.stock_universe import StockUniverse
+from data.sector_store import SectorStore
 
 ROOT = Path(__file__).resolve().parents[2]
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
@@ -38,6 +41,81 @@ def heartbeat_alive(value, max_age_seconds=90):
         return 0 <= (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() <= max_age_seconds
     except Exception:
         return False
+
+
+def candle_pct(candle):
+    if not candle:
+        return None
+    try:
+        op = float(candle["Open"])
+        cl = float(candle["Close"])
+        return ((cl - op) / op * 100.0) if op else None
+    except Exception:
+        return None
+
+
+def candle_label(pct):
+    if pct is None:
+        return "—"
+    return f"{pct:+.2f}%"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def live_alignment_for_positions(symbols, trigger_times):
+    """Fetch only the small set needed for the live traded-position table.
+
+    Stock and NIFTY 500 values are the latest completed 1-minute candle. Sector
+    percentage is the equal-weight average 1-minute return of the sector's
+    NIFTY 500 constituents. This is display/monitoring data; it does not alter
+    the entry engine.
+    """
+    symbols = [str(s).upper().replace(".NS", "") for s in symbols if str(s).strip()]
+    if not symbols:
+        return pd.DataFrame()
+    price = PriceData()
+    universe = StockUniverse().get_dataframe(refresh=False)
+    sectors = SectorStore(universe).prepare(force=False)
+    latest_nifty = price.get_index_1m("^CRSLDX")
+    nifty = None if latest_nifty.empty else latest_nifty.iloc[-1].to_dict()
+    rows = []
+    stock_data = price.get_multi_1m(symbols)
+    for symbol in symbols:
+        candle = None
+        df = stock_data.get(symbol, pd.DataFrame())
+        if df is not None and not df.empty:
+            candle = df.iloc[-1].to_dict()
+        sector = "UNKNOWN"
+        if not sectors.empty:
+            match = sectors[sectors["Symbol"].astype(str).str.upper().eq(symbol)]
+            if not match.empty:
+                sector = str(match.iloc[0].get("Sector", "UNKNOWN"))
+        sector_members = []
+        if not sectors.empty and sector != "UNKNOWN":
+            sector_members = sectors[sectors["Sector"].astype(str).eq(sector)]["Symbol"].astype(str).str.upper().tolist()
+        member_data = price.get_multi_1m(sector_members) if sector_members else {}
+        member_pcts = []
+        for member in sector_members:
+            mdf = member_data.get(member, pd.DataFrame())
+            if mdf is None or mdf.empty:
+                continue
+            pct = candle_pct(mdf.iloc[-1].to_dict())
+            if pct is not None:
+                member_pcts.append(pct)
+        sector_pct = sum(member_pcts) / len(member_pcts) if member_pcts else None
+        stock_pct = candle_pct(candle)
+        nifty_pct = candle_pct(nifty)
+        rows.append({
+            "Stock": symbol,
+            "Sector": sector,
+            "NIFTY 500 1m %": candle_label(nifty_pct),
+            "Sector 1m %": candle_label(sector_pct),
+            "Stock 1m %": candle_label(stock_pct),
+            "NIFTY 500": "GREEN" if nifty_pct is not None and nifty_pct > 0 else "RED" if nifty_pct is not None and nifty_pct < 0 else "NEUTRAL",
+            "Sector": sector,
+            "Stock Candle": "GREEN" if stock_pct is not None and stock_pct > 0 else "RED" if stock_pct is not None and stock_pct < 0 else "NEUTRAL",
+            "Candle Time": candle.get("Datetime") if candle else (nifty.get("Datetime") if nifty else "—"),
+        })
+    return pd.DataFrame(rows)
 
 
 status = read(ROOT / "outputs/bot_status.json", "json")
@@ -93,6 +171,17 @@ if pos:
     for symbol, p in pos.items():
         rows.append({"Stock": symbol, "Side": p.get("signal", ""), "Entry": p.get("entry"), "SL": p.get("stop_loss"), "Target": p.get("target"), "Qty": p.get("quantity"), "Risk": p.get("actual_risk", p.get("risk")), "R:R": p.get("rr", 1.25), "Entry Time": p.get("entry_time"), "Trigger Time": p.get("trigger_entry_time", "—"), "Setup": p.get("setup_type", "NIFTY_500_PDH_PDL_OPEN_REVERSAL"), "Gap % vs PDH/PDL": p.get("gap_percent", "—"), "PDH": p.get("pdh", "—"), "PDL": p.get("pdl", "—"), "Open": p.get("today_open", "—")})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    st.subheader("Live Alignment — Latest Completed 1-Minute Candle")
+    st.caption("Percentages are candle Open → Close. NIFTY 500, sector and stock are shown for the currently traded stocks. Data refreshes every 5 seconds; market data is cached for 30 seconds to avoid slowing the bot.")
+    try:
+        live_df = live_alignment_for_positions(list(pos.keys()), [p.get("entry_time") for p in pos.values()])
+        if not live_df.empty:
+            st.dataframe(live_df[["Stock", "Sector", "NIFTY 500 1m %", "Sector 1m %", "Stock 1m %", "NIFTY 500", "Stock Candle", "Candle Time"]], width="stretch", hide_index=True)
+        else:
+            st.info("Live alignment will appear when completed 1-minute candles are available.")
+    except Exception as error:
+        st.warning(f"Live alignment temporarily unavailable: {type(error).__name__}: {error}")
 else:
     st.info("No open paper positions.")
 
