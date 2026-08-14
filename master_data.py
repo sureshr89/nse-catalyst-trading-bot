@@ -71,7 +71,10 @@ def _prune_to_last_six_months(path, date_columns):
     current_period = pd.Period(now.strftime("%Y-%m"), freq="M")
     first_period = current_period - (MASTER_MONTHS - 1)
     allowed = {str(p) for p in pd.period_range(first_period, current_period, freq="M")}
-    keep = months.isna() | months.isin(allowed)
+    # Keep only valid six-month records. Undated/corrupt records must not survive
+    # forever and silently inflate the master dataset.
+    valid_dates = months.notna()
+    keep = valid_dates & months.isin(allowed)
     trimmed = frame.loc[keep].copy()
     if len(trimmed) != len(frame):
         _write(path, trimmed)
@@ -131,7 +134,6 @@ def build_master_data():
             ["TradeDate", "symbol", "entry_time", "signal", "entry"] if "symbol" in t.columns else ["TradeDate"],
         )
 
-    # Trade activity belongs to the entry day; realized P&L belongs to the exit day.
     today_trades = _today_rows(trades, ["entry_time", "timestamp", "exit_time"], today)
     today_closed = _today_rows(trades, ["exit_time"], today)
     today_signals = _today_rows(signals, ["timestamp", "entry_time"], today)
