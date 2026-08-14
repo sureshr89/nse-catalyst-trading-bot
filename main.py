@@ -15,6 +15,7 @@ from config.settings import (
     PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME,
     SQUARE_OFF_TIME, SCAN_INTERVAL_SECONDS, MAX_OPEN_POSITIONS,
     DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES,
+    RISK_REWARD_RATIO,
 )
 from scanner.scanner_engine import ScannerEngine
 from strategy.risk_engine import RiskEngine
@@ -152,6 +153,7 @@ class TradingBot:
             "previous_day_direction", "setup_type", "entry_candle_open",
             "entry_candle_close", "risk_per_share", "actual_risk", "position_value",
             "trigger_entry_time", "market_entry_time", "trigger_close",
+            "entry_distance_from_open_pct",
         )
         for field in context_fields:
             if field in signal:
@@ -159,11 +161,11 @@ class TradingBot:
         return position
 
     def _set_market_entry(self, signal):
-        """After a completed 1-minute trigger, enter at the latest available market price.
+        """Use the latest market price after a completed 1-minute trigger.
 
-        The trigger candle itself only confirms the setup. Its close is NOT used as
-        the execution price. The next available market price is used for paper entry,
-        then risk/quantity/target are recalculated from that actual entry.
+        The trigger candle only confirms the old Gap-Failure + Open-Reclaim setup.
+        Its close is never used as the execution price. The latest available market
+        price becomes the actual paper entry, and target/risk are recalculated from it.
         """
         side = str(signal.get("signal", "")).upper()
         stop = float(signal.get("stop_loss", 0) or 0)
@@ -171,9 +173,8 @@ class TradingBot:
         quote = self.price_data.get_latest_available_1m(str(signal.get("symbol", "")))
         if not quote:
             return False
-        market_price = quote.get("Close")
         try:
-            market_price = float(market_price)
+            market_price = float(quote.get("Close"))
         except (TypeError, ValueError):
             return False
         if market_price <= 0:
@@ -188,14 +189,15 @@ class TradingBot:
         signal["market_entry_time"] = self._now().isoformat(timespec="seconds")
         signal["entry"] = round(market_price, 2)
         signal["entry_time"] = signal["market_entry_time"]
+        reward_distance = abs(market_price - stop) * float(RISK_REWARD_RATIO)
         signal["target"] = round(
-            market_price + (market_price - stop) * 1.25 if side == "BUY"
-            else market_price - (stop - market_price) * 1.25,
+            market_price + reward_distance if side == "BUY" else market_price - reward_distance,
             2,
         )
+        today_open = float(signal.get("today_open", market_price) or market_price)
         signal["entry_distance_from_open_pct"] = round(
-            abs(market_price - float(signal.get("today_open", market_price)))
-            / float(signal.get("today_open", market_price)) * 100.0, 4
+            abs(market_price - today_open) / today_open * 100.0, 4
+        ) if today_open > 0 else None
         return True
 
     def process_signal(self, signal):
@@ -204,8 +206,8 @@ class TradingBot:
         symbol = str(signal.get("symbol", "")).strip().upper()
         if not symbol:
             return
-        # The 1-minute candle is the trigger only. Execution happens at the
-        # latest available market price after that candle has closed.
+        # The completed 1-minute candle is the trigger. The next available
+        # market price is the actual paper-trading entry.
         if not self._set_market_entry(signal):
             return
         key = self.signal_key(signal)
@@ -256,6 +258,7 @@ class TradingBot:
             "entry=", live_position.get("entry"), "SL=", live_position.get("stop_loss"),
             "target=", live_position.get("target"), "qty=", live_position.get("quantity"),
             "risk=", live_position.get("actual_risk"), "R:R=", live_position.get("rr"),
+            "trigger_close=", signal.get("trigger_close"),
             "journal=", saved.get("saved", False),
         )
 
