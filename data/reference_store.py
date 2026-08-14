@@ -1,4 +1,4 @@
-"""Daily pre-market reference data: PDC, previous-day direction and liquidity."""
+"""Daily pre-market reference data for PDH/PDL, previous-day OHLC and liquidity."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -60,8 +60,8 @@ class ReferenceStore:
             try:
                 saved = pd.read_csv(self.path)
                 required_columns = {
-                    "Symbol", "PDC", "PreviousDayOpen", "PreviousDayDirection",
-                    "PreviousDayVolume", "PreviousDayTurnover",
+                    "Symbol", "PDH", "PDL", "PDC", "PreviousDayOpen",
+                    "PreviousDayDirection", "PreviousDayVolume", "PreviousDayTurnover",
                 }
                 if self._coverage_ok(saved) and required_columns.issubset(saved.columns):
                     return saved
@@ -105,9 +105,9 @@ class ReferenceStore:
                                 continue
                             data = raw
 
-                        if data is None or data.empty or "Open" not in data.columns or "Close" not in data.columns:
+                        if data is None or data.empty or any(c not in data.columns for c in ["Open", "High", "Low", "Close"]):
                             continue
-                        data = data.dropna(subset=["Open", "Close"])
+                        data = data.dropna(subset=["Open", "High", "Low", "Close"])
                         if data.empty:
                             continue
 
@@ -122,10 +122,14 @@ class ReferenceStore:
                         prev = completed.iloc[-1]
                         pdc = float(prev["Close"])
                         prev_open = float(prev["Open"])
+                        pdh = float(prev["High"])
+                        pdl = float(prev["Low"])
                         volume = float(prev.get("Volume", 0) or 0)
                         turnover = round(pdc * volume, 2)
                         rows.append({
                             "Symbol": symbol,
+                            "PDH": round(pdh, 4),
+                            "PDL": round(pdl, 4),
                             "PDC": round(pdc, 4),
                             "PreviousDayOpen": round(prev_open, 4),
                             "PreviousDayDirection": (
@@ -154,7 +158,7 @@ class ReferenceStore:
             return self.prepare()
         try:
             saved = pd.read_csv(self.path)
-            required = {"Symbol", "PDC", "PreviousDayVolume", "PreviousDayTurnover"}
+            required = {"Symbol", "PDH", "PDL", "PDC", "PreviousDayVolume", "PreviousDayTurnover"}
             return saved if self._coverage_ok(saved) and required.issubset(saved.columns) else self.prepare()
         except Exception:
             return self.prepare()
