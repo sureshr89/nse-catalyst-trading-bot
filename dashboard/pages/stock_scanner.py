@@ -58,6 +58,7 @@ def pct(value):
 
 gaps = read_csv(ROOT / "outputs/gap_analysis.csv")
 signals = read_csv(ROOT / "outputs/signals.csv")
+trades = read_csv(ROOT / "outputs/trades.csv")
 state = read_json(ROOT / "outputs/paper_engine_state.json")
 status = read_json(ROOT / "outputs/bot_status.json")
 diag = read_json(ROOT / "outputs/scanner_diagnostics.json")
@@ -95,14 +96,26 @@ if not signals.empty:
         if dates.notna().any():
             if getattr(dates.dt, "tz", None) is not None:
                 dates = dates.dt.tz_convert(INDIA_TZ)
+            else:
+                dates = dates.dt.tz_localize(INDIA_TZ)
             signals = signals.loc[dates.dt.date.eq(now.date())].copy()
+
+if not trades.empty and "entry_time" in trades.columns:
+    trade_dates = pd.to_datetime(trades["entry_time"], errors="coerce")
+    if trade_dates.notna().any():
+        if getattr(trade_dates.dt, "tz", None) is not None:
+            trade_dates = trade_dates.dt.tz_convert(INDIA_TZ)
+        else:
+            trade_dates = trade_dates.dt.tz_localize(INDIA_TZ)
+        trades = trades.loc[trade_dates.dt.date.eq(now.date())].copy()
 
 position_symbols = {str(s).upper() for s in positions.keys()}
 latest_signal = {}
 if not signals.empty and "symbol" in signals.columns:
     ordered = signals.copy()
-    if "timestamp" in ordered.columns:
-        ordered = ordered.sort_values("timestamp")
+    sort_col = "timestamp" if "timestamp" in ordered.columns else "entry_time" if "entry_time" in ordered.columns else None
+    if sort_col:
+        ordered = ordered.sort_values(sort_col)
     for _, row in ordered.iterrows():
         latest_signal[str(row.get("symbol", "")).upper()] = row.to_dict()
 
@@ -111,6 +124,11 @@ for symbol, record in latest_signal.items():
     if str(record.get("approved", "")).lower() in {"true", "1", "yes"}:
         approved_symbols.add(symbol)
 
+capital_blocked_symbols = set()
+if not trades.empty and "symbol" in trades.columns and "status" in trades.columns:
+    capital_rows = trades[trades["status"].astype(str).str.upper().str.startswith("MISSED_CAPITAL")]
+    capital_blocked_symbols = set(capital_rows["symbol"].astype(str).str.upper())
+
 
 def stock_status(row):
     symbol = str(row.get("Symbol", "")).upper()
@@ -118,9 +136,11 @@ def stock_status(row):
     record = latest_signal.get(symbol, {})
     if symbol in position_symbols:
         return "🟢 ENTERED"
+    if symbol in capital_blocked_symbols:
+        return "⚫ NOT ENTERED — CASH"
     if symbol in approved_symbols:
         return "🔵 QUALIFIED / NOT ENTERED"
-    if record and str(record.get("reason", "")).strip():
+    if record and str(record.get("approved", "")).lower() in {"false", "0", "no"} and str(record.get("reason", "")).strip():
         return "🔴 NOT QUALIFIED"
     if gap_type == "GAP_UP":
         return "🟡 GAP UP / WAITING" if market_change >= NIFTY_THRESHOLD else "🔴 GAP UP / NIFTY FILTER"
@@ -140,16 +160,21 @@ def reason(row):
     status_text = row["Status"]
     if "ENTERED" in status_text:
         return "Position open"
-    if recorded:
+    if "CASH" in status_text:
+        matching = trades[trades["symbol"].astype(str).str.upper().eq(symbol)] if not trades.empty and "symbol" in trades.columns else pd.DataFrame()
+        if not matching.empty and "exit_reason" in matching.columns:
+            return str(matching.iloc[-1].get("exit_reason", "NOT ENTERED: insufficient available capital"))
+        return "NOT ENTERED: insufficient available capital"
+    if recorded and str(record.get("approved", "")).lower() in {"false", "0", "no"}:
         return recorded
     if "QUALIFIED" in status_text:
         return "Qualified signal; entry not recorded"
     if "NIFTY FILTER" in status_text:
         return "NIFTY 500 filter does not support this direction"
     if "GAP UP" in status_text:
-        return "Waiting for PDH breach and return above Today's Open"
+        return "Waiting for PDH breach and trigger candle return above Today's Open"
     if "GAP DOWN" in status_text:
-        return "Waiting for PDL breach and return below Today's Open"
+        return "Waiting for PDL breach and trigger candle return below Today's Open"
     return "Open is inside PDH/PDL range"
 
 
@@ -195,11 +220,16 @@ st.subheader(f"📋 Stock-by-Stock Status ({len(display)} shown / {len(board)} t
 st.dataframe(display, width="stretch", hide_index=True, height=620)
 
 st.subheader("💰 Capital & Entry Status")
-available_cash = state.get("available_cash") if isinstance(state, dict) else None
-capital_items = [("Configured Capital", money(250000)), ("Available Cash", money(available_cash) if available_cash is not None else "Not reported"), ("Open Positions", len(positions)), ("Max Positions", 2)]
+available_capital = state.get("available_capital") if isinstance(state, dict) else None
+capital_items = [
+    ("Configured Capital", money(250000)),
+    ("Available Capital", money(available_capital) if available_capital is not None else "Not reported"),
+    ("Open Positions", len(positions)),
+    ("Max Positions", 2),
+]
 cap_cols = st.columns(len(capital_items))
 for col, (label, value) in zip(cap_cols, capital_items):
     col.metric(label, value)
 
-st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Rejection reasons come from recorded scanner/risk results when available; the dashboard does not invent a reason.")
+st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Rejection reasons come from recorded scanner/risk results; the dashboard does not invent a strategy rule.")
 render_daily_footer()
