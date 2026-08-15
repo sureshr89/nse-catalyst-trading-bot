@@ -102,9 +102,8 @@ class TradingBot:
             if len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:break
             self.process_signal(signal)
     def latest_1m_candle(self,symbol):
-        try:df=self.price_data.today_only(self.price_data.get_1m(symbol))
+        try:return self.price_data.get_latest_available_1m(symbol)
         except Exception as error:print(symbol,"1-minute data error:",error);return None
-        return None if df is None or df.empty else df.iloc[-1].to_dict()
     def run_cycle(self):
         if self.current_time()>=SQUARE_OFF_TIME:
             if not self.square_off_done:self.square_off_all()
