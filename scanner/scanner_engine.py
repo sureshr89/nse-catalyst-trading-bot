@@ -95,6 +95,9 @@ class ScannerEngine:
             trigger_candle=trigger_rows.iloc[-1];nifty_candle=self._nifty500_candle(trigger_stamp,self.nifty500_market_data)
             if nifty_candle is None:self.diagnostics["rejections"]["market_alignment"]+=1;continue
             nifty_dir=self.strategy._candle_direction(nifty_candle);side=trigger_probe["signal"];required="BULLISH" if side=="BUY" else "BEARISH";self.diagnostics["nifty500_direction"]=nifty_dir
+            if nifty_dir=="BULLISH":self.diagnostics["nifty500_bullish"]+=1
+            elif nifty_dir=="BEARISH":self.diagnostics["nifty500_bearish"]+=1
+            elif nifty_dir=="NEUTRAL":self.diagnostics["nifty500_neutral"]+=1
             if REQUIRE_MARKET_ALIGNMENT and nifty_dir!=required:self.diagnostics["rejections"]["market_alignment"]+=1;continue
             self.diagnostics["market_alignment_passed"]+=1;stock_dir=self.strategy._candle_direction(pd.DataFrame([trigger_candle]))
             if REQUIRE_STOCK_ALIGNMENT and stock_dir!=required:self.diagnostics["rejections"]["stock_alignment"]+=1;continue
