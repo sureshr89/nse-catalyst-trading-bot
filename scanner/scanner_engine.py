@@ -1,6 +1,7 @@
 """NIFTY 500 scanner for the PDH/PDL + today's Open reversal strategy."""
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import json
 import pandas as pd
 from config.settings import REQUIRE_MARKET_ALIGNMENT, REQUIRE_STOCK_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO
@@ -9,6 +10,7 @@ from data.stock_universe import StockUniverse
 from market.price_data import PriceData
 from strategy.open_reversal_engine import OpenReversalEngine
 
+INDIA_TZ=ZoneInfo("Asia/Kolkata")
 
 class ScannerEngine:
     def __init__(self):
@@ -38,19 +40,19 @@ class ScannerEngine:
 
     @staticmethod
     def _today():
-        return pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
+        return pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d")
 
     @staticmethod
     def _ist_timestamp(value):
         stamp = pd.Timestamp(value)
         if stamp.tzinfo is None:
-            return stamp.tz_localize("Asia/Kolkata")
-        return stamp.tz_convert("Asia/Kolkata")
+            return stamp.tz_localize(INDIA_TZ)
+        return stamp.tz_convert(INDIA_TZ)
 
     def _write_diagnostics(self):
         payload = dict(self.diagnostics)
         payload["rejections"] = dict(self.diagnostics.get("rejections", {}))
-        payload["timestamp"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        payload["timestamp"] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         self.diagnostics["timestamp"] = payload["timestamp"]
         path = Path(__file__).resolve().parents[1] / "outputs" / "scanner_diagnostics.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +173,7 @@ class ScannerEngine:
                              "GapPercentFromPreviousClose": round(gap_pct_close, 3),
                              "PreviousDayTurnover": round(float(ref["PreviousDayTurnover"]), 2),
                              "LiquidityQualified": bool(ref["LiquidityQualified"]),
-                             "PreparedAtIST": datetime.now().astimezone().isoformat(timespec="seconds")})
+                             "PreparedAtIST": datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
             if not bool(ref["LiquidityQualified"]):
                 continue
             if setup == "NO_GAP_SETUP":
@@ -203,7 +205,7 @@ class ScannerEngine:
         stamp = self._ist_timestamp(as_of)
         timestamps = pd.to_datetime(data["Datetime"], errors="coerce")
         try:
-            timestamps = timestamps.dt.tz_localize("Asia/Kolkata") if timestamps.dt.tz is None else timestamps.dt.tz_convert("Asia/Kolkata")
+            timestamps = timestamps.dt.tz_localize(INDIA_TZ) if timestamps.dt.tz is None else timestamps.dt.tz_convert(INDIA_TZ)
         except Exception:
             return None
         matches = data[timestamps == stamp]
@@ -238,7 +240,7 @@ class ScannerEngine:
             try:
                 trigger_stamp = self._ist_timestamp(trigger_time)
                 candle_timestamps = pd.to_datetime(candles["Datetime"], errors="coerce")
-                candle_timestamps = candle_timestamps.dt.tz_localize("Asia/Kolkata") if candle_timestamps.dt.tz is None else candle_timestamps.dt.tz_convert("Asia/Kolkata")
+                candle_timestamps = candle_timestamps.dt.tz_localize(INDIA_TZ) if candle_timestamps.dt.tz is None else candle_timestamps.dt.tz_convert(INDIA_TZ)
             except Exception:
                 self.diagnostics["rejections"]["missing_data"] += 1
                 continue
