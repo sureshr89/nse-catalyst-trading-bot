@@ -4,10 +4,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import json, math
 import pandas as pd
-from config.settings import REQUIRE_MARKET_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO, NIFTY500_MIN_CHANGE_PCT
+from config.settings import TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO, NIFTY500_MIN_CHANGE_PCT
 from data.reference_store import ReferenceStore
 from data.stock_universe import StockUniverse
 from market.price_data import PriceData
+from market.live_price import get_current_market_price
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics, sort_key
 
@@ -131,7 +132,7 @@ class ScannerEngine:
         for side in ("BUY","SELL"):
             if not self.strategy.market_aligned(side,change): continue
             for item in self._rank_qualified(side,market_data):
-                symbol=item["symbol"]; current=self.price_data.get_current_market_price(symbol)
+                symbol=item["symbol"]; current=get_current_market_price(symbol)
                 if not current: continue
                 entry=float(current["Close"]); open_price=float(item["today_open"])
                 if side=="BUY" and entry<open_price: continue
