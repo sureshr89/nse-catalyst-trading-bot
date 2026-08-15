@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
-from config.settings import PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MAX_OPEN_POSITIONS, DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES, RISK_REWARD_RATIO
+from config.settings import PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MAX_OPEN_POSITIONS, DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES
 from scanner.scanner_engine import ScannerEngine
 from strategy.risk_engine import RiskEngine
 from market.price_data import PriceData
@@ -55,25 +55,12 @@ class TradingBot:
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
-    def _set_market_entry(self,signal):
-        """Use the completed 1-minute confirmation candle close as the paper entry."""
-        side=str(signal.get("signal","")).upper();stop=float(signal.get("stop_loss",0) or 0);trigger_close=float(signal.get("trigger_candle_close",signal.get("entry",0)) or 0);trigger_time=signal.get("entry_time")
-        if trigger_close<=0 or stop<=0 or side not in {"BUY","SELL"} or trigger_time is None:return False
-        if side=="BUY" and stop>=trigger_close:return False
-        if side=="SELL" and stop<=trigger_close:return False
-        try:
-            parsed=pd.to_datetime(trigger_time,errors="coerce")
-            if pd.isna(parsed):return False
-            if parsed.tzinfo is None:parsed=parsed.tz_localize(INDIA_TZ)
-            else:parsed=parsed.tz_convert(INDIA_TZ)
-            signal["trigger_entry_time"]=parsed.isoformat();signal["trigger_close"]=round(trigger_close,2);signal["market_entry_time"]=parsed.isoformat();signal["entry"]=round(trigger_close,2);signal["entry_time"]=parsed.isoformat();reward_distance=abs(trigger_close-stop)*float(RISK_REWARD_RATIO);signal["target"]=round(trigger_close+reward_distance if side=="BUY" else trigger_close-reward_distance,2);return True
-        except Exception:return False
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         signal["trigger_entry_time"]=signal.get("entry_time");key=self.signal_key(signal)
         if key in self.processed_signals:return
         symbol=str(signal.get("symbol","")).strip().upper()
-        if not symbol or not self._set_market_entry(signal):return
+        if not symbol:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
         risk_result=self.risk_engine.approve_trade(signal);self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):self.processed_signals.add(key);return
@@ -102,10 +89,13 @@ class TradingBot:
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
             quote=self.price_data.get_latest_available_1m(symbol)
+            if not quote:
+                try: quote=self.latest_1m_candle(symbol)
+                except Exception: quote=None
             if not quote:continue
             closed=self.paper_engine.close_position(symbol,quote.get("Close"),quote.get("Datetime") or self._now().replace(second=0,microsecond=0),"SQUARE_OFF")
             if closed is not None:self.journal.log_trade(closed)
-        self.daily_pnl=self._restore_daily_pnl();self._persist_master_data();self.square_off_done=True
+        self.daily_pnl=self._restore_daily_pnl();self._persist_master_data();self.square_off_done=not bool(self.paper_engine.open_positions)
     def scan_for_entries(self):
         now=self.current_time()
         if now<TRADING_START or now>LAST_ENTRY_TIME or self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:return
