@@ -56,7 +56,7 @@ def candle_label(pct): return "—" if pct is None else f"{pct:+.2f}%"
 
 @st.cache_data(ttl=5, show_spinner=False)
 def live_alignment_for_positions(symbols):
-    """Keep live alignment no older than the page's 5-second refresh interval."""
+    """Live alignment for currently active positions only."""
     symbols=[str(s).upper().replace(".NS","") for s in symbols if str(s).strip()]
     if not symbols: return pd.DataFrame()
     price=PriceData(); nifty_df=price.get_index_1m("^CRSLDX"); nifty=None if nifty_df.empty else nifty_df.iloc[-1].to_dict(); stock_data=price.get_multi_1m(symbols); rows=[]; nifty_pct=candle_pct(nifty)
@@ -98,17 +98,15 @@ if pos:
     st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
 else: st.info("No open paper positions.")
 
-st.subheader("Live Alignment — Signaled Stocks")
+st.subheader("Live Alignment — Open Positions")
 st.caption("NIFTY 500 and stock percentages use the latest completed 1-minute candle. The page and alignment cache refresh every 5 seconds.")
-signaled=list(pos.keys())
-if not trades.empty and "symbol" in trades.columns: signaled=list(dict.fromkeys(signaled+trades["symbol"].dropna().astype(str).tail(20).tolist()))
-if signaled:
+if pos:
     try:
-        live_df=live_alignment_for_positions(signaled)
+        live_df=live_alignment_for_positions(list(pos.keys()))
         if not live_df.empty: st.dataframe(live_df[["Stock","NIFTY 500 1m %","Stock 1m %","NIFTY 500","Stock Candle","Candle Time"]],width="stretch",hide_index=True)
         else: st.info("Live alignment data is temporarily unavailable.")
     except Exception as error: st.warning(f"Live alignment temporarily unavailable: {type(error).__name__}: {error}")
-else: st.info("No signaled stocks yet. The alignment table will appear automatically after the first signal.")
+else: st.info("No open positions. Live alignment will appear automatically when a position is opened.")
 
 st.subheader("Scanner Filter Breakdown")
 if isinstance(diag,dict) and diag:
