@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Apply the same shared typography/components used by every other dashboard page.
+# One shared typography/style system for every dashboard page.
 st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="live")
 
@@ -37,10 +37,11 @@ except Exception as exc:
 
 status = get_status()
 
+# Keep page structure identical to the other dashboard pages:
+# navigation first, then the page title/content.
+render_nav()
 st.title("📈 NSE Catalyst Trading Bot")
 st.caption("NIFTY 500 • PDH/PDL + Today's Open Reversal • Paper Trading")
-
-render_nav()
 
 status_value = str(status.get("status", "UNKNOWN"))
 message = str(status.get("message", "No status message available."))
