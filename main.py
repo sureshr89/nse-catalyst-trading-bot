@@ -25,7 +25,9 @@ class TradingBot:
         try:
             df=self.journal.get_trades()
             if df.empty or "pnl" not in df.columns or "exit_time" not in df.columns:return 0.0
-            exits=pd.to_datetime(df["exit_time"],errors="coerce");dates=exits.dt.date if getattr(exits.dt,"tz",None) is None else exits.dt.tz_convert(INDIA_TZ).dt.date;mask=dates==self._now().date()
+            # Parse all timestamps through UTC first so mixed naive/aware journal rows
+            # cannot cause pandas .dt failures or shift the trading day incorrectly.
+            exits=pd.to_datetime(df["exit_time"],errors="coerce",utc=True).dt.tz_convert(INDIA_TZ).dt.date;mask=exits==self._now().date()
             if "status" in df.columns:mask &= df["status"].astype(str).str.upper().eq("CLOSED")
             return round(float(pd.to_numeric(df["pnl"],errors="coerce").fillna(0.0)[mask].sum()),2)
         except Exception as error:print("Daily P&L restore skipped:",error);return 0.0
@@ -35,7 +37,8 @@ class TradingBot:
             if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:return None
             status=df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("",index=df.index);closed=df[status.eq("CLOSED")].copy();closed=closed[closed["exit_reason"].astype(str).str.upper().eq("STOP_LOSS")]
             if closed.empty:return None
-            times=pd.to_datetime(closed["exit_time"],errors="coerce");times=times.dt.tz_localize(INDIA_TZ) if getattr(times.dt,"tz",None) is None else times.dt.tz_convert(INDIA_TZ);times=times[times.dt.date==self._now().date()].dropna()
+            # Normalize every journal timestamp to IST before applying today's cooldown.
+            times=pd.to_datetime(closed["exit_time"],errors="coerce",utc=True).dt.tz_convert(INDIA_TZ);times=times[times.dt.date==self._now().date()].dropna()
             if times.empty:return None
             end=times.max().to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);return end.replace(tzinfo=None) if end>self._now().replace(tzinfo=None) else None
         except Exception:return None
