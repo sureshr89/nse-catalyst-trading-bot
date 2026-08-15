@@ -70,9 +70,6 @@ class ScannerEngine:
 
     def prepare_reference_data(self, force=False):
         today = self._today()
-        # Never cache a failed/empty preparation. A transient Yahoo/NIFTY data
-        # failure at 09:20 must be retried later instead of disabling the bot
-        # for the entire session.
         if not force and self._prepared_date == today and not self.references.empty:
             return self.references
         self.universe = self.universe_engine.get_dataframe(refresh=True)
@@ -120,9 +117,6 @@ class ScannerEngine:
         available_symbols = sum(1 for symbol in symbols if market_data.get(symbol) is not None and not market_data.get(symbol).empty)
         self.diagnostics["market_data_coverage"] = available_symbols / len(symbols) if symbols else 0.0
 
-        # Do not permanently cache an incomplete intraday download. This is
-        # especially important when the first Yahoo request is rate-limited or
-        # delayed around the market open.
         if symbols and available_symbols < max(1, int(len(symbols) * 0.80)):
             self._opening_prepared_date = None
             self.diagnostics["rejections"]["missing_data"] += len(symbols) - available_symbols
@@ -190,19 +184,9 @@ class ScannerEngine:
         result = pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
         self.diagnostics["opening_setup_passed"] = len(result)
         self.opening_candidates = result
-        # An empty result after complete market-data coverage is a legitimate
-        # "no setup today" result, so it is safe to cache that state.
         self._opening_prepared_date = today
         self._write_diagnostics()
         return result
-
-    @staticmethod
-    def _direction(df):
-        if df is None or df.empty:
-            return "UNKNOWN"
-        opening = float(df.iloc[0]["Open"])
-        close = float(df.iloc[-1]["Close"])
-        return "BULLISH" if close > opening else "BEARISH" if close < opening else "NEUTRAL"
 
     def _nifty500_candle(self, as_of):
         data = self.price_data.today_only(self.price_data.get_index_1m("^CRSLDX"))
@@ -250,7 +234,11 @@ class ScannerEngine:
                 continue
             self.diagnostics["stock_alignment_passed"] += 1
 
-            signal = self.strategy.build(symbol, candles, row["PDH"], row["PDL"], row["TodayOpen"], nifty_dir, nifty_candle)
+            signal = self.strategy.finalize_trigger(
+                symbol, candles[candles["Datetime"].dt.date == pd.Timestamp(trigger_time).date()],
+                trigger_probe if trigger_probe.get("entry_time") == trigger_time else None,
+                row["TodayOpen"], row["PDH"], row["PDL"], nifty_dir, side,
+            )
             if signal is not None:
                 signal.update({"nifty500_universe": True, "liquidity_qualified": True,
                                "gap": row.get("Gap"), "gap_percent": row.get("GapPercent"),
