@@ -78,7 +78,8 @@ class OpenReversalEngine:
             if candle_time > self.end:
                 break
             if side == "BUY":
-                if not level_reached and float(candle["Low"]) < pdh:
+                # Touching PDH is sufficient to mark the level as reached.
+                if not level_reached and float(candle["Low"]) <= pdh:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
@@ -86,7 +87,8 @@ class OpenReversalEngine:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
                         latest_trigger = candle
             else:
-                if not level_reached and float(candle["High"]) > pdl:
+                # Touching PDL is sufficient to mark the level as reached.
+                if not level_reached and float(candle["High"]) >= pdl:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
