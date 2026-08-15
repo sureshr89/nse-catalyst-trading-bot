@@ -13,36 +13,29 @@ from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
 from master_data import build_master_data
-
 st.set_page_config(page_title="NSE Catalyst | Downloads",page_icon="⬇️",layout="wide")
 st.markdown(load_css(),unsafe_allow_html=True);render_nav(24)
 try:ensure_bot_running()
-except Exception as error:st.warning(f"Worker launcher: {type(error).__name__}: {error}")
-
+except Exception as error:st.warning(f"Worker launcher: {type(error).__name__}: {error}
 def read_csv(name):
     try:
         path=ROOT/"outputs"/name;return pd.read_csv(path) if path.exists() else pd.DataFrame()
     except Exception:return pd.DataFrame()
-
 def file_bytes(name,fallback):
     path=ROOT/"outputs"/name
     try:return path.read_bytes() if path.exists() else pd.DataFrame(columns=fallback).to_csv(index=False).encode("utf-8")
     except Exception:return pd.DataFrame(columns=fallback).to_csv(index=False).encode("utf-8")
-
 def json_bytes(name,fallback):
     path=ROOT/"outputs"/name
     try:return path.read_bytes() if path.exists() else json.dumps(fallback,indent=2).encode()
     except Exception:return json.dumps(fallback,indent=2).encode()
-
 def canonical_trades(frame):
     if frame.empty:return frame
     if "trade_id" in frame.columns:
         ids=frame["trade_id"].astype(str).str.strip();with_id=frame[ids.ne("")&ids.ne("nan")].drop_duplicates("trade_id",keep="last");without_id=frame[~(ids.ne("")&ids.ne("nan"))].copy();keys=[c for c in ["symbol","signal","entry_time","entry"] if c in without_id.columns];without_id=without_id.drop_duplicates(keys,keep="last") if keys else without_id.drop_duplicates();return pd.concat([with_id,without_id],ignore_index=True)
     keys=[c for c in ["symbol","signal","entry_time","entry"] if c in frame.columns];return frame.drop_duplicates(keys,keep="last") if keys else frame.drop_duplicates()
-
 def months():
     first=datetime.now().replace(day=1);return [(first-relativedelta(months=i)).strftime("%Y-%m") for i in range(6)]
-
 def month_filter(frame,month,cols):
     if frame.empty:return frame
     for c in cols:
@@ -50,7 +43,6 @@ def month_filter(frame,month,cols):
             values=pd.to_datetime(frame[c],errors="coerce")
             if values.notna().any():return frame.loc[values.dt.strftime("%Y-%m").eq(month)].copy()
     return frame.iloc[0:0].copy()
-
 def monthly_excel(month):
     daily=read_csv("MASTER_DAILY_STOCK_DATA.csv");trades=canonical_trades(read_csv("MASTER_TRADES.csv"));summary=read_csv("MASTER_DAILY_SUMMARY.csv");signals=read_csv("signals.csv");output=BytesIO()
     sheets={"Daily Stock Data":(daily,["TradeDate","DataSnapshotIST"]),"All Trades":(trades,["TradeDate","entry_time","exit_time"]),"Daily Summary":(summary,["TradeDate"]),"Gap Board":(daily,["TradeDate"]),"Signals":(signals,["timestamp","entry_time"])}
@@ -64,12 +56,10 @@ def monthly_excel(month):
             for col in ws.columns:
                 vals=[str(x.value or "") for x in list(col)[:300]];ws.column_dimensions[col[0].column_letter].width=min(max(max((len(v) for v in vals),default=10)+2,10),32)
                 for cell in ws[1]:cell.font=copy(cell.font);cell.font=cell.font.copy(bold=True)
-        pd.DataFrame([["Month",month],["Strategy","NIFTY 500 market filter + stock PDH/PDL + Today's Open reversal"],["BUY","Open above PDH → price closes below PDH → later candle opens below Today's Open and closes above Today's Open → NIFTY 500 ≥ +0.25%"],["SELL","Open below PDL → price closes above PDL → later candle opens above Today's Open and closes below Today's Open → NIFTY 500 ≤ −0.25%"],["Risk","BUY SL = PDH; SELL SL = PDL; Target = 1.25 × entry-to-SL risk; max risk ₹1,500/trade; max 2 positions; daily max loss ₹3,000"],["Generated",pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")]],columns=["Field","Value"]).to_excel(writer,sheet_name="README",index=False)
+        pd.DataFrame([["Month",month],["Strategy","NIFTY 500 market filter + stock PDH/PDL + Today's Open reversal"],["BUY","Open above PDH → price moves below PDH → 1-minute reversal confirmation above Today's Open → NIFTY 500 ≥ +0.25%"],["SELL","Open below PDL → price moves above PDL → 1-minute reversal confirmation below Today's Open → NIFTY 500 ≤ −0.25%"],["Risk","BUY SL = PDH; SELL SL = PDL; Target = 1.25 × entry-to-SL risk; max risk ₹1,500/trade; max 2 positions; daily max loss ₹3,000"],["Generated",pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")]],columns=["Field","Value"]).to_excel(writer,sheet_name="README",index=False)
     output.seek(0);return output.getvalue()
-
 try:build_master_data()
 except Exception as error:st.warning(f"Master data refresh warning: {type(error).__name__}: {error}")
-
 st.title("⬇️ Downloads");st.caption("Trading records, daily market data, gap board and strategy results.")
 trades=canonical_trades(read_csv("trades.csv"));signals=read_csv("signals.csv");gaps=read_csv("gap_analysis.csv");months_list=months();master=canonical_trades(read_csv("MASTER_TRADES.csv"));daily=read_csv("MASTER_DAILY_STOCK_DATA.csv")
 st.subheader("⭐ Master Trading Data — Last 6 Months")
