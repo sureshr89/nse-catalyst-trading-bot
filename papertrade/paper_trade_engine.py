@@ -67,7 +67,7 @@ class PaperTradeEngine:
     def _migrate_state(self,state,version):
         """Migrate known older schemas by filling fields that current recovery expects."""
         migrated=dict(state)
-        migrated.setdefault("strategy","NIFTY_500_PDH_PDL_OPEN_REVERSAL")
+        migrated.setdefault("strategy","NIFTY_500_PDH_PDL_OPEN_RETURN")
         migrated.setdefault("open_positions",{})
         migrated.setdefault("closed_positions",[])
         migrated.setdefault("trade_counter",0)
@@ -116,7 +116,7 @@ class PaperTradeEngine:
             if migrated:self._save_state()
         except Exception as error:print(f"Paper state restore skipped: {type(error).__name__}: {error}")
     def _save_state(self):
-        path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True); state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
+        path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True); state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_RETURN","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
         try:
             with open(path,"w",encoding="utf-8") as file:json.dump(state,file,ensure_ascii=False,indent=2,default=str)
             sync_json(path,path.replace(os.sep,"/"),"Save NIFTY 500 paper-trading state")
