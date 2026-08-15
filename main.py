@@ -71,8 +71,7 @@ class TradingBot:
         except Exception as error:print("Risk trade-count rollback failed:",error)
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
-        entry_time=signal.get("entry_time")
-        parsed_entry=pd.to_datetime(entry_time,errors="coerce")
+        entry_time=signal.get("entry_time");parsed_entry=pd.to_datetime(entry_time,errors="coerce")
         if entry_time is None or pd.isna(parsed_entry):return
         if getattr(parsed_entry,"tzinfo",None) is None:parsed_entry=parsed_entry.tz_localize(INDIA_TZ)
         else:parsed_entry=parsed_entry.tz_convert(INDIA_TZ)
@@ -82,8 +81,7 @@ class TradingBot:
         symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
-        available_capital=float(self.paper_engine.available_capital)
-        risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
+        available_capital=float(self.paper_engine.available_capital);risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):self.processed_signals.add(key);return
         approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True
         try:result=self.paper_engine.open_trade(approved_trade)
@@ -102,22 +100,43 @@ class TradingBot:
             if candle is None:continue
             closed=self.paper_engine.process_candle(symbol,candle)
             if closed is not None:
-                closed_pnl=float(pd.to_numeric(pd.Series([closed.get("pnl",0)]),errors="coerce").fillna(0).iloc[0])
-                self.daily_pnl=round(self.daily_pnl+closed_pnl,2)
+                closed_pnl=float(pd.to_numeric(pd.Series([closed.get("pnl",0)]),errors="coerce").fillna(0).iloc[0]);self.daily_pnl=round(self.daily_pnl+closed_pnl,2)
                 try:self.journal.log_trade(closed)
                 except Exception as error:print(f"Closed trade journal save failed for {symbol}: {type(error).__name__}: {error}")
-                if str(closed.get("exit_reason","")).upper()=="STOP_LOSS":
-                    self.cooldown_until=self._now().replace(tzinfo=None)+timedelta(minutes=COOLDOWN_MINUTES)
+                if str(closed.get("exit_reason","")).upper()=="STOP_LOSS":self.cooldown_until=self._now().replace(tzinfo=None)+timedelta(minutes=COOLDOWN_MINUTES)
         self.missed_capital.monitor()
     def _persist_master_data(self):
         try:
             from master_data import build_master_data;build_master_data()
         except Exception as error:print("Master data finalization skipped:",type(error).__name__,error)
+    def _square_off_price(self,symbol,position):
+        """Return the freshest available exit price, with deterministic data fallbacks for the 15:00 paper square-off."""
+        try:
+            quote=self.price_data.get_latest_market_price(symbol)
+            if quote and pd.to_numeric(pd.Series([quote.get("Close")]),errors="coerce").notna().iloc[0]:
+                return float(quote.get("Close")), quote.get("Datetime") or self._now()
+        except Exception as error:print(f"Latest quote unavailable for {symbol}: {type(error).__name__}: {error}")
+        try:
+            candle=self.latest_1m_candle(symbol)
+            if candle is not None and pd.to_numeric(pd.Series([candle.get("Close")]),errors="coerce").notna().iloc[0]:
+                return float(candle.get("Close")), candle.get("Datetime") or self._now()
+        except Exception as error:print(f"Latest 1m fallback unavailable for {symbol}: {type(error).__name__}: {error}")
+        try:
+            candles=self.scanner.universe_market_data.get(symbol)
+            if candles is not None and not candles.empty:
+                row=candles.iloc[-1]
+                close=pd.to_numeric(pd.Series([row.get("Close")]),errors="coerce").iloc[0]
+                if pd.notna(close):return float(close),row.get("Datetime") or self._now()
+        except Exception as error:print(f"Cached scanner price unavailable for {symbol}: {type(error).__name__}: {error}")
+        return None,None
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
-            quote=self.price_data.get_latest_market_price(symbol)
-            if not quote:print(f"15:00 square-off price unavailable for {symbol}; retrying on next worker cycle");continue
-            closed=self.paper_engine.close_position(symbol,quote.get("Close"),quote.get("Datetime") or self._now(),"SQUARE_OFF")
+            position=self.paper_engine.open_positions.get(symbol,{})
+            price,exit_time=self._square_off_price(symbol,position)
+            if price is None:
+                print(f"15:00 square-off price unavailable for {symbol}; position remains open until a valid market price is available")
+                continue
+            closed=self.paper_engine.close_position(symbol,price,exit_time,"SQUARE_OFF")
             if closed is not None:
                 self.daily_pnl=round(self.daily_pnl+float(closed.get("pnl",0) or 0),2)
                 try:self.journal.log_trade(closed)
