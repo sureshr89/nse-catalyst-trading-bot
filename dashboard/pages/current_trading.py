@@ -63,7 +63,6 @@ gaps = read(ROOT / "outputs/gap_analysis.csv", "csv")
 diag = read(ROOT / "outputs/scanner_diagnostics.json")
 positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
 
-# Keep the worker alive. Detailed worker diagnostics belong on the Status page.
 try:
     live_status = ensure_bot_running()
     if isinstance(live_status, dict):
@@ -103,17 +102,16 @@ metric_cards([
 ])
 st.caption(f"{permission_note} • Entry window {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
 
-# A small operational warning is kept only when the page cannot confirm the worker launcher.
 if status.get("error"):
     st.warning(str(status["error"]))
 
 with st.expander("How a setup becomes a trade", expanded=False):
     st.markdown(
-        "**BUY:** Today's Open > PDH → price first reaches/reacts below PDH → later price reaches/crosses above Today's Open. "
-        "NIFTY 500 must be ≥ +0.25%.\n\n"
-        "**SELL:** Today's Open < PDL → price first reaches/reacts above PDL → later price reaches/crosses below Today's Open. "
-        "NIFTY 500 must be ≤ −0.25%.\n\n"
-        "The entry is the actual qualifying completed 1-minute price. No candle-pattern confirmation is used."
+        "**BUY:** Today's Open > PDH → price first closes below PDH → later one completed 1-minute candle "
+        "opens below Today's Open and closes above Today's Open. NIFTY 500 must be ≥ +0.25%.\n\n"
+        "**SELL:** Today's Open < PDL → price first closes above PDL → later one completed 1-minute candle "
+        "opens above Today's Open and closes below Today's Open. NIFTY 500 must be ≤ −0.25%.\n\n"
+        "The entry is taken at the qualifying 1-minute candle close. Entries are allowed only from 09:45 to 14:00 IST."
     )
 
 st.subheader("🎯 Today's Opening Setups")
@@ -129,7 +127,7 @@ if not gaps.empty and "GapType" in gaps.columns:
     c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown(f"### 🟢 BUY setups  ·  {len(ups)}")
-        st.caption("Open > PDH → PDH reaction → return above Today's Open")
+        st.caption("Open > PDH → close below PDH → 1m candle opens below Today's Open and closes above it")
         if ups.empty:
             st.info("No gap-up setups.")
         else:
@@ -144,7 +142,7 @@ if not gaps.empty and "GapType" in gaps.columns:
 
     with c2:
         st.markdown(f"### 🔴 SELL setups  ·  {len(downs)}")
-        st.caption("Open < PDL → PDL reaction → return below Today's Open")
+        st.caption("Open < PDL → close above PDL → 1m candle opens above Today's Open and closes below it")
         if downs.empty:
             st.info("No gap-down setups.")
         else:
