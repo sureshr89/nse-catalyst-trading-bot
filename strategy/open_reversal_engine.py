@@ -1,4 +1,4 @@
-"""NIFTY 500 PDH/PDL + Today's Open price-state strategy."""
+"""NIFTY 500 PDH/PDL + Today's Open return state strategy."""
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
@@ -7,7 +7,7 @@ from config.settings import ENABLE_LONG, ENABLE_SHORT, NIFTY500_MIN_CHANGE_PCT
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 class OpenReversalEngine:
-    """State-based setup evaluator. Entry detection uses completed 1-minute CLOSE only."""
+    """State-based setup evaluator. Setup detection uses completed 1-minute CLOSE only; no reversal candle pattern is required."""
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start); self.end = self._time(last_entry_time); self.rr = float(rr)
     @staticmethod
