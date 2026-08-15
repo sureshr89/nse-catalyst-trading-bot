@@ -85,7 +85,11 @@ class ScannerEngine:
     def scan(self):
         self.diagnostics=self._empty_diagnostics();candidates=self.prepare_opening_candidates()
         if candidates.empty:return self._finish([])
-        symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
+        symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);candidate_coverage=available_symbols/len(symbols) if symbols else 0.0;self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
+        required_candidate_coverage=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        if available_symbols<required_candidate_coverage:
+            self.diagnostics["market_data_coverage"]=candidate_coverage;self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available_symbols;self._write_diagnostics();print(f"Candidate 1m coverage incomplete: {available_symbols}/{len(symbols)} ({candidate_coverage:.1%}); need at least {required_candidate_coverage}. Skipping this scan and retrying.");return self._finish([])
+        self.diagnostics["market_data_coverage"]=candidate_coverage
         if not available_symbols:return self._finish([])
         signals=[]
         for _,row in candidates.iterrows():
