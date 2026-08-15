@@ -181,8 +181,9 @@ class TradeJournal:
         return self.upsert_trade(trade)
 
     def log_signal(self, signal):
-        if not isinstance(signal, dict) or not bool(signal.get("approved", False)):
-            return {"saved": False, "reason": "Only approved signals are journaled"}
+        """Record both approved and rejected decisions so the stock scanner can explain outcomes."""
+        if not isinstance(signal, dict):
+            return {"saved": False, "reason": "Signal must be a dictionary"}
         if self.signal_exists(signal):
             return {"saved": False, "duplicate": True, "reason": "Duplicate setup"}
         row = {column: self._value(signal.get(column, "")) for column in self.SIGNAL_COLUMNS}
@@ -190,7 +191,7 @@ class TradeJournal:
             row["timestamp"] = datetime.now(INDIA_TZ).isoformat()
         with open(self.signal_file, "a", newline="", encoding="utf-8") as file:
             csv.DictWriter(file, fieldnames=self.SIGNAL_COLUMNS).writerow(row)
-        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save approved scanner signal")
+        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save scanner signal decision")
         return {"saved": True, "duplicate": False}
 
     def get_trades(self):
