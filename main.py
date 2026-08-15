@@ -69,6 +69,15 @@ class TradingBot:
             count=self.risk_engine.get_trade_count(symbol)
             if count>0:self.risk_engine.trade_counts[symbol]=count-1
         except Exception as error:print("Risk trade-count rollback failed:",error)
+    def _rollback_open_position(self,symbol):
+        try:
+            if self.paper_engine.has_open_position(symbol):
+                position=self.paper_engine.open_positions.pop(symbol)
+                position_value=float(position.get("position_value",float(position.get("entry",0) or 0)*int(float(position.get("quantity",0) or 0))))
+                self.paper_engine.used_capital=round(max(0.0,self.paper_engine.used_capital-position_value),2)
+                self.paper_engine.available_capital=round(self.paper_engine.total_capital-self.paper_engine.used_capital,2)
+                self.paper_engine._save_state()
+        except Exception as error:print(f"Paper position rollback failed for {symbol}: {type(error).__name__}: {error}")
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         entry_time=signal.get("entry_time");parsed_entry=pd.to_datetime(entry_time,errors="coerce")
@@ -89,11 +98,17 @@ class TradingBot:
         if not result.get("opened",False):
             if result.get("reason","")=="Insufficient available capital":self.missed_capital.record(signal,risk_result,result["reason"])
             self._rollback_registered_trade(symbol);self.processed_signals.add(key);return
-        self.processed_signals.add(key);position=self.paper_engine.open_positions.get(symbol)
-        if position is None:self._rollback_registered_trade(symbol);print(f"Paper trade {symbol} reported opened but position state was missing");return
+        position=self.paper_engine.open_positions.get(symbol)
+        if position is None:
+            self._rollback_registered_trade(symbol);print(f"Paper trade {symbol} reported opened but position state was missing");return
         self._attach_trade_context(position,approved_trade)
-        try:self.journal.log_trade(position.copy())
-        except Exception as error:print(f"Open trade journal save failed for {symbol}: {type(error).__name__}: {error}")
+        try:
+            journal_result=self.journal.log_trade(position.copy())
+            if not journal_result.get("saved",False):
+                self._rollback_open_position(symbol);self._rollback_registered_trade(symbol);print(f"Paper trade {symbol} rolled back because the OPEN trade journal could not be saved");return
+        except Exception as error:
+            self._rollback_open_position(symbol);self._rollback_registered_trade(symbol);print(f"Open trade journal save failed for {symbol}; paper position rolled back: {type(error).__name__}: {error}");return
+        self.processed_signals.add(key)
     def _process_open_positions(self):
         for symbol in list(self.paper_engine.open_positions):
             candle=self.latest_1m_candle(symbol)
@@ -113,19 +128,16 @@ class TradingBot:
         """Return the freshest available exit price, with deterministic data fallbacks for the 15:00 paper square-off."""
         try:
             quote=self.price_data.get_latest_market_price(symbol)
-            if quote and pd.to_numeric(pd.Series([quote.get("Close")]),errors="coerce").notna().iloc[0]:
-                return float(quote.get("Close")), quote.get("Datetime") or self._now()
+            if quote and pd.to_numeric(pd.Series([quote.get("Close")]),errors="coerce").notna().iloc[0]:return float(quote.get("Close")),quote.get("Datetime") or self._now()
         except Exception as error:print(f"Latest quote unavailable for {symbol}: {type(error).__name__}: {error}")
         try:
             candle=self.latest_1m_candle(symbol)
-            if candle is not None and pd.to_numeric(pd.Series([candle.get("Close")]),errors="coerce").notna().iloc[0]:
-                return float(candle.get("Close")), candle.get("Datetime") or self._now()
+            if candle is not None and pd.to_numeric(pd.Series([candle.get("Close")]),errors="coerce").notna().iloc[0]:return float(candle.get("Close")),candle.get("Datetime") or self._now()
         except Exception as error:print(f"Latest 1m fallback unavailable for {symbol}: {type(error).__name__}: {error}")
         try:
             candles=self.scanner.universe_market_data.get(symbol)
             if candles is not None and not candles.empty:
-                row=candles.iloc[-1]
-                close=pd.to_numeric(pd.Series([row.get("Close")]),errors="coerce").iloc[0]
+                row=candles.iloc[-1];close=pd.to_numeric(pd.Series([row.get("Close")]),errors="coerce").iloc[0]
                 if pd.notna(close):return float(close),row.get("Datetime") or self._now()
         except Exception as error:print(f"Cached scanner price unavailable for {symbol}: {type(error).__name__}: {error}")
         return None,None
@@ -134,8 +146,7 @@ class TradingBot:
             position=self.paper_engine.open_positions.get(symbol,{})
             price,exit_time=self._square_off_price(symbol,position)
             if price is None:
-                print(f"15:00 square-off price unavailable for {symbol}; position remains open until a valid market price is available")
-                continue
+                print(f"15:00 square-off price unavailable for {symbol}; position remains open until a valid market price is available");continue
             closed=self.paper_engine.close_position(symbol,price,exit_time,"SQUARE_OFF")
             if closed is not None:
                 self.daily_pnl=round(self.daily_pnl+float(closed.get("pnl",0) or 0),2)
