@@ -1,5 +1,4 @@
 """Core paper-trading orchestration for the NIFTY 500 open-reversal strategy."""
-
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import time
@@ -48,25 +47,39 @@ class TradingBot:
                 target=len(keys);current=self.risk_engine.get_trade_count(symbol)
                 if current<target:self.risk_engine.trade_counts[symbol]=target
         except Exception as error:print("Paper-state risk-count recovery skipped:",error)
+    @staticmethod
+    def _closed_trade_key(trade,source,index=None):
+        """Build a stable identity even when legacy closed trades have no trade_id."""
+        if not isinstance(trade,dict):return None
+        trade_id=str(trade.get("trade_id","")).strip().upper()
+        if trade_id:return ("id",trade_id)
+        symbol=str(trade.get("symbol","")).strip().upper()
+        signal=str(trade.get("signal","")).strip().upper()
+        entry=str(trade.get("entry_time","")).strip()
+        exit_time=str(trade.get("exit_time","")).strip()
+        entry_price=str(trade.get("entry","")).strip()
+        exit_price=str(trade.get("exit_price","")).strip()
+        if not symbol or not exit_time:return None
+        return ("legacy",symbol,signal,entry,exit_time,entry_price,exit_price)
     def _today_closed_trades(self):
-        """Return today's CLOSED trades from journal + persisted paper state, deduplicated by trade_id."""
+        """Return today's CLOSED trades once, deduplicating journal and paper-state copies by trade identity."""
         today=self._now().date();merged={}
+        def add_trade(trade,source,index=None):
+            if not isinstance(trade,dict) or str(trade.get("status","")).upper()!="CLOSED":return
+            exit_dt=self._journal_ist(trade.get("exit_time"))
+            if pd.isna(exit_dt) or exit_dt.date()!=today:return
+            key=self._closed_trade_key(trade,source,index)
+            if key is None:return
+            # Prefer the persisted paper-state record when both copies represent the same legacy trade,
+            # because it contains the execution state used by the paper engine.
+            if key not in merged or source=="paper":merged[key]=dict(trade)
         try:
             df=self.journal.get_trades()
-            if not df.empty and "exit_time" in df.columns:
-                exits=self._journal_dates_ist(df["exit_time"])
-                status=df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("CLOSED",index=df.index)
-                for idx,row in df[status.eq("CLOSED")].iterrows():
-                    exit_dt=exits.loc[idx] if idx in exits.index else pd.NaT
-                    if pd.notna(exit_dt) and exit_dt.date()==today:
-                        trade=dict(row);trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"journal:{idx}";merged[key]=trade
+            if not df.empty:
+                for idx,row in df.iterrows():add_trade(dict(row),"journal",idx)
         except Exception as error:print("Journal closed-trade recovery skipped:",error)
         try:
-            for trade in self.paper_engine.closed_positions:
-                if not isinstance(trade,dict) or str(trade.get("status","")).upper()!="CLOSED":continue
-                exit_dt=self._journal_ist(trade.get("exit_time"))
-                if pd.notna(exit_dt) and exit_dt.date()==today:
-                    trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"paper:{trade.get('symbol','')}:{trade.get('exit_time','')}";merged[key]=dict(trade)
+            for trade in self.paper_engine.closed_positions:add_trade(trade,"paper")
         except Exception as error:print("Paper-state closed-trade recovery skipped:",error)
         return list(merged.values())
     def _restore_daily_pnl(self):
@@ -110,7 +123,6 @@ class TradingBot:
                 position=self.paper_engine.open_positions.pop(symbol);position_value=float(position.get("position_value",float(position.get("entry",0) or 0)*int(float(position.get("quantity",0) or 0))));self.paper_engine.used_capital=round(max(0.0,self.paper_engine.used_capital-position_value),2);self.paper_engine.available_capital=round(self.paper_engine.total_capital-self.paper_engine.used_capital,2);self.paper_engine._save_state()
         except Exception as error:print(f"Paper position rollback failed for {symbol}: {type(error).__name__}: {error}")
     def _persist_closed_trade(self,trade):
-        """Persist a CLOSED trade with short retries; journal writes upsert by trade_id."""
         if not isinstance(trade,dict) or not trade.get("trade_id"):return False
         for attempt in range(3):
             try:
@@ -121,7 +133,6 @@ class TradingBot:
             if attempt<2:time.sleep(0.5*(attempt+1))
         return False
     def _retry_closed_journal(self):
-        """Reconcile persisted paper-engine CLOSED trades into the journal after transient failures."""
         all_saved=True
         for trade in list(self.paper_engine.closed_positions):
             if str(trade.get("exit_time","")).strip() and str(trade.get("status","")).upper()=="CLOSED":
@@ -175,11 +186,6 @@ class TradingBot:
             from master_data import build_master_data;build_master_data()
         except Exception as error:print("Master data finalization skipped:",type(error).__name__,error)
     def _square_off_price(self,symbol,position):
-        """Return a fresh exit price; never use an arbitrarily old scanner candle."""
-        try:
-            quote=self.price_data.get_latest_market_price(symbol)
-            if quote and pd.to_numeric(pd.Series([quote.get("Close")]),errors="coerce").notna().iloc[0]:return float(quote.get("Close")), quote.get("Datetime") or self._now()
-        except Exception as error:print(f"Latest quote unavailable for {symbol}: {type(error).__name__}: {error}")
         try:
             candle=self.latest_1m_candle(symbol)
             if candle is not None and pd.to_numeric(pd.Series([candle.get("Close")]),errors="coerce").notna().iloc[0]:return float(candle.get("Close")), candle.get("Datetime") or self._now()
@@ -191,7 +197,6 @@ class TradingBot:
                 if pd.notna(close) and pd.notna(stamp):
                     age=(self._now()-stamp.to_pydatetime()).total_seconds()
                     if 0<=age<=120:return float(close),stamp.to_pydatetime()
-                    print(f"Cached scanner price for {symbol} is stale ({age:.0f}s); square-off will retry")
         except Exception as error:print(f"Cached scanner price unavailable for {symbol}: {type(error).__name__}: {error}")
         return None,None
     def square_off_all(self):
