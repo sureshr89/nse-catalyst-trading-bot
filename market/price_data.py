@@ -95,15 +95,27 @@ class PriceData:
     def get_1m(self, symbol):
         return self.get_candles(symbol, "1m", "1d")
 
+    def _today_intraday(self, data):
+        """Return only today's IST candles; never fall back to a previous session."""
+        if data is None or data.empty or "Datetime" not in data.columns:
+            return pd.DataFrame()
+        result = data.copy()
+        result["Datetime"] = self._to_ist(result["Datetime"])
+        result = result.dropna(subset=["Datetime"])
+        if result.empty:
+            return pd.DataFrame()
+        today = datetime.now(INDIA_TZ).date()
+        return result[result["Datetime"].dt.date == today].sort_values("Datetime").reset_index(drop=True)
+
     def get_latest_available_1m(self, symbol):
-        """Return the latest completed 1-minute candle for strategy processing."""
+        """Return the latest completed 1-minute candle from today's IST session only."""
         try:
             data = self._clean_data(yf.download(
                 tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
                 auto_adjust=False, progress=False, threads=False, prepost=False,
                 timeout=self.download_timeout,
             ))
-            data = self._completed_1m(self.today_only(data))
+            data = self._completed_1m(self._today_intraday(data))
             return None if data.empty else data.iloc[-1].to_dict()
         except Exception as error:
             print(f"Latest completed price failed for {symbol}: {error}")
@@ -124,7 +136,7 @@ class PriceData:
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
                 progress=False, threads=False, prepost=False, timeout=self.download_timeout,
             ))
-            today = self.today_only(raw)
+            today = self._today_intraday(raw)
             if not today.empty:
                 latest = today.iloc[-1]
                 return {"Close": float(latest["Close"]), "Datetime": latest["Datetime"]}
@@ -160,55 +172,39 @@ class PriceData:
         if raw is None or raw.empty:
             return result
         if isinstance(raw.columns, pd.MultiIndex):
-            level0 = set(raw.columns.get_level_values(0))
-            level1 = set(raw.columns.get_level_values(1))
+            level0 = set(raw.columns.get_level_values(0)); level1 = set(raw.columns.get_level_values(1))
             for symbol, ticker in zip(batch, tickers):
                 try:
-                    if ticker in level0:
-                        data = raw[ticker]
-                    elif ticker in level1:
-                        data = raw.xs(ticker, axis=1, level=1)
-                    else:
-                        data = pd.DataFrame()
-                    cleaned = self._completed_1m(self._clean_data(data))
-                    if not cleaned.empty:
-                        result[symbol] = cleaned
-                except Exception:
-                    continue
+                    if ticker in level0: data = raw[ticker]
+                    elif ticker in level1: data = raw.xs(ticker, axis=1, level=1)
+                    else: data = pd.DataFrame()
+                    cleaned = self._completed_1m(self._today_intraday(self._clean_data(data)))
+                    if not cleaned.empty: result[symbol] = cleaned
+                except Exception: continue
         elif len(batch) == 1:
-            cleaned = self._completed_1m(self._clean_data(raw))
-            if not cleaned.empty:
-                result[batch[0]] = cleaned
+            cleaned = self._completed_1m(self._today_intraday(self._clean_data(raw)))
+            if not cleaned.empty: result[batch[0]] = cleaned
         return result
 
     def get_multi_1m(self, symbols):
         symbols = [str(s).upper().replace(".NS", "") for s in symbols]
         symbols = list(dict.fromkeys(s for s in symbols if s))
-        if not symbols:
-            return {}
-        batches = list(self._chunks(symbols, self.batch_size))
-        result = {}
-
+        if not symbols: return {}
+        batches = list(self._chunks(symbols, self.batch_size)); result = {}
         def download_with_retry(batch):
             tickers = [f"{s}.NS" for s in batch]
             raw = self._download_multi_batch(tickers, "1m", "1d")
-            extracted = self._extract_batch(batch, raw)
-            missing = [s for s in batch if s not in extracted]
+            extracted = self._extract_batch(batch, raw); missing = [s for s in batch if s not in extracted]
             if missing:
                 retry_raw = self._download_multi_batch([f"{s}.NS" for s in missing], "1m", "1d")
                 extracted.update(self._extract_batch(missing, retry_raw))
             return extracted
-
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {executor.submit(download_with_retry, batch): batch for batch in batches}
             for future in as_completed(futures):
-                try:
-                    result.update(future.result())
-                except Exception as error:
-                    print("Yahoo batch worker failed:", error)
-
-        for symbol in symbols:
-            result.setdefault(symbol, pd.DataFrame())
+                try: result.update(future.result())
+                except Exception as error: print("Yahoo batch worker failed:", error)
+        for symbol in symbols: result.setdefault(symbol, pd.DataFrame())
         return result
 
     def get_index_1m(self, ticker="^NSEI"):
@@ -217,19 +213,15 @@ class PriceData:
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
                 progress=False, threads=False, prepost=False, timeout=self.download_timeout,
             ))
-            return self._completed_1m(data)
+            return self._completed_1m(self._today_intraday(data))
         except Exception as error:
             print("NIFTY market-index data failed:", error)
             return pd.DataFrame()
 
     def today_only(self, df):
-        if df is None or df.empty:
-            return pd.DataFrame()
-        result = df.copy()
-        result["Datetime"] = self._to_ist(result["Datetime"])
-        result = result.dropna(subset=["Datetime"])
-        if result.empty:
-            return pd.DataFrame()
+        if df is None or df.empty: return pd.DataFrame()
+        result = df.copy(); result["Datetime"] = self._to_ist(result["Datetime"]); result = result.dropna(subset=["Datetime"])
+        if result.empty: return pd.DataFrame()
         latest_date = result["Datetime"].dt.date.max()
         return result[result["Datetime"].dt.date == latest_date].sort_values("Datetime").reset_index(drop=True)
 
