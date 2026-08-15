@@ -65,9 +65,8 @@ class ScannerEngine:
             else:gap_type,setup="INSIDE_PDH_PDL","NO_GAP_SETUP";gap_value,gap_percent=0,0
             gap_from_close=today_open-pdc;gap_pct_close=(gap_from_close/pdc*100) if pdc else 0
             gap_rows.append({"Symbol":symbol,"PreviousClose":round(pdc,4),"TodayOpen":round(today_open,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"]),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
-            if not bool(ref["LiquidityQualified"]):continue
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
-            rows.append({"Symbol":symbol,"PDH":round(pdh,4),"PDL":round(pdl,4),"TodayOpen":round(today_open,4),"PreviousDayClose":round(pdc,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"OpeningSetup":setup,"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":True})
+            rows.append({"Symbol":symbol,"PDH":round(pdh,4),"PDL":round(pdl,4),"TodayOpen":round(today_open,4),"PreviousDayClose":round(pdc,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"OpeningSetup":setup,"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"])})
         self.gap_analysis=pd.DataFrame(gap_rows);self.diagnostics["gap_data_count"]=len(gap_rows);self.diagnostics["gap_up_count"]=sum(r["GapType"]=="GAP_UP_PDH" for r in gap_rows);self.diagnostics["gap_down_count"]=sum(r["GapType"]=="GAP_DOWN_PDL" for r in gap_rows);self._write_gap_analysis(gap_rows);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.diagnostics["opening_setup_passed"]=len(result);self.opening_candidates=result;self._opening_prepared_date=today;self._write_diagnostics();return result
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
@@ -99,7 +98,11 @@ class ScannerEngine:
             if REQUIRE_MARKET_ALIGNMENT and nifty_dir!=required:self.diagnostics["rejections"]["market_alignment"]+=1;continue
             self.diagnostics["market_alignment_passed"]+=1;stock_dir=self.strategy._candle_direction(pd.DataFrame([trigger_candle]))
             if REQUIRE_STOCK_ALIGNMENT and stock_dir!=required:self.diagnostics["rejections"]["stock_alignment"]+=1;continue
-            self.diagnostics["stock_alignment_passed"]+=1;today_data=candles[candle_timestamps.dt.date==trigger_stamp.date()];signal=self.strategy.finalize_trigger(symbol,today_data,trigger_candle,row["TodayOpen"],row["PDH"],row["PDL"],nifty_dir,side)
+            self.diagnostics["stock_alignment_passed"]+=1
+            if not bool(row.get("LiquidityQualified",False)):
+                self.diagnostics["rejections"]["liquidity"]+=1
+                continue
+            today_data=candles[candle_timestamps.dt.date==trigger_stamp.date()];signal=self.strategy.finalize_trigger(symbol,today_data,trigger_candle,row["TodayOpen"],row["PDH"],row["PDL"],nifty_dir,side)
             if signal is not None:
                 signal.update({"nifty500_universe":True,"liquidity_qualified":True,"gap":row.get("Gap"),"gap_percent":row.get("GapPercent"),"gap_type":row.get("GapType")});signals.append(signal);self.diagnostics["strategy_setup_passed"]+=1
         return self._finish(signals)
