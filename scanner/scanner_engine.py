@@ -142,11 +142,11 @@ class ScannerEngine:
                 entry=float(current["Close"]); open_price=float(item["today_open"])
                 if side=="BUY" and entry<open_price: continue
                 if side=="SELL" and entry>open_price: continue
-                metric_values={k:item[k] for k in ("atr_pct","rvol","beta","traded_value","metrics_calculated_at")}
+                metric_values={"atr_pct":item.get("atr_pct",0),"metrics_calculated_at":item.get("metrics_calculated_at","")}
                 signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,metric_values)
                 if signal:
                     signal.update({"candidate_id":item.get("candidate_id"),"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1})
-                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"atr_pct":item.get("atr_pct",0),"rvol":item.get("rvol",0),"beta":item.get("beta",0),"traded_value":item.get("traded_value",0)})
+                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"atr_pct":item.get("atr_pct",0)})
                     signals.append(signal)
         self.diagnostics["ranking"]=ranking; return signals
     def scan(self):
