@@ -75,10 +75,8 @@ now = datetime.now(INDIA_TZ)
 
 st.title("🔎 NIFTY 500 Stock Scanner")
 st.caption("Complete stock-by-stock view • gap status • strategy progress • entry status")
-
 if status.get("error"):
     st.warning(str(status["error"]))
-
 if gaps.empty:
     st.info("Complete stock data will appear when the market data feed populates gap_analysis.csv.")
     render_daily_footer()
@@ -89,27 +87,36 @@ for col in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercent"]:
     if col in board.columns:
         board[col] = pd.to_numeric(board[col], errors="coerce")
 
-approved_symbols = set()
-if not signals.empty and "symbol" in signals.columns:
-    sig = signals.copy()
-    if "approved" in sig.columns:
-        sig = sig[sig["approved"].astype(str).str.lower().isin(["true", "1", "yes"])]
-    approved_symbols = set(sig["symbol"].astype(str).str.upper())
-
 position_symbols = {str(s).upper() for s in positions.keys()}
+latest_signal = {}
+if not signals.empty and "symbol" in signals.columns:
+    ordered = signals.copy()
+    if "timestamp" in ordered.columns:
+        ordered = ordered.sort_values("timestamp")
+    for _, row in ordered.iterrows():
+        latest_signal[str(row.get("symbol", "")).upper()] = row.to_dict()
+
+approved_symbols = set()
+for symbol, record in latest_signal.items():
+    approved = str(record.get("approved", "")).lower() in {"true", "1", "yes"}
+    if approved:
+        approved_symbols.add(symbol)
 
 
 def stock_status(row):
     symbol = str(row.get("Symbol", "")).upper()
     gap_type = str(row.get("GapType", ""))
+    record = latest_signal.get(symbol, {})
     if symbol in position_symbols:
         return "🟢 ENTERED"
     if symbol in approved_symbols:
         return "🔵 QUALIFIED / NOT ENTERED"
+    if record and str(record.get("reason", "")).strip():
+        return "🔴 NOT QUALIFIED"
     if gap_type == "GAP_UP":
-        return "🟡 GAP UP / WAITING"
+        return "🟡 GAP UP / WAITING" if market_change >= NIFTY_THRESHOLD else "🔴 GAP UP / NIFTY FILTER"
     if gap_type == "GAP_DOWN":
-        return "🟠 GAP DOWN / WAITING"
+        return "🟠 GAP DOWN / WAITING" if market_change <= -NIFTY_THRESHOLD else "🔴 GAP DOWN / NIFTY FILTER"
     return "⚪ WAITING"
 
 
@@ -118,16 +125,23 @@ board["NIFTY 500"] = "BUY" if market_change >= NIFTY_THRESHOLD else "SELL" if ma
 
 
 def reason(row):
+    symbol = str(row.get("Symbol", "")).upper()
+    record = latest_signal.get(symbol, {})
+    recorded = str(record.get("reason", "")).strip()
     status_text = row["Status"]
     if "ENTERED" in status_text:
         return "Position open"
+    if recorded:
+        return recorded
     if "QUALIFIED" in status_text:
-        return "Qualified by strategy; entry not recorded"
+        return "Qualified signal; entry not recorded"
+    if "NIFTY FILTER" in status_text:
+        return "NIFTY 500 filter does not support this direction"
     if "GAP UP" in status_text:
-        return "Waiting for BUY PDH/Today's Open setup"
+        return "Waiting for PDH breach and return above Today's Open"
     if "GAP DOWN" in status_text:
-        return "Waiting for SELL PDL/Today's Open setup"
-    return "No gap setup"
+        return "Waiting for PDL breach and return below Today's Open"
+    return "Open is inside PDH/PDL range"
 
 
 board["Reason"] = board.apply(reason, axis=1)
@@ -183,5 +197,5 @@ cap_cols = st.columns(len(capital_items))
 for col, (label, value) in zip(cap_cols, capital_items):
     col.metric(label, value)
 
-st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Entry/rejection reasons are shown only when the underlying state records enough information; the dashboard does not invent cash rejection reasons.")
+st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Rejection reasons come from recorded scanner/risk results when available; the dashboard does not invent a reason.")
 render_daily_footer()
