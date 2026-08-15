@@ -114,9 +114,9 @@ def monthly_excel(month):
         pd.DataFrame([
             ["Month", month],
             ["Strategy", "NIFTY 500 PDH/PDL + Today's Open return"],
-            ["BUY", "NIFTY 500 ≥ +0.25% → Open > PDH → 1m Close below PDH → 1m Close returns to Today's Open → rank → news → current market entry"],
-            ["SELL", "NIFTY 500 ≤ −0.25% → Open < PDL → 1m Close above PDL → 1m Close returns to Today's Open → rank → news → current market entry"],
-            ["Ranking", "ATR% → RVOL → Beta → traded value, applied only after qualification"],
+            ["BUY", "NIFTY 500 ≥ +0.25% → Open > PDH → 1m Close below PDH → 1m Close returns to Today's Open → ATR rank → news → current market entry"],
+            ["SELL", "NIFTY 500 ≤ −0.25% → Open < PDL → 1m Close above PDL → 1m Close returns to Today's Open → ATR rank → news → current market entry"],
+            ["Ranking", "ATR% highest first, applied only after full price-action qualification"],
             ["News", "Yahoo Finance recent headline → deterministic contextual phrase analysis → BUY requires POSITIVE; SELL requires NEGATIVE; NEUTRAL/no usable news rejects"],
             ["Risk", "BUY SL = PDH; SELL SL = PDL; Target = 1.25 × entry-to-SL risk"],
             ["Risk limits", "₹1,400–₹1,500 per trade; maximum 2 positions; ₹3,000 daily max loss"],
@@ -159,8 +159,8 @@ st.subheader("📰 News Research Data")
 st.download_button("⬇️ NEWS MASTER CSV", data=news.to_csv(index=False).encode("utf-8") if not news.empty else file_bytes("MASTER_NEWS_ANALYSIS.csv", ["TradeDate", "timestamp", "candidate_id", "symbol", "signal", "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_source", "news_checked_at", "approved"]), file_name="NSE_CATALYST_MASTER_NEWS_ANALYSIS.csv", mime="text/csv", width="stretch")
 
 st.subheader("📁 Trading Data")
-st.download_button("⬇️ TRADES CSV", data=trades.to_csv(index=False).encode() if not trades.empty else file_bytes("trades.csv", ["trade_id", "status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "risk", "actual_risk", "pnl", "candidate_id", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "news_sentiment", "news_headline"]), file_name="nifty500_trades.csv", mime="text/csv", width="stretch")
-st.download_button("⬇️ SIGNALS CSV", data=signals.to_csv(index=False).encode() if not signals.empty else file_bytes("signals.csv", ["timestamp", "symbol", "signal", "candidate_id", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk", "approved", "reason", "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_checked_at", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "candidate_state", "entry_source"]), file_name="nifty500_signals.csv", mime="text/csv", width="stretch")
+st.download_button("⬇️ TRADES CSV", data=trades.to_csv(index=False).encode() if not trades.empty else file_bytes("trades.csv", ["trade_id", "status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "risk", "actual_risk", "pnl", "candidate_id", "atr_pct", "priority_rank", "news_sentiment", "news_headline"]), file_name="nifty500_trades.csv", mime="text/csv", width="stretch")
+st.download_button("⬇️ SIGNALS CSV", data=signals.to_csv(index=False).encode() if not signals.empty else file_bytes("signals.csv", ["timestamp", "symbol", "signal", "candidate_id", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk", "approved", "reason", "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_checked_at", "atr_pct", "priority_rank", "candidate_state", "entry_source"]), file_name="nifty500_signals.csv", mime="text/csv", width="stretch")
 st.download_button("⬇️ PREMARKET GAP BOARD CSV", data=gaps.to_csv(index=False).encode() if not gaps.empty else file_bytes("gap_analysis.csv", ["Symbol", "Industry", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "GapFromPreviousClose", "GapPercentFromPreviousClose"]), file_name="nifty500_premarket_gap_board.csv", mime="text/csv", width="stretch")
 
 st.subheader("⏳ Scanner State")
