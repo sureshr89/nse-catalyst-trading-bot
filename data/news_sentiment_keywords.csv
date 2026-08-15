@@ -1,0 +1,139 @@
+keyword,sentiment,priority
+profit growth,POSITIVE,HIGH
+profit rises,POSITIVE,HIGH
+profit increased,POSITIVE,HIGH
+profit jumps,POSITIVE,HIGH
+profit surges,POSITIVE,HIGH
+earnings beat,POSITIVE,HIGH
+revenue growth,POSITIVE,HIGH
+strong earnings,POSITIVE,HIGH
+better than expected,POSITIVE,HIGH
+above expectations,POSITIVE,HIGH
+raises guidance,POSITIVE,HIGH
+upgrades guidance,POSITIVE,HIGH
+major order,POSITIVE,HIGH
+order win,POSITIVE,HIGH
+order secured,POSITIVE,HIGH
+contract win,POSITIVE,HIGH
+major contract,POSITIVE,HIGH
+project awarded,POSITIVE,HIGH
+capacity expansion,POSITIVE,MEDIUM
+market share gains,POSITIVE,HIGH
+strategic partnership,POSITIVE,MEDIUM
+acquisition approved,POSITIVE,MEDIUM
+debt reduction,POSITIVE,HIGH
+credit rating upgrade,POSITIVE,HIGH
+buyback announced,POSITIVE,MEDIUM
+dividend increase,POSITIVE,MEDIUM
+record sales,POSITIVE,HIGH
+record revenue,POSITIVE,HIGH
+record profit,POSITIVE,HIGH
+strong demand,POSITIVE,HIGH
+cost reduction,POSITIVE,MEDIUM
+margin improvement,POSITIVE,HIGH
+cash flow improves,POSITIVE,HIGH
+regulatory approval,POSITIVE,HIGH
+funding secured,POSITIVE,MEDIUM
+profit decline,NEGATIVE,HIGH
+profit falls,NEGATIVE,HIGH
+profit drops,NEGATIVE,HIGH
+profit plunges,NEGATIVE,HIGH
+profit slumps,NEGATIVE,HIGH
+profit misses estimates,NEGATIVE,HIGH
+earnings miss,NEGATIVE,HIGH
+revenue decline,NEGATIVE,HIGH
+weak earnings,NEGATIVE,HIGH
+below expectations,NEGATIVE,HIGH
+worse than expected,NEGATIVE,HIGH
+cuts guidance,NEGATIVE,HIGH
+lowers guidance,NEGATIVE,HIGH
+order cancelled,NEGATIVE,HIGH
+order cancellation,NEGATIVE,HIGH
+major order lost,NEGATIVE,HIGH
+contract cancelled,NEGATIVE,HIGH
+contract loss,NEGATIVE,HIGH
+project cancelled,NEGATIVE,HIGH
+project delayed,NEGATIVE,MEDIUM
+plant shutdown,NEGATIVE,HIGH
+production halt,NEGATIVE,HIGH
+market share loss,NEGATIVE,HIGH
+demand slowdown,NEGATIVE,HIGH
+weak demand,NEGATIVE,HIGH
+acquisition failed,NEGATIVE,HIGH
+debt increase,NEGATIVE,HIGH
+rising debt,NEGATIVE,HIGH
+default,NEGATIVE,HIGH
+credit rating downgrade,NEGATIVE,HIGH
+regulatory penalty,NEGATIVE,HIGH
+regulatory action,NEGATIVE,HIGH
+investigation,NEGATIVE,HIGH
+fraud allegation,NEGATIVE,HIGH
+fraud probe,NEGATIVE,HIGH
+accounting issue,NEGATIVE,HIGH
+governance issue,NEGATIVE,HIGH
+management resignation,NEGATIVE,HIGH
+promoter pledge increase,NEGATIVE,HIGH
+dividend cut,NEGATIVE,MEDIUM
+loss widens,NEGATIVE,HIGH
+cash flow deterioration,NEGATIVE,HIGH
+margin pressure,NEGATIVE,HIGH
+margin decline,NEGATIVE,HIGH
+cost increase,NEGATIVE,MEDIUM
+legal setback,NEGATIVE,HIGH
+adverse order,NEGATIVE,HIGH
+license revoked,NEGATIVE,HIGH
+approval rejected,NEGATIVE,HIGH
+product recall,NEGATIVE,HIGH
+data breach,NEGATIVE,HIGH
+cyberattack,NEGATIVE,HIGH
+supply disruption,NEGATIVE,HIGH
+business disruption,NEGATIVE,HIGH
+board meeting,NEUTRAL,MEDIUM
+board meeting scheduled,NEUTRAL,MEDIUM
+investor meeting,NEUTRAL,MEDIUM
+earnings call,NEUTRAL,MEDIUM
+results announcement,NEUTRAL,MEDIUM
+quarterly results,NEUTRAL,MEDIUM
+annual results,NEUTRAL,MEDIUM
+financial results,NEUTRAL,MEDIUM
+business update,NEUTRAL,MEDIUM
+corporate update,NEUTRAL,MEDIUM
+exchange filing,NEUTRAL,MEDIUM
+regulatory filing,NEUTRAL,MEDIUM
+corporate announcement,NEUTRAL,MEDIUM
+shareholder meeting,NEUTRAL,MEDIUM
+annual general meeting,NEUTRAL,MEDIUM
+record date,NEUTRAL,MEDIUM
+credit rating,NEUTRAL,MEDIUM
+rating reaffirmed,NEUTRAL,MEDIUM
+rating review,NEUTRAL,MEDIUM
+analyst coverage,NEUTRAL,MEDIUM
+brokerage report,NEUTRAL,MEDIUM
+target price,NEUTRAL,MEDIUM
+management commentary,NEUTRAL,MEDIUM
+company statement,NEUTRAL,MEDIUM
+conference call,NEUTRAL,MEDIUM
+investor call,NEUTRAL,MEDIUM
+order book update,NEUTRAL,MEDIUM
+project update,NEUTRAL,MEDIUM
+expansion plan,NEUTRAL,MEDIUM
+new product,NEUTRAL,MEDIUM
+product launch,NEUTRAL,MEDIUM
+partnership talks,NEUTRAL,MEDIUM
+agreement signed,NEUTRAL,MEDIUM
+mou signed,NEUTRAL,MEDIUM
+strategic review,NEUTRAL,MEDIUM
+business restructuring,NEUTRAL,MEDIUM
+subsidiary update,NEUTRAL,MEDIUM
+share transfer,NEUTRAL,MEDIUM
+insider transaction,NEUTRAL,MEDIUM
+promoter holding,NEUTRAL,MEDIUM
+shareholding update,NEUTRAL,MEDIUM
+credit facility,NEUTRAL,MEDIUM
+loan agreement,NEUTRAL,MEDIUM
+refinancing,NEUTRAL,MEDIUM
+scheduled maintenance,NEUTRAL,MEDIUM
+plant maintenance,NEUTRAL,MEDIUM
+leadership appointment,NEUTRAL,MEDIUM
+director appointment,NEUTRAL,MEDIUM
+director resignation,NEUTRAL,MEDIUM
