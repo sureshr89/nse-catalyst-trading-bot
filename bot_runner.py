@@ -137,11 +137,14 @@ def _prepare_pre_entry_candidates(bot):
 def _run_one_trading_day():
     from main import TradingBot
     bot = TradingBot(); _write_status(bot, status="RUNNING", message="NIFTY 500 paper-trading bot is running.", error=None, scanner_status="IDLE", cycle_count=0, scan_count=0, worker_id=_worker_id())
+    pre_entry_ready = False
     while True:
         current = _now().strftime("%H:%M")
         if current < TRADING_START:
-            if current >= PREMARKET_PREP_TIME: _prepare_pre_entry_candidates(bot)
-            else: _write_status(bot, status="WAITING", message=f"Waiting for NIFTY 500 preparation at {PREMARKET_PREP_TIME} IST.", scanner_status="IDLE")
+            if current >= PREMARKET_PREP_TIME and not pre_entry_ready:
+                pre_entry_ready = _prepare_pre_entry_candidates(bot)
+            elif current < PREMARKET_PREP_TIME:
+                _write_status(bot, status="WAITING", message=f"Waiting for NIFTY 500 preparation at {PREMARKET_PREP_TIME} IST.", scanner_status="IDLE")
             time.sleep(10); continue
         if current < SQUARE_OFF_TIME:
             _write_status(bot, status="RUNNING", message="NIFTY 500 paper-trading bot is running.", last_cycle=_iso_now(), cycle_count=int(_state.get("cycle_count", 0)) + 1)
