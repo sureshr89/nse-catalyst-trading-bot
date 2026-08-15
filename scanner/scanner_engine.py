@@ -57,47 +57,36 @@ class ScannerEngine:
             if today.empty:continue
             try:today_open=float(today.iloc[0]["Open"]);pdc=float(ref["PreviousDayClose"]);pdh=float(ref["PDH"]);pdl=float(ref["PDL"])
             except (TypeError,ValueError):continue
-            if today_open>pdh:gap_type,setup="GAP_UP","GAP_UP_ABOVE_PDH"
-            elif today_open<pdl:gap_type,setup="GAP_DOWN","GAP_DOWN_BELOW_PDL"
-            else:gap_type,setup="INSIDE_PDH_PDL","NO_GAP_SETUP"
-            gap_from_close=today_open-pdc;gap_pct=(gap_from_close/pdc*100) if pdc else 0.0
-            gaps.append({"Symbol":symbol,"PreviousClose":round(pdc,4),"TodayOpen":round(today_open,4),"Gap":round(gap_from_close,4),"GapPercent":round(gap_pct,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"]),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
+            if today_open>pdh:gap_type,setup="GAP_UP","GAP_UP_ABOVE_PDH";gap_level=pdh
+            elif today_open<pdl:gap_type,setup="GAP_DOWN","GAP_DOWN_BELOW_PDL";gap_level=pdl
+            else:gap_type,setup="INSIDE_PDH_PDL","NO_GAP_SETUP";gap_level=None
+            gap_from_level=(today_open-gap_level) if gap_level is not None else 0.0;gap_pct=(gap_from_level/gap_level*100) if gap_level else 0.0;gap_from_close=today_open-pdc;gap_pct_close=(gap_from_close/pdc*100) if pdc else 0.0
+            gaps.append({"Symbol":symbol,"PreviousClose":round(pdc,4),"TodayOpen":round(today_open,4),"Gap":round(gap_from_level,4),"GapPercent":round(gap_pct,3),"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"]),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
-            rows.append({"Symbol":symbol,"PDH":pdh,"PDL":pdl,"TodayOpen":today_open,"PreviousDayClose":pdc,"Gap":gap_from_close,"GapPercent":gap_pct,"GapType":gap_type,"OpeningSetup":setup,"PreviousDayTurnover":float(ref["PreviousDayTurnover"]),"LiquidityQualified":bool(ref["LiquidityQualified"])})
+            rows.append({"Symbol":symbol,"PDH":pdh,"PDL":pdl,"TodayOpen":today_open,"PreviousDayClose":pdc,"Gap":gap_from_level,"GapPercent":gap_pct,"GapFromPreviousClose":gap_from_close,"GapPercentFromPreviousClose":gap_pct_close,"GapType":gap_type,"OpeningSetup":setup,"PreviousDayTurnover":float(ref["PreviousDayTurnover"]),"LiquidityQualified":bool(ref["LiquidityQualified"])})
         self.gap_analysis=pd.DataFrame(gaps);self.diagnostics["gap_data_count"]=len(gaps);self.diagnostics["gap_up_count"]=sum(x["GapType"]=="GAP_UP" for x in gaps);self.diagnostics["gap_down_count"]=sum(x["GapType"]=="GAP_DOWN" for x in gaps);self._write_gap_analysis(gaps);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.opening_candidates=result;self.diagnostics["opening_setup_passed"]=len(result);return result
     def prepare_opening_candidates(self,force=False):
-        """Compatibility/pre-market helper: prepare today's gap candidates using fresh 1m prices."""
         references=self.prepare_reference_data(force=force)
         if references.empty:return pd.DataFrame()
-        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data
-        available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
-        if available<required:
-            self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();return pd.DataFrame()
+        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        if available<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();return pd.DataFrame()
         return self._build_candidates(references,market_data)
     def _aligned_coverage(self,symbols,market_data,expected):
-        aligned=0
-        for symbol in symbols:
-            data=market_data.get(symbol)
-            if data is None or data.empty:continue
-            if bool((self._ist_series(data["Datetime"])==expected).any()):aligned+=1
-        return aligned
+        return sum(1 for symbol in symbols if (data:=market_data.get(symbol)) is not None and not data.empty and bool((self._ist_series(data["Datetime"])==expected).any()))
     def scan(self):
         self.diagnostics=self._empty_diagnostics();references=self.prepare_reference_data()
         if references.empty:return self._finish([])
-        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();self.diagnostics["stocks_scanned"]=len(symbols);market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data
-        available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);coverage=available/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=coverage;required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();self.diagnostics["stocks_scanned"]=len(symbols);market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE);self.diagnostics["market_data_coverage"]=available/len(symbols) if symbols else 0.0
         if available<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();return self._finish([])
-        expected=self._latest_completed_minute();aligned=self._aligned_coverage(symbols,market_data,expected);aligned_cov=aligned/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=aligned_cov
+        expected=self._latest_completed_minute();aligned=self._aligned_coverage(symbols,market_data,expected);self.diagnostics["market_data_coverage"]=aligned/len(symbols) if symbols else 0.0
         if aligned<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-aligned;self._write_diagnostics();return self._finish([])
         self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
-        if self.nifty500_market_data.empty:self.diagnostics["rejections"]["market_alignment"]+=1;return self._finish([])
+        if self.nifty500_market_data.empty:return self._finish([])
         if REQUIRE_MARKET_ALIGNMENT and not bool((self._ist_series(self.nifty500_market_data["Datetime"])==expected).any()):self.diagnostics["rejections"]["market_alignment"]+=1;self._write_diagnostics();return self._finish([])
         nifty_change=self.price_data.get_index_change_pct("^CRSLDX")
         if nifty_change is None:return self._finish([])
         nifty_change=float(nifty_change);self.diagnostics["nifty500_change_pct"]=round(nifty_change,4)
-        if nifty_change>=NIFTY500_MIN_CHANGE_PCT:self.diagnostics["nifty500_direction"]="BULLISH";self.diagnostics["nifty500_bullish"]=1
-        elif nifty_change<=-NIFTY500_MIN_CHANGE_PCT:self.diagnostics["nifty500_direction"]="BEARISH";self.diagnostics["nifty500_bearish"]=1
-        else:self.diagnostics["nifty500_direction"]="NEUTRAL";self.diagnostics["nifty500_neutral"]=1
+        self.diagnostics["nifty500_direction"]="BULLISH" if nifty_change>=NIFTY500_MIN_CHANGE_PCT else "BEARISH" if nifty_change<=-NIFTY500_MIN_CHANGE_PCT else "NEUTRAL";self.diagnostics["nifty500_bullish"]=int(nifty_change>=NIFTY500_MIN_CHANGE_PCT);self.diagnostics["nifty500_bearish"]=int(nifty_change<=-NIFTY500_MIN_CHANGE_PCT);self.diagnostics["nifty500_neutral"]=int(abs(nifty_change)<NIFTY500_MIN_CHANGE_PCT)
         candidates=self._build_candidates(references,market_data)
         if candidates.empty:return self._finish([])
         if REQUIRE_MARKET_ALIGNMENT and abs(nifty_change)<NIFTY500_MIN_CHANGE_PCT:self.diagnostics["rejections"]["market_alignment"]=len(candidates);self._write_diagnostics();return self._finish([])
