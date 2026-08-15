@@ -2,13 +2,13 @@
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
-from config.settings import ENABLE_LONG, ENABLE_SHORT
+from config.settings import ENABLE_LONG, ENABLE_SHORT, MAX_TRIGGER_AGE_MINUTES
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
-    """Require the exact one-minute Open-vs-Today-Open reversal candle."""
+    """Generate only fresh 1-minute price-action reversal entries."""
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
@@ -37,12 +37,7 @@ class OpenReversalEngine:
             return pd.DataFrame()
         for col in ("Open", "Close"):
             result[col] = pd.to_numeric(result[col], errors="coerce")
-        return (
-            result.dropna(subset=["Datetime", "Open", "Close"])
-            .sort_values("Datetime")
-            .drop_duplicates("Datetime")
-            .reset_index(drop=True)
-        )
+        return result.dropna(subset=["Datetime", "Open", "Close"]).sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
 
     @staticmethod
     def _current_minute():
@@ -56,13 +51,7 @@ class OpenReversalEngine:
         return prices[(prices["Datetime"] < now) & (prices["Datetime"].dt.date == now.date())].copy()
 
     def _trigger_candle(self, today_data, today_open, pdh, pdl, side):
-        """Find a fresh 1m candle after the PDH/PDL breach.
-
-        BUY: Today Open > PDH -> price closes below PDH -> later one candle
-             opens below Today's Open and closes above Today's Open.
-        SELL: Today Open < PDL -> price closes above PDL -> later one candle
-              opens above Today's Open and closes below Today's Open.
-        """
+        """Find the latest completed 1-minute reversal after the required PDH/PDL breach."""
         prices = self._completed_prices(today_data)
         if prices.empty:
             return None
@@ -82,40 +71,29 @@ class OpenReversalEngine:
                     breached = True
                     breach_time = stamp
                     continue
-                if (
-                    breached
-                    and stamp > breach_time
-                    and self.start <= stamp.time() <= self.end
-                    and candle_open < float(today_open)
-                    and candle_close > float(today_open)
-                ):
+                if breached and stamp > breach_time and self.start <= stamp.time() <= self.end and candle_open < float(today_open) and candle_close > float(today_open):
                     latest = row
             else:
                 if candle_close > level:
                     breached = True
                     breach_time = stamp
                     continue
-                if (
-                    breached
-                    and stamp > breach_time
-                    and self.start <= stamp.time() <= self.end
-                    and candle_open > float(today_open)
-                    and candle_close < float(today_open)
-                ):
+                if breached and stamp > breach_time and self.start <= stamp.time() <= self.end and candle_open > float(today_open) and candle_close < float(today_open):
                     latest = row
 
+        if latest is None:
+            return None
+
+        age_minutes = (self._current_minute() - latest["Datetime"]).total_seconds() / 60.0
+        if age_minutes < 0 or age_minutes > float(MAX_TRIGGER_AGE_MINUTES):
+            return None
         return latest
 
     @staticmethod
     def _trigger_key(symbol, trigger_time, side, nifty_change_pct):
         stamp = pd.Timestamp(trigger_time)
         stamp = stamp.tz_localize(INDIA_TZ) if stamp.tzinfo is None else stamp.tz_convert(INDIA_TZ)
-        return (
-            str(symbol).upper(),
-            stamp.isoformat(),
-            str(side).upper(),
-            round(float(nifty_change_pct), 3),
-        )
+        return (str(symbol).upper(), stamp.isoformat(), str(side).upper(), round(float(nifty_change_pct), 3))
 
     def _trade(self, side, symbol, trigger, today_open, pdh, pdl, nifty_change_pct):
         entry = float(trigger["Close"])
@@ -139,7 +117,7 @@ class OpenReversalEngine:
             "today_open": round(float(today_open), 4),
             "market_direction": "BULLISH" if nifty_change_pct >= 0.25 else "BEARISH",
             "nifty500_change_pct": round(float(nifty_change_pct), 4),
-            "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL_1M_CANDLE",
+            "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL_1M",
             "pdh_pdl_reached": True,
             "trigger_candle_open": round(float(trigger["Open"]), 4),
             "trigger_candle_close": round(float(trigger["Close"]), 4),
