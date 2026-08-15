@@ -55,17 +55,15 @@ elif status_value == "WAITING":
 else:
     st.warning(message)
 
-# Use the same responsive 2-column metric-card component as Current Trading.
-# On mobile this remains a clean 2 x 2 grid instead of Streamlit's default
-# four-column layout stacking vertically.
-def metric_cards(items):
-    html = '<div class="metric-grid">'
-    for label, value in items:
-        html += f'<div class="metric-card"><small>{label}</small><b>{value}</b></div>'
-    html += '</div>'
+# Use the same responsive 2×2 metric-card component as Current Trading.
+def cards(items):
+    html = "<div class='metric-grid'>" + "".join(
+        f"<div class='metric-card'><small>{label}</small><b>{value}</b></div>"
+        for label, value in items
+    ) + "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
-metric_cards([
+cards([
     ("Bot Status", status_value),
     ("Open Positions", int(status.get("open_positions", 0) or 0)),
     ("Available Capital", f"₹{float(status.get('available_capital', 0) or 0):,.0f}"),
