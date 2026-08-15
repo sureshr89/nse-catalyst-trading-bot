@@ -56,18 +56,32 @@ def enrich_trade_data(frame):
  if "mae" not in out.columns:out["mae"]=pd.NA
  if "mfe" not in out.columns:out["mfe"]=pd.NA
  return out
+def canonical_trade_key(frame):
+ if frame.empty:return frame
+ out=frame.copy()
+ # MASTER_TRADES is the canonical trade dataset. This fallback deduplicates
+ # legacy rows where the same trade was written more than once.
+ preferred=[c for c in ["trade_id","id"] if c in out.columns]
+ if preferred: return out.drop_duplicates(subset=preferred[0],keep="last")
+ key_cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity"] if c in out.columns]
+ if key_cols:return out.drop_duplicates(subset=key_cols,keep="last")
+ return out.drop_duplicates(keep="last")
+def canonical_master_trades():
+ master=read_csv("MASTER_TRADES.csv")
+ if not master.empty:return canonical_trade_key(master)
+ return canonical_trade_key(read_csv("trades.csv"))
 def monthly_record_counts():
  counts={m:0 for m in last_six_calendar_months()}
  for filename,date_columns in [("MASTER_DAILY_STOCK_DATA.csv",["TradeDate"]),("MASTER_TRADES.csv",["TradeDate","entry_time","exit_time"]),("MASTER_DAILY_SUMMARY.csv",["TradeDate"])]:
   frame=read_csv(filename)
+  if filename=="MASTER_TRADES.csv":frame=canonical_trade_key(frame)
   if frame.empty:continue
   keys=_month_series(frame,date_columns)
   for month in counts:counts[month]+=int(keys.eq(month).sum())
  return counts
 def build_monthly_master_excel(month):
- daily_stock=read_csv("MASTER_DAILY_STOCK_DATA.csv");trades=enrich_trade_data(read_csv("MASTER_TRADES.csv"))
- if trades.empty:trades=enrich_trade_data(read_csv("trades.csv"))
- signals=read_csv("signals.csv");sheets={"Daily Stock Inputs":(daily_stock,["TradeDate"]),"All Trades":(trades,["TradeDate","entry_time","exit_time"]),"Daily Summary":(read_csv("MASTER_DAILY_SUMMARY.csv"),["TradeDate"]),"Gap Board":(daily_stock,["TradeDate"]),"Signals":(signals,["timestamp"])};output=BytesIO()
+ daily_stock=read_csv("MASTER_DAILY_STOCK_DATA.csv");trades=enrich_trade_data(canonical_master_trades());signals=read_csv("signals.csv")
+ sheets={"Daily Stock Inputs":(daily_stock,["TradeDate"]),"All Trades":(trades,["TradeDate","entry_time","exit_time"]),"Daily Summary":(read_csv("MASTER_DAILY_SUMMARY.csv"),["TradeDate"]),"Gap Board":(daily_stock,["TradeDate"]),"Signals":(signals,["timestamp"])};output=BytesIO()
  with pd.ExcelWriter(output,engine="openpyxl") as writer:
   for sheet_name,(frame,date_columns) in sheets.items():
    monthly=filter_month(frame,month,date_columns)
@@ -83,8 +97,8 @@ def build_monthly_master_excel(month):
 try:build_master_data()
 except Exception as error:st.warning(f"Master data refresh warning: {type(error).__name__}: {error}")
 st.title("⬇️ Downloads");st.caption("NIFTY 500 PDH/PDL → today's Open 1-minute reversal paper-trading records, premarket PDH/PDL gap board and master research data.")
-trades_frame=enrich_trade_data(read_csv("trades.csv"));signals_frame=read_csv("signals.csv");trades_data=trades_frame.to_csv(index=False).encode("utf-8") if not trades_frame.empty else csv_bytes("trades.csv",["status","symbol","signal","entry_time","exit_time","entry","stop_loss","target","quantity","pnl","setup_type","Signal Quality Score","Why This Trade","mae","mfe"]);signals_data=signals_frame.to_csv(index=False).encode("utf-8") if not signals_frame.empty else csv_bytes("signals.csv",["timestamp","symbol","signal","entry","stop_loss","target","setup_type","approved","reason"]);gap_data=csv_bytes("gap_analysis.csv",["Symbol","PreviousClose","TodayOpen","Gap","GapPercent","GapType","PDH","PDL","GapFromPreviousClose","GapPercentFromPreviousClose","PreparedAtIST"]);status_data=json_bytes("bot_status.json",{"status":"WAITING","worker_alive":False});engine_data=json_bytes("paper_engine_state.json",{"open_positions":{},"available_capital":250000});diag_data=json_bytes("scanner_diagnostics.json",{"stocks_scanned":0,"gap_up_count":0,"gap_down_count":0,"final_signals":0,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
-st.subheader("⭐ Master Trading Data — Last 6 Months");st.caption("Monthly files are generated from the latest available output files on each page load; no stale generated workbook is reused.")
+trades_frame=enrich_trade_data(canonical_master_trades());signals_frame=read_csv("signals.csv");trades_data=trades_frame.to_csv(index=False).encode("utf-8") if not trades_frame.empty else csv_bytes("trades.csv",["status","symbol","signal","entry_time","exit_time","entry","stop_loss","target","quantity","pnl","setup_type","Signal Quality Score","Why This Trade","mae","mfe"]);signals_data=signals_frame.to_csv(index=False).encode("utf-8") if not signals_frame.empty else csv_bytes("signals.csv",["timestamp","symbol","signal","entry","stop_loss","target","setup_type","approved","reason"]);gap_data=csv_bytes("gap_analysis.csv",["Symbol","PreviousClose","TodayOpen","Gap","GapPercent","GapType","PDH","PDL","GapFromPreviousClose","GapPercentFromPreviousClose","PreparedAtIST"]);status_data=json_bytes("bot_status.json",{"status":"WAITING","worker_alive":False});engine_data=json_bytes("paper_engine_state.json",{"open_positions":{},"available_capital":250000});diag_data=json_bytes("scanner_diagnostics.json",{"stocks_scanned":0,"gap_up_count":0,"gap_down_count":0,"final_signals":0,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL"})
+st.subheader("⭐ Master Trading Data — Last 6 Months");st.caption("Monthly workbooks use the canonical master trade dataset and are rebuilt from current data on each page load.")
 six_months=last_six_calendar_months();counts=monthly_record_counts();month_rows=pd.DataFrame([{"Month":pd.Timestamp(month+"-01").strftime("%B %Y"),"File":f"NSE_CATALYST_MASTER_TRADING_DATA_{month}.xlsx","Records":counts.get(month,0),"Status":"Available" if counts.get(month,0) else "No data yet"} for month in six_months]);st.dataframe(month_rows,use_container_width=True,hide_index=True,height=255)
 selected_month=st.selectbox("📅 Select a month to download",six_months,format_func=lambda x:pd.Timestamp(x+"-01").strftime("%B %Y"),index=0,key="master_month_select");monthly_excel=build_monthly_master_excel(selected_month);st.download_button(f"⬇️ DOWNLOAD MASTER — {pd.Timestamp(selected_month+'-01').strftime('%B %Y')}",data=monthly_excel,file_name=f"NSE_CATALYST_MASTER_TRADING_DATA_{selected_month}.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",key="download_master_monthly_excel",width="stretch");st.caption("Monthly workbook: Daily Stock Inputs • All Trades + research fields • Daily Summary • Gap Board • Signals • README")
 st.subheader("Paper Trading Files");st.download_button("⬇️ TRADES CSV",data=trades_data,file_name="nifty500_trades.csv",mime="text/csv",key="download_trades_csv",width="stretch");st.download_button("⬇️ SIGNALS CSV",data=signals_data,file_name="nifty500_pdh_pdl_signals.csv",mime="text/csv",key="download_signals_csv",width="stretch");st.download_button("⬇️ BOT STATUS JSON",data=status_data,file_name="nifty500_bot_status.json",mime="application/json",key="download_bot_status_json",width="stretch");st.download_button("⬇️ PAPER STATE JSON",data=engine_data,file_name="nifty500_paper_engine_state.json",mime="application/json",key="download_paper_engine_json",width="stretch");st.download_button("⬇️ SCANNER DIAGNOSTICS JSON",data=diag_data,file_name="nifty500_scanner_diagnostics.json",mime="application/json",key="download_scanner_diagnostics_json",width="stretch");st.download_button("⬇️ PREMARKET GAP BOARD CSV",data=gap_data,file_name="nifty500_premarket_gap_board.csv",mime="text/csv",key="download_gap_board_csv",width="stretch")
