@@ -110,7 +110,7 @@ class OpenReversalEngine:
 
     @staticmethod
     def _setup_window(data, trigger, pdh, pdl, side):
-        """Return candles from the first PDH/PDL touch through the trigger candle."""
+        """Return candles from the latest PDH/PDL touch through the trigger candle."""
         if data is None or data.empty or trigger is None:
             return pd.DataFrame()
         completed = data[data["Datetime"] <= trigger["Datetime"]].copy()
@@ -122,7 +122,7 @@ class OpenReversalEngine:
             reached = completed[completed["High"] >= float(pdl)]
         if reached.empty:
             return pd.DataFrame()
-        level_time = reached.iloc[0]["Datetime"]
+        level_time = reached.iloc[-1]["Datetime"]
         return completed[completed["Datetime"] >= level_time]
 
     def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
