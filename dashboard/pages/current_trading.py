@@ -56,13 +56,23 @@ def candle_label(pct): return "—" if pct is None else f"{pct:+.2f}%"
 
 @st.cache_data(ttl=5, show_spinner=False)
 def live_alignment_for_positions(symbols):
-    """Live alignment for currently active positions only."""
+    """Compare NIFTY 500 and each active stock only on the same completed 1-minute timestamp."""
     symbols=[str(s).upper().replace(".NS","") for s in symbols if str(s).strip()]
     if not symbols: return pd.DataFrame()
-    price=PriceData(); nifty_df=price.get_index_1m("^CRSLDX"); nifty=None if nifty_df.empty else nifty_df.iloc[-1].to_dict(); stock_data=price.get_multi_1m(symbols); rows=[]; nifty_pct=candle_pct(nifty)
+    price=PriceData(); nifty_df=price.get_index_1m("^CRSLDX"); stock_data=price.get_multi_1m(symbols)
+    if nifty_df.empty: return pd.DataFrame()
+    nifty_df=nifty_df.copy(); nifty_df["Datetime"]=pd.to_datetime(nifty_df["Datetime"],errors="coerce")
+    nifty_df=nifty_df.dropna(subset=["Datetime"]).drop_duplicates("Datetime").set_index("Datetime")
+    rows=[]
     for symbol in symbols:
-        df=stock_data.get(symbol,pd.DataFrame()); stock_candle=df.iloc[-1].to_dict() if df is not None and not df.empty else None; stock_pct=candle_pct(stock_candle)
-        rows.append({"Stock":symbol,"NIFTY 500 1m %":candle_label(nifty_pct),"Stock 1m %":candle_label(stock_pct),"NIFTY 500":"GREEN" if nifty_pct is not None and nifty_pct>0 else "RED" if nifty_pct is not None and nifty_pct<0 else "NEUTRAL","Stock Candle":"GREEN" if stock_pct is not None and stock_pct>0 else "RED" if stock_pct is not None and stock_pct<0 else "NEUTRAL","Candle Time":stock_candle.get("Datetime") if stock_candle else (nifty.get("Datetime") if nifty else "—")})
+        df=stock_data.get(symbol,pd.DataFrame())
+        if df is None or df.empty or "Datetime" not in df.columns: continue
+        df=df.copy(); df["Datetime"]=pd.to_datetime(df["Datetime"],errors="coerce"); df=df.dropna(subset=["Datetime"]).drop_duplicates("Datetime").set_index("Datetime")
+        common=nifty_df.index.intersection(df.index)
+        if len(common)==0: continue
+        timestamp=common.max(); nifty_candle=nifty_df.loc[timestamp].to_dict(); stock_candle=df.loc[timestamp].to_dict()
+        nifty_pct=candle_pct(nifty_candle); stock_pct=candle_pct(stock_candle)
+        rows.append({"Stock":symbol,"NIFTY 500 1m %":candle_label(nifty_pct),"Stock 1m %":candle_label(stock_pct),"NIFTY 500":"GREEN" if nifty_pct is not None and nifty_pct>0 else "RED" if nifty_pct is not None and nifty_pct<0 else "NEUTRAL","Stock Candle":"GREEN" if stock_pct is not None and stock_pct>0 else "RED" if stock_pct is not None and stock_pct<0 else "NEUTRAL","Candle Time":timestamp})
     return pd.DataFrame(rows)
 
 
@@ -99,7 +109,7 @@ if pos:
 else: st.info("No open paper positions.")
 
 st.subheader("Live Alignment — Open Positions")
-st.caption("NIFTY 500 and stock percentages use the latest completed 1-minute candle. The page and alignment cache refresh every 5 seconds.")
+st.caption("NIFTY 500 and stock percentages use the latest completed 1-minute candle shared by both datasets. The page and alignment cache refresh every 5 seconds.")
 if pos:
     try:
         live_df=live_alignment_for_positions(list(pos.keys()))
