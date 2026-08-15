@@ -13,7 +13,7 @@ from market.price_data import PriceData
 from papertrade.persistent_storage import restore_json, sync_json
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
-STATE_VERSION = 2
+STATE_VERSION = 3
 
 
 class PaperTradeEngine:
@@ -64,7 +64,7 @@ class PaperTradeEngine:
             for position in self.open_positions.values():
                 position.setdefault("mae", 0.0); position.setdefault("mfe", 0.0)
             for position in self.closed_positions:
-                position.setdefault("mae", 0.0); position.setdefault("mfe", 0.0)
+                position.setdefault("mae", 0.0); position.setdefault("mfe", 0.0); position.setdefault("exit_reason", "")
             self.total_capital = float(state.get("total_capital", TOTAL_CAPITAL) or TOTAL_CAPITAL)
             counters = [self._trade_number(p.get("trade_id")) for p in self.open_positions.values()] + [self._trade_number(p.get("trade_id")) for p in self.closed_positions]
             counter = int(state.get("trade_counter", 0) or 0)
@@ -154,9 +154,6 @@ class PaperTradeEngine:
         if not self.has_open_position(symbol): return None
         exit_price = self._number(exit_price)
         if exit_price is None or exit_price <= 0: return None
-        # For square-off, the caller supplies the current/latest market price.
-        # Do not replace it with an older completed 1-minute candle: at exactly
-        # 15:00 that would otherwise execute the paper square-off at 14:59.
         position = self.open_positions[symbol]; pnl = self.calculate_pnl(position["signal"], position["entry"], exit_price, position["quantity"])
         position.update({"status": "CLOSED", "exit_time": exit_time, "exit_price": round(exit_price, 4), "exit_reason": reason, "pnl": pnl})
         closed = position.copy(); self.closed_positions.append(closed)
@@ -165,6 +162,7 @@ class PaperTradeEngine:
         del self.open_positions[symbol]; self._save_state(); return closed
 
     def process_candle(self, symbol, candle):
+        """Process one completed candle; ambiguous OHLC hits are recorded conservatively."""
         symbol = str(symbol).strip().upper()
         if not self.has_open_position(symbol): return None
         if not isinstance(candle, dict):
@@ -176,6 +174,11 @@ class PaperTradeEngine:
         signal = position["signal"]; stop = float(position["stop_loss"]); target = float(position["target"])
         if signal == "BUY": sl_hit, target_hit = low <= stop, high >= target
         else: sl_hit, target_hit = high >= stop, low <= target
+        if sl_hit and target_hit:
+            # OHLC data cannot tell which level was touched first inside the minute.
+            # Keep the conservative stop-first assumption, but explicitly record that
+            # the candle was ambiguous so analysis does not mistake it for a normal SL.
+            return self.close_position(symbol, stop, candle_time, "AMBIGUOUS_CANDLE_STOP_FIRST")
         if sl_hit: return self.close_position(symbol, stop, candle_time, "STOP_LOSS")
         if target_hit: return self.close_position(symbol, target, candle_time, "TARGET")
         self._save_state()
