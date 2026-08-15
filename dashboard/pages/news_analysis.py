@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[1]
@@ -39,6 +40,10 @@ def read_frame(path):
     except Exception:
         return pd.DataFrame()
 
+def chart(fig, key, height=320):
+    fig.update_layout(height=height, margin=dict(l=8,r=8,t=42,b=8), template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", size=12))
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=key)
+
 df = read_frame(NEWS)
 if df.empty:
     df = read_frame(SIGNALS)
@@ -73,6 +78,33 @@ c1.metric("News Decisions", len(df))
 c2.metric("🟢 Positive", int((sentiment == "POSITIVE").sum()))
 c3.metric("🔴 Negative", int((sentiment == "NEGATIVE").sum()))
 c4.metric("⚪ Neutral", int((sentiment == "NEUTRAL").sum()))
+
+# Visual research dashboard
+st.subheader("📊 News Performance Overview")
+summary_sent = pd.DataFrame({"Sentiment": sentiment}).value_counts().reset_index(name="Decisions")
+summary_gate = pd.DataFrame({"Decision": df["ApprovedBool"].map({True:"PASSED",False:"REJECTED"})}).value_counts().reset_index(name="Decisions")
+a, b = st.columns(2)
+with a:
+    chart(px.bar(summary_sent, x="Sentiment", y="Decisions", text="Decisions", title="Sentiment Distribution"), "news_sentiment", 320)
+with b:
+    chart(px.pie(summary_gate, names="Decision", values="Decisions", title="News Gate: Passed vs Rejected"), "news_gate", 320)
+
+chart_df = df.copy()
+if "TradeDate" in chart_df.columns:
+    daily = chart_df.groupby(["TradeDate", "news_sentiment"], as_index=False).size().rename(columns={"size":"Decisions"})
+    if not daily.empty:
+        chart(px.bar(daily, x="TradeDate", y="Decisions", color="news_sentiment", title="Daily News Decisions by Sentiment"), "daily_sentiment", 340)
+
+if "signal" in df.columns:
+    side_news = df.assign(Side=df["signal"].astype(str).str.upper()).groupby(["Side","news_sentiment"], as_index=False).size().rename(columns={"size":"Decisions"})
+    if not side_news.empty:
+        chart(px.bar(side_news, x="Side", y="Decisions", color="news_sentiment", barmode="group", title="BUY vs SELL News Decisions"), "side_news", 340)
+
+if "news_confidence" in df.columns and df["news_confidence"].notna().any():
+    chart(px.histogram(df.dropna(subset=["news_confidence"]), x="news_confidence", nbins=10, title="News Confidence Distribution"), "confidence", 320)
+
+if "atr_pct" in df.columns and df["atr_pct"].notna().any():
+    chart(px.histogram(df.dropna(subset=["atr_pct"]), x="atr_pct", nbins=12, title="ATR% of News-Checked Candidates"), "atr_news", 320)
 
 st.subheader("Today's News Gate")
 today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
