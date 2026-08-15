@@ -88,12 +88,11 @@ class TradingBot:
         except Exception as error:print("Master data finalization skipped:",type(error).__name__,error)
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
-            quote=self.price_data.get_latest_available_1m(symbol)
+            quote=self.price_data.get_latest_market_price(symbol)
             if not quote:
-                try: quote=self.latest_1m_candle(symbol)
-                except Exception: quote=None
-            if not quote:continue
-            closed=self.paper_engine.close_position(symbol,quote.get("Close"),quote.get("Datetime") or self._now().replace(second=0,microsecond=0),"SQUARE_OFF")
+                print(f"15:00 square-off price unavailable for {symbol}; retrying on next worker cycle")
+                continue
+            closed=self.paper_engine.close_position(symbol,quote.get("Close"),quote.get("Datetime") or self._now(),"SQUARE_OFF")
             if closed is not None:self.journal.log_trade(closed)
         self.daily_pnl=self._restore_daily_pnl();self._persist_master_data();self.square_off_done=not bool(self.paper_engine.open_positions)
     def scan_for_entries(self):
