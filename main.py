@@ -97,7 +97,7 @@ class TradingBot:
         try:self.journal.log_signal(row)
         except Exception as error:print("Signal journal save failed:",error)
     def _attach_trade_context(self,position,signal):
-        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","liquidity_qualified","nifty500_universe","atr_pct","rvol","beta","traded_value","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type","news_sentiment","news_confidence","news_headline","news_reason","news_source")
+        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","nifty500_universe","atr_pct","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type","news_sentiment","news_confidence","news_headline","news_reason","news_source")
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
@@ -142,8 +142,6 @@ class TradingBot:
         signal["trigger_entry_time"]=entry_time;key=self.signal_key(signal);symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol or key in self.processed_signals:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
-        # Final confirmation: Yahoo Finance headline sentiment is checked immediately
-        # before risk approval/slot allocation. Ambiguous/no-news is fail-closed.
         news_pass=self._apply_news_gate(signal)
         if not news_pass:
             self.log_signal(signal,{"approved":False,"reasons":[f"NEWS_{signal.get('news_sentiment','NEUTRAL')}"]})
