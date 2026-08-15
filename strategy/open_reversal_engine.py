@@ -1,17 +1,14 @@
-"""NIFTY 500 PDH/PDL + today's Open 1-minute reversal strategy."""
-
+"""Direct 1-minute price strategy for the NIFTY 500 PDH/PDL + Today's Open reversal setup."""
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-
 import pandas as pd
-
-from config.settings import ENABLE_LONG, ENABLE_SHORT, MAX_TRIGGER_AGE_MINUTES
+from config.settings import ENABLE_LONG, ENABLE_SHORT
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
-    """Build a fresh signal after the correct PDH/PDL break and completed Open cross."""
+    """Generate signals from 1-minute prices only; no candlestick confirmation is required."""
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
@@ -25,173 +22,134 @@ class OpenReversalEngine:
         return time(h, m)
 
     @staticmethod
-    def _clean(df):
-        if df is None or df.empty:
+    def _clean_prices(data):
+        if data is None or data.empty or "Datetime" not in data.columns or "Close" not in data.columns:
             return pd.DataFrame()
-        data = df.copy()
-        required = ["Datetime", "Open", "High", "Low", "Close"]
-        if any(c not in data.columns for c in required):
-            return pd.DataFrame()
-        data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
+        result = data.copy()
+        result["Datetime"] = pd.to_datetime(result["Datetime"], errors="coerce")
         try:
-            if getattr(data["Datetime"].dt, "tz", None) is None:
-                data["Datetime"] = data["Datetime"].dt.tz_localize(INDIA_TZ)
+            if result["Datetime"].dt.tz is None:
+                result["Datetime"] = result["Datetime"].dt.tz_localize(INDIA_TZ)
             else:
-                data["Datetime"] = data["Datetime"].dt.tz_convert(INDIA_TZ)
+                result["Datetime"] = result["Datetime"].dt.tz_convert(INDIA_TZ)
         except Exception:
             return pd.DataFrame()
-        for column in ["Open", "High", "Low", "Close"]:
-            data[column] = pd.to_numeric(data[column], errors="coerce")
-        return data.dropna(subset=required).sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
+        result["Close"] = pd.to_numeric(result["Close"], errors="coerce")
+        return result.dropna(subset=["Datetime", "Close"]).sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
 
     @staticmethod
-    def _direction(df):
-        if df is None or df.empty:
-            return "UNKNOWN"
-        opening, closing = float(df.iloc[0]["Open"]), float(df.iloc[-1]["Close"])
-        return "BULLISH" if closing > opening else "BEARISH" if closing < opening else "NEUTRAL"
+    def _current_minute():
+        return datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
 
-    @staticmethod
-    def _candle_direction(candle_or_df):
-        data = candle_or_df if isinstance(candle_or_df, pd.DataFrame) else pd.DataFrame([candle_or_df])
-        data = OpenReversalEngine._clean(data)
-        if data.empty:
-            return "UNKNOWN"
-        opening = float(data.iloc[-1]["Open"])
-        closing = float(data.iloc[-1]["Close"])
-        return "BULLISH" if closing > opening else "BEARISH" if closing < opening else "NEUTRAL"
+    def _completed_prices(self, data):
+        prices = self._clean_prices(data)
+        if prices.empty:
+            return prices
+        current_minute = self._current_minute()
+        return prices[(prices["Datetime"] < current_minute) & (prices["Datetime"].dt.date == current_minute.date())].copy()
 
-    @staticmethod
-    def _is_completed_candle(candle):
-        if candle is None:
-            return False
-        try:
-            stamp = pd.Timestamp(candle["Datetime"])
-            if stamp.tzinfo is None:
-                stamp = stamp.tz_localize(INDIA_TZ)
-            else:
-                stamp = stamp.tz_convert(INDIA_TZ)
-            now = datetime.now(INDIA_TZ)
-            current_minute = now.replace(second=0, microsecond=0)
-            return stamp.date() == now.date() and stamp < current_minute
-        except Exception:
-            return False
+    def _trigger_price(self, today_data, today_open, pdh, pdl, side):
+        """Find the latest completed price that proves the required sequence.
 
-    def _trigger_candle(self, today_data, today_open, pdh, pdl, side):
-        data = self._clean(today_data)
-        if len(data) < 2:
+        BUY: Open > PDH -> price was below PDH -> price returned to Today's Open.
+        SELL: Open < PDL -> price was above PDL -> price returned to Today's Open.
+        """
+        prices = self._completed_prices(today_data)
+        if prices.empty:
             return None
-        current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
-        completed = data[(data["Datetime"] < current_minute) & (data["Datetime"].dt.date == current_minute.date())].copy()
-        if completed.empty:
+        prices = prices[prices["Datetime"].dt.time <= self.end]
+        prices = prices[prices["Datetime"].dt.time >= self.start]
+        if prices.empty:
             return None
 
-        level_reached = False
-        level_reached_time = None
-        latest_trigger = None
-        for _, candle in completed.iterrows():
-            candle_time = candle["Datetime"].time()
-            if candle_time > self.end:
-                break
+        level = float(pdh if side == "BUY" else pdl)
+        breached = False
+        breach_time = None
+        for _, row in prices.iterrows():
+            price = float(row["Close"])
+            stamp = row["Datetime"]
             if side == "BUY":
-                if float(candle["Low"]) <= pdh:
-                    level_reached = True
-                    level_reached_time = candle["Datetime"]
+                if price < level:
+                    breached = True
+                    breach_time = stamp
                     continue
-                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
-                    if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
-                        if self._is_completed_candle(candle):
-                            latest_trigger = candle
+                if breached and stamp > breach_time and price >= float(today_open):
+                    return row
             else:
-                if float(candle["High"]) >= pdl:
-                    level_reached = True
-                    level_reached_time = candle["Datetime"]
+                if price > level:
+                    breached = True
+                    breach_time = stamp
                     continue
-                if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
-                    if float(candle["Open"]) > today_open and float(candle["Close"]) < today_open:
-                        if self._is_completed_candle(candle):
-                            latest_trigger = candle
-        return latest_trigger
-
-    def _fresh(self, trigger):
-        age = (datetime.now(INDIA_TZ) - trigger["Datetime"]).total_seconds() / 60.0
-        return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES) and self._is_completed_candle(trigger)
+                if breached and stamp > breach_time and price <= float(today_open):
+                    return row
+        return None
 
     @staticmethod
-    def _trigger_key(symbol, trigger, side, nifty_direction="UNKNOWN"):
-        stamp = pd.Timestamp(trigger["Datetime"])
+    def _trigger_key(symbol, trigger_time, side, nifty_change_pct):
+        stamp = pd.Timestamp(trigger_time)
         if stamp.tzinfo is None:
             stamp = stamp.tz_localize(INDIA_TZ)
         else:
             stamp = stamp.tz_convert(INDIA_TZ)
-        return (str(symbol).upper(), stamp.isoformat(), str(side).upper(), str(nifty_direction or "UNKNOWN").upper())
+        return (str(symbol).upper(), stamp.isoformat(), str(side).upper(), round(float(nifty_change_pct), 3))
 
-    @staticmethod
-    def _setup_window(data, trigger, pdh, pdl, side):
-        if data is None or data.empty or trigger is None:
-            return pd.DataFrame()
-        completed = data[data["Datetime"] <= trigger["Datetime"]].copy()
-        if completed.empty:
-            return pd.DataFrame()
-        if side == "BUY":
-            reached = completed[completed["Low"] <= float(pdh)]
-        else:
-            reached = completed[completed["High"] >= float(pdl)]
-        if reached.empty:
-            return pd.DataFrame()
-        level_time = reached.iloc[-1]["Datetime"]
-        return completed[completed["Datetime"] >= level_time]
+    def _trade(self, side, symbol, trigger_time, today_open, pdh, pdl, nifty_change_pct):
+        entry = float(today_open)
+        stop = float(pdh) if side == "BUY" else float(pdl)
+        risk = abs(entry - stop)
+        if risk <= 0:
+            return None
+        target_distance = risk * self.rr
+        target = entry + target_distance if side == "BUY" else entry - target_distance
+        return {
+            "symbol": symbol,
+            "signal": side,
+            "entry_time": trigger_time,
+            "entry": round(entry, 2),
+            "open_cross_level": round(entry, 4),
+            "stop_loss": round(stop, 4),
+            "target": round(target, 2),
+            "risk_per_share": round(risk, 4),
+            "risk_reward": self.rr,
+            "pdh": round(float(pdh), 4),
+            "pdl": round(float(pdl), 4),
+            "today_open": round(entry, 4),
+            "market_direction": "BULLISH" if nifty_change_pct >= 0.25 else "BEARISH" if nifty_change_pct <= -0.25 else "NEUTRAL",
+            "nifty500_change_pct": round(float(nifty_change_pct), 4),
+            "setup_type": "NIFTY_500_PDH_PDL_OPEN_PRICE_REVERSAL",
+            "pdh_pdl_reached": True,
+        }
 
-    def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
-        data = self._clean(candles)
+    def build(self, symbol, prices, pdh, pdl, today_open=None, nifty_change_pct=0.0, nifty_candle=None):
+        data = self._clean_prices(prices)
         if data.empty or pdh is None or pdl is None:
             return None
-        pdh, pdl = float(pdh), float(pdl)
         today = datetime.now(INDIA_TZ).date()
         today_data = data[data["Datetime"].dt.date == today].copy()
         if today_data.empty:
             return None
-        today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Open"])
+        today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Close"])
+        market_change = float(nifty_change_pct)
 
-        if ENABLE_LONG and today_open > pdh:
-            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "BUY")
-            if trigger is not None and self._fresh(trigger):
-                if nifty_candle is not None and self._candle_direction(nifty_candle) != "BULLISH":
-                    return None
-                return self.finalize_trigger(symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, "BUY")
+        if ENABLE_LONG and today_open > float(pdh) and market_change >= 0.25:
+            trigger = self._trigger_price(today_data, today_open, float(pdh), float(pdl), "BUY")
+            if trigger is not None:
+                return self.finalize_trigger(symbol, trigger["Datetime"], today_open, pdh, pdl, "BUY", market_change)
 
-        if ENABLE_SHORT and today_open < pdl:
-            trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
-            if trigger is not None and self._fresh(trigger):
-                if nifty_candle is not None and self._candle_direction(nifty_candle) != "BEARISH":
-                    return None
-                return self.finalize_trigger(symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, "SELL")
+        if ENABLE_SHORT and today_open < float(pdl) and market_change <= -0.25:
+            trigger = self._trigger_price(today_data, today_open, float(pdh), float(pdl), "SELL")
+            if trigger is not None:
+                return self.finalize_trigger(symbol, trigger["Datetime"], today_open, pdh, pdl, "SELL", market_change)
         return None
 
-    def finalize_trigger(self, symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, side):
-        if trigger is None:
+    def finalize_trigger(self, symbol, trigger_time, today_open, pdh, pdl, side, nifty_change_pct):
+        if trigger_time is None:
             return None
-        direction = str(nifty_direction or "UNKNOWN").upper()
-        key = self._trigger_key(symbol, trigger, side, direction)
+        key = self._trigger_key(symbol, trigger_time, side, nifty_change_pct)
         cached = self._finalized_triggers.get(key)
         if cached is not None:
             return cached.copy()
-        if not self._fresh(trigger):
-            return None
-        data = self._clean(today_data)
-        if data.empty:
-            return None
-        setup_data = self._setup_window(data, trigger, float(pdh), float(pdl), side)
-        if setup_data.empty:
-            return None
-        stock_direction = self._candle_direction(pd.DataFrame([trigger]))
-        signal = self._trade(side, symbol, trigger, float(today_open), float(pdh), float(pdl), float(setup_data["Low"].min()), float(setup_data["High"].max()), direction, stock_direction)
-        self._finalized_triggers[key] = signal.copy()
+        signal = self._trade(side, symbol, trigger_time, today_open, pdh, pdl, nifty_change_pct)
+        if signal is not None:
+            self._finalized_triggers[key] = signal.copy()
         return signal
-
-    def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, nifty_direction, stock_direction):
-        trigger_close = float(candle["Close"])
-        stop = today_high if side == "SELL" else today_low
-        reward_distance = abs(trigger_close - stop) * self.rr
-        target = trigger_close + reward_distance if side == "BUY" else trigger_close - reward_distance
-        return {"symbol": symbol, "signal": side, "entry_time": candle["Datetime"], "entry": round(trigger_close, 2), "open_cross_level": round(today_open, 4), "stop_loss": round(stop, 4), "target": round(target, 2), "risk_reward": self.rr, "pdh": round(pdh, 4), "pdl": round(pdl, 4), "today_open": round(today_open, 4), "today_low": round(today_low, 4), "today_high": round(today_high, 4), "market_direction": nifty_direction, "stock_direction": stock_direction, "stock_today_direction": stock_direction, "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL", "trigger_candle_open": round(float(candle["Open"]), 4), "trigger_candle_close": round(trigger_close, 4), "trigger_close": round(trigger_close, 4), "pdh_pdl_reached": True}
