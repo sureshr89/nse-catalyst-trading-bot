@@ -23,7 +23,7 @@ class OpenReversalEngine:
 
     @staticmethod
     def _clean_prices(data):
-        required = {"Datetime", "Open", "Close"}
+        required = {"Datetime", "Open", "High", "Low", "Close"}
         if data is None or data.empty or not required.issubset(data.columns):
             return pd.DataFrame()
         result = data.copy()
@@ -35,9 +35,9 @@ class OpenReversalEngine:
                 result["Datetime"] = result["Datetime"].dt.tz_convert(INDIA_TZ)
         except Exception:
             return pd.DataFrame()
-        for col in ("Open", "Close"):
+        for col in ("Open", "High", "Low", "Close"):
             result[col] = pd.to_numeric(result[col], errors="coerce")
-        return result.dropna(subset=["Datetime", "Open", "Close"]).sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
+        return result.dropna(subset=["Datetime", "Open", "High", "Low", "Close"]).sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
 
     @staticmethod
     def _current_minute():
@@ -51,7 +51,7 @@ class OpenReversalEngine:
         return prices[(prices["Datetime"] < now) & (prices["Datetime"].dt.date == now.date())].copy()
 
     def _trigger_candle(self, today_data, today_open, pdh, pdl, side):
-        """Find the latest completed 1-minute reversal after the required PDH/PDL breach."""
+        """Find the latest completed 1-minute reversal after price actually breaches PDH/PDL."""
         prices = self._completed_prices(today_data)
         if prices.empty:
             return None
@@ -64,20 +64,28 @@ class OpenReversalEngine:
         for _, row in prices.iterrows():
             stamp = row["Datetime"]
             candle_open = float(row["Open"])
+            candle_high = float(row["High"])
+            candle_low = float(row["Low"])
             candle_close = float(row["Close"])
 
             if side == "BUY":
-                if candle_close < level:
+                # Price must actually trade below PDH; a wick through PDH is sufficient.
+                if candle_low < level:
                     breached = True
                     breach_time = stamp
                     continue
+                # After the breach, the trigger candle must open below Today's Open
+                # and close back above Today's Open.
                 if breached and stamp > breach_time and self.start <= stamp.time() <= self.end and candle_open < float(today_open) and candle_close > float(today_open):
                     latest = row
             else:
-                if candle_close > level:
+                # Price must actually trade above PDL; a wick through PDL is sufficient.
+                if candle_high > level:
                     breached = True
                     breach_time = stamp
                     continue
+                # After the breach, the trigger candle must open above Today's Open
+                # and close back below Today's Open.
                 if breached and stamp > breach_time and self.start <= stamp.time() <= self.end and candle_open > float(today_open) and candle_close < float(today_open):
                     latest = row
 
@@ -120,6 +128,8 @@ class OpenReversalEngine:
             "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL_1M",
             "pdh_pdl_reached": True,
             "trigger_candle_open": round(float(trigger["Open"]), 4),
+            "trigger_candle_high": round(float(trigger["High"]), 4),
+            "trigger_candle_low": round(float(trigger["Low"]), 4),
             "trigger_candle_close": round(float(trigger["Close"]), 4),
             "trigger_close": round(float(trigger["Close"]), 4),
         }
