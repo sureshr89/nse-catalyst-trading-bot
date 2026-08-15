@@ -10,6 +10,7 @@ from market.price_data import PriceData
 from papertrade.paper_trade_engine import PaperTradeEngine
 from papertrade.trade_journal_clean import TradeJournal
 from papertrade.missed_capital_tracker import MissedCapitalTracker
+from news.sentiment import analyze_yahoo_news, news_allows_trade
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
 
 class TradingBot:
@@ -83,8 +84,7 @@ class TradingBot:
         except Exception:return None
     def signal_key(self,signal):
         candidate=str(signal.get("candidate_id","")).strip().upper()
-        if not candidate:
-            candidate="|".join([str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("open_cross_level","")).strip(),str(signal.get("pdh","")).strip(),str(signal.get("pdl","")).strip()])
+        if not candidate:candidate="|".join([str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("open_cross_level","")).strip(),str(signal.get("pdh","")).strip(),str(signal.get("pdl","")).strip()])
         return ("CANDIDATE",candidate)
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
     def cooldown_active(self):
@@ -97,7 +97,7 @@ class TradingBot:
         try:self.journal.log_signal(row)
         except Exception as error:print("Signal journal save failed:",error)
     def _attach_trade_context(self,position,signal):
-        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_candle_open","trigger_candle_close","trigger_close","pdh_pdl_reached","liquidity_qualified","nifty500_universe","atr_pct","rvol","beta","traded_value","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type")
+        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","liquidity_qualified","nifty500_universe","atr_pct","rvol","beta","traded_value","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type","news_sentiment","news_confidence","news_headline","news_reason","news_source")
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
@@ -126,6 +126,13 @@ class TradingBot:
             if str(trade.get("exit_time","")).strip() and str(trade.get("status","")).upper()=="CLOSED":
                 if not self._persist_closed_trade(trade):ok=False
         return ok
+    def _apply_news_gate(self,signal):
+        symbol=str(signal.get("symbol","")).strip().upper();side=str(signal.get("signal","")).strip().upper()
+        if not symbol or side not in {"BUY","SELL"}:return False
+        analysis=analyze_yahoo_news(symbol)
+        signal["news_sentiment"]=analysis.get("sentiment", "NEUTRAL");signal["news_confidence"]=analysis.get("confidence",0.0);signal["news_headline"]=analysis.get("headline","");signal["news_reason"]=analysis.get("reason","");signal["news_source"]=analysis.get("source","Yahoo Finance")
+        signal["news_checked_at"]=self._now().isoformat()
+        return news_allows_trade(side,analysis)
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         entry_time=signal.get("entry_time");parsed=pd.to_datetime(entry_time,errors="coerce")
@@ -135,6 +142,13 @@ class TradingBot:
         signal["trigger_entry_time"]=entry_time;key=self.signal_key(signal);symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol or key in self.processed_signals:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
+        # Final confirmation: Yahoo Finance headline sentiment is checked immediately
+        # before risk approval/slot allocation. Ambiguous/no-news is fail-closed.
+        news_pass=self._apply_news_gate(signal)
+        if not news_pass:
+            self.log_signal(signal,{"approved":False,"reasons":[f"NEWS_{signal.get('news_sentiment','NEUTRAL')}"]})
+            self.processed_signals.add(key)
+            return
         risk_result=self.risk_engine.approve_trade(signal,available_capital=float(self.paper_engine.available_capital));self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):
             reasons=" ".join(str(x).upper() for x in risk_result.get("reasons",[]))
