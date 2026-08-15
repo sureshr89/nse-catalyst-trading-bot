@@ -78,7 +78,9 @@ class OpenReversalEngine:
             if candle_time > self.end:
                 break
             if side == "BUY":
-                if not level_reached and float(candle["Low"]) <= pdh:
+                # Every later PDH touch resets the setup window. The trigger must
+                # occur after the latest touch, not merely after the first touch.
+                if float(candle["Low"]) <= pdh:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
@@ -86,7 +88,8 @@ class OpenReversalEngine:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
                         latest_trigger = candle
             else:
-                if not level_reached and float(candle["High"]) >= pdl:
+                # Every later PDL touch resets the setup window.
+                if float(candle["High"]) >= pdl:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
