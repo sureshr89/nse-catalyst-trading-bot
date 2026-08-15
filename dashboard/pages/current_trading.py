@@ -22,7 +22,7 @@ ENTRY_START = "09:45"
 ENTRY_END = "14:00"
 NIFTY_THRESHOLD = 0.25
 
-st.set_page_config(page_title="NSE Catalyst | Current Trading", page_icon="📌", layout="wide")
+st.set_page_config(page_title="NSE Catalyst | Current Trading", page_icon="🎯", layout="wide")
 st_autorefresh(interval=5000, key="current_live")
 st.markdown(load_css(), unsafe_allow_html=True)
 render_nav()
@@ -50,14 +50,20 @@ def fmt_price(value):
         return "—"
 
 
+def fmt_number(value):
+    try:
+        return f"{float(value):+.2f}%"
+    except Exception:
+        return "—"
+
+
 status = read(ROOT / "outputs/bot_status.json")
 state = read(ROOT / "outputs/paper_engine_state.json")
 gaps = read(ROOT / "outputs/gap_analysis.csv", "csv")
-trades = read(ROOT / "outputs/trades.csv", "csv")
 diag = read(ROOT / "outputs/scanner_diagnostics.json")
 positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
 
-# This page needs the worker running, but worker diagnostics belong on Bot Status.
+# Keep the worker alive. Detailed worker diagnostics belong on the Status page.
 try:
     live_status = ensure_bot_running()
     if isinstance(live_status, dict):
@@ -65,48 +71,53 @@ try:
 except Exception as error:
     status.setdefault("error", f"Worker launcher: {type(error).__name__}: {error}")
 
+now = datetime.now(INDIA_TZ)
+clock = now.strftime("%H:%M")
 market_change = float(diag.get("nifty500_change_pct", 0) or 0) if isinstance(diag, dict) else 0.0
+
 if market_change >= NIFTY_THRESHOLD:
-    market_permission = "BUY ONLY"
-    market_icon = "🟢"
+    permission = "🟢 BUY ONLY"
+    permission_note = "NIFTY 500 ≥ +0.25%"
 elif market_change <= -NIFTY_THRESHOLD:
-    market_permission = "SELL ONLY"
-    market_icon = "🔴"
+    permission = "🔴 SELL ONLY"
+    permission_note = "NIFTY 500 ≤ −0.25%"
 else:
-    market_permission = "NO ENTRY"
-    market_icon = "⚪"
+    permission = "⚪ WAIT"
+    permission_note = "NIFTY 500 inside −0.25% to +0.25%"
 
-now_ist = datetime.now(INDIA_TZ)
-clock = now_ist.strftime("%H:%M:%S")
+if clock < ENTRY_START:
+    window = "🕘 PREPARE"
+elif clock <= ENTRY_END:
+    window = "🟢 ACTIVE"
+else:
+    window = "🔒 CLOSED"
 
-st.title("📌 Current Trading")
-st.caption("Live action board — only the information needed to decide whether a setup is eligible.")
+st.title("🎯 Current Trading")
+st.caption("Live trade command center • only information that affects today's entries and open positions")
 
-# Primary decision strip.
 metric_cards([
-    ("NIFTY 500", f"{market_change:+.2f}%"),
-    ("Permission", f"{market_icon} {market_permission}"),
-    ("Entry Window", f"{ENTRY_START}–{ENTRY_END}"),
-    ("Open Positions", len(positions)),
-    ("Updated", clock),
+    ("NIFTY 500", fmt_number(market_change)),
+    ("Permission", permission),
+    ("Entry Window", window),
+    ("Positions", len(positions)),
 ])
+st.caption(f"{permission_note} • Entry window {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
 
+# A small operational warning is kept only when the page cannot confirm the worker launcher.
 if status.get("error"):
     st.warning(str(status["error"]))
 
-# Keep the strategy explanation short and visible, without turning this into documentation.
-with st.expander("Strategy rules", expanded=False):
+with st.expander("How a setup becomes a trade", expanded=False):
     st.markdown(
-        "**BUY:** Today's Open > PDH → price reaches/reacts from PDH → later price crosses above Today's Open. "
+        "**BUY:** Today's Open > PDH → price first reaches/reacts below PDH → later price reaches/crosses above Today's Open. "
         "NIFTY 500 must be ≥ +0.25%.\n\n"
-        "**SELL:** Today's Open < PDL → price reaches/reacts from PDL → later price crosses below Today's Open. "
+        "**SELL:** Today's Open < PDL → price first reaches/reacts above PDL → later price reaches/crosses below Today's Open. "
         "NIFTY 500 must be ≤ −0.25%.\n\n"
-        "Entry uses the actual qualifying 1-minute price. No candle-pattern confirmation. "
-        "Entries are allowed only from 09:45 to 14:00 IST."
+        "The entry is the actual qualifying completed 1-minute price. No candle-pattern confirmation is used."
     )
 
-# Opening candidates are the main research/trading board.
-st.subheader("🎯 Opening Setup Board")
+st.subheader("🎯 Today's Opening Setups")
+
 if not gaps.empty and "GapType" in gaps.columns:
     board = gaps.copy()
     board["GapPercent"] = pd.to_numeric(board.get("GapPercent"), errors="coerce")
@@ -115,43 +126,40 @@ if not gaps.empty and "GapType" in gaps.columns:
     ups = board[board["GapType"].eq("GAP_UP")].sort_values("GapPercent", ascending=False)
     downs = board[board["GapType"].eq("GAP_DOWN")].sort_values("GapPercent")
 
-    metric_cards([
-        ("Gap Up / BUY", len(ups)),
-        ("Gap Down / SELL", len(downs)),
-        ("Total Setups", len(ups) + len(downs)),
-    ])
-
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.markdown("**🟢 BUY side — Open > PDH**")
+        st.markdown(f"### 🟢 BUY setups  ·  {len(ups)}")
+        st.caption("Open > PDH → PDH reaction → return above Today's Open")
         if ups.empty:
-            st.info("No BUY-side opening setups.")
+            st.info("No gap-up setups.")
         else:
             cols = [c for c in ["Symbol", "TodayOpen", "PDH", "Gap", "GapPercent"] if c in ups.columns]
             display = ups[cols].head(30).copy()
-            if "TodayOpen" in display.columns:
-                display["TodayOpen"] = pd.to_numeric(display["TodayOpen"], errors="coerce").round(2)
-            if "PDH" in display.columns:
-                display["PDH"] = pd.to_numeric(display["PDH"], errors="coerce").round(2)
-            st.dataframe(display, width="stretch", hide_index=True, height=360)
+            for col in ["TodayOpen", "PDH", "Gap"]:
+                if col in display.columns:
+                    display[col] = pd.to_numeric(display[col], errors="coerce").map(fmt_price)
+            if "GapPercent" in display.columns:
+                display["GapPercent"] = display["GapPercent"].map(fmt_number)
+            st.dataframe(display, width="stretch", hide_index=True, height=350)
 
     with c2:
-        st.markdown("**🔴 SELL side — Open < PDL**")
+        st.markdown(f"### 🔴 SELL setups  ·  {len(downs)}")
+        st.caption("Open < PDL → PDL reaction → return below Today's Open")
         if downs.empty:
-            st.info("No SELL-side opening setups.")
+            st.info("No gap-down setups.")
         else:
             cols = [c for c in ["Symbol", "TodayOpen", "PDL", "Gap", "GapPercent"] if c in downs.columns]
             display = downs[cols].head(30).copy()
-            if "TodayOpen" in display.columns:
-                display["TodayOpen"] = pd.to_numeric(display["TodayOpen"], errors="coerce").round(2)
-            if "PDL" in display.columns:
-                display["PDL"] = pd.to_numeric(display["PDL"], errors="coerce").round(2)
-            st.dataframe(display, width="stretch", hide_index=True, height=360)
+            for col in ["TodayOpen", "PDL", "Gap"]:
+                if col in display.columns:
+                    display[col] = pd.to_numeric(display[col], errors="coerce").map(fmt_price)
+            if "GapPercent" in display.columns:
+                display["GapPercent"] = display["GapPercent"].map(fmt_number)
+            st.dataframe(display, width="stretch", hide_index=True, height=350)
 else:
-    st.info("The opening setup board will populate automatically after 09:15 IST when today's market data is available.")
+    st.info("Today's opening setup board will appear automatically once market data is available after 09:15 IST.")
 
-# Only live positions are shown here. Detailed execution history belongs on Analysis/Downloads.
-st.subheader("📍 Live Positions")
+st.subheader("📍 Open Positions")
 if positions:
     price = PriceData()
     rows = []
@@ -187,12 +195,5 @@ if positions:
 else:
     st.info("No open paper positions.")
 
-# A compact diagnostic footer is useful when the page looks empty, but avoids the old large filter dashboard.
-if isinstance(diag, dict) and diag:
-    st.caption(
-        f"Scanner: {diag.get('stocks_scanned', 0)} stocks • "
-        f"1-min coverage {float(diag.get('market_data_coverage', 0) or 0) * 100:.1f}% • "
-        f"{diag.get('final_signals', 0)} final signal(s) • auto-refresh 5s"
-    )
-
+st.caption("Auto-refresh: 5 seconds • Paper trading only")
 render_daily_footer()
