@@ -26,5 +26,9 @@ def render_nav(top_offset=0):
             if st.button("📊 ANALYSIS", key="global_nav_analysis", width="stretch"):
                 st.switch_page("pages/analysis.py")
         with r4:
+            if st.button("🔎 STOCK SCANNER", key="global_nav_scanner", width="stretch"):
+                st.switch_page("pages/stock_scanner.py")
+        r5, r6 = st.columns(2, gap="small")
+        with r5:
             if st.button("⬇️ DOWNLOADS", key="global_nav_downloads", width="stretch"):
                 st.switch_page("pages/downloads.py")
