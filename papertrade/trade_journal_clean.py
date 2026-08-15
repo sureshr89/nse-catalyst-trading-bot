@@ -11,24 +11,24 @@ INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 class TradeJournal:
     TRADE_COLUMNS = [
-        "trade_id", "symbol", "stock", "signal", "buy_sell", "entry_time", "trigger_entry_time", "market_entry_time",
+        "trade_id", "candidate_id", "symbol", "stock", "signal", "buy_sell", "entry_time", "trigger_entry_time", "market_entry_time",
         "entry", "stop_loss", "target", "quantity", "exit_time", "exit_price", "exit_reason", "risk", "reward", "rr",
         "pnl", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "pdh", "pdl", "today_open",
         "today_low", "today_high", "previous_day_close", "gap", "gap_percent", "gap_type", "market_direction",
-        "nifty500_change_pct", "setup_type", "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached",
-        "nifty500_universe", "mae", "mfe", "status"
+        "nifty500_change_pct", "setup_type", "entry_source", "candidate_state", "atr_pct", "rvol", "beta", "traded_value", "priority_rank",
+        "pdh_pdl_reached", "nifty500_universe", "mae", "mfe", "status"
     ]
     SIGNAL_COLUMNS = [
-        "timestamp", "symbol", "signal", "market_direction", "nifty500_change_pct", "pdh", "pdl", "today_open", "today_low",
+        "timestamp", "candidate_id", "symbol", "signal", "market_direction", "nifty500_change_pct", "pdh", "pdl", "today_open", "today_low",
         "today_high", "previous_day_close", "gap", "gap_percent", "gap_type", "entry", "stop_loss", "target", "quantity",
-        "risk_reward", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "setup_type",
-        "trigger_candle_open", "trigger_candle_close", "trigger_close", "pdh_pdl_reached", "nifty500_universe", "approved", "reason"
+        "risk_reward", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "setup_type", "entry_source", "candidate_state",
+        "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "pdh_pdl_reached", "nifty500_universe", "approved", "reason"
     ]
     EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status", "mae", "mfe"}
     LEGACY_COLUMNS = {
         "nifty100_direction", "pdc", "previous_day_direction", "gap_direction", "gap_failure", "open_reclaim",
         "industry", "sector", "sector_direction", "stock_direction", "stock_today_direction", "liquidity_qualified",
-        "signal_quality_score", "why_this_trade"
+        "signal_quality_score", "why_this_trade", "trigger_candle_open", "trigger_candle_close", "trigger_close"
     }
 
     def __init__(self, trade_file=TRADE_LOG_FILE, signal_file=SIGNAL_LOG_FILE):
@@ -120,6 +120,9 @@ class TradeJournal:
             return ""
 
     def _daily_setup_key(self, signal):
+        candidate_id = str(signal.get("candidate_id", "")).strip().upper()
+        if candidate_id:
+            return (self._signal_date(signal), "CANDIDATE", candidate_id)
         trigger = signal.get("trigger_entry_time") or signal.get("entry_time") or signal.get("timestamp") or ""
         parsed = self._journal_ist(trigger)
         trigger_key = parsed.isoformat() if not pd.isna(parsed) else self._normalise(trigger)
@@ -181,7 +184,7 @@ class TradeJournal:
         return self.upsert_trade(trade)
 
     def log_signal(self, signal):
-        """Record both approved and rejected decisions so the stock scanner can explain outcomes."""
+        """Record approved and rejected decisions once per stable candidate."""
         if not isinstance(signal, dict):
             return {"saved": False, "reason": "Signal must be a dictionary"}
         if self.signal_exists(signal):
