@@ -40,6 +40,13 @@ class ScannerEngine:
     def _today():
         return pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
 
+    @staticmethod
+    def _ist_timestamp(value):
+        stamp = pd.Timestamp(value)
+        if stamp.tzinfo is None:
+            return stamp.tz_localize("Asia/Kolkata")
+        return stamp.tz_convert("Asia/Kolkata")
+
     def _write_diagnostics(self):
         payload = dict(self.diagnostics)
         payload["rejections"] = dict(self.diagnostics.get("rejections", {}))
@@ -189,16 +196,18 @@ class ScannerEngine:
         return result
 
     def _nifty500_candle(self, as_of, data=None):
+        """Return the NIFTY 500 candle at exactly the stock trigger timestamp."""
         data = self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
         if data.empty:
             return None
-        stamp = pd.Timestamp(as_of)
-        if stamp.tzinfo is None:
-            stamp = stamp.tz_localize("Asia/Kolkata")
-        else:
-            stamp = stamp.tz_convert("Asia/Kolkata")
-        completed = data[data["Datetime"] <= stamp]
-        return None if completed.empty else completed.iloc[-1].to_dict()
+        stamp = self._ist_timestamp(as_of)
+        timestamps = pd.to_datetime(data["Datetime"], errors="coerce")
+        try:
+            timestamps = timestamps.dt.tz_localize("Asia/Kolkata") if timestamps.dt.tz is None else timestamps.dt.tz_convert("Asia/Kolkata")
+        except Exception:
+            return None
+        matches = data[timestamps == stamp]
+        return None if matches.empty else matches.iloc[-1].to_dict()
 
     def scan(self):
         self.diagnostics = self._empty_diagnostics()
@@ -206,8 +215,6 @@ class ScannerEngine:
         if candidates.empty:
             return self._finish([])
 
-        # Opening candidates (PDH/PDL, gap and liquidity) are static for the day,
-        # but 1-minute prices are live. Refresh candidate candles every scan.
         symbols = candidates["Symbol"].astype(str).str.upper().tolist()
         self.universe_market_data = self.price_data.get_multi_1m(symbols)
         self.nifty500_market_data = self.price_data.get_index_1m("^CRSLDX")
@@ -228,12 +235,23 @@ class ScannerEngine:
             if trigger_probe is None:
                 continue
             trigger_time = trigger_probe.get("entry_time")
-            trigger_rows = candles[candles["Datetime"] == pd.Timestamp(trigger_time)]
+            try:
+                trigger_stamp = self._ist_timestamp(trigger_time)
+                candle_timestamps = pd.to_datetime(candles["Datetime"], errors="coerce")
+                candle_timestamps = candle_timestamps.dt.tz_localize("Asia/Kolkata") if candle_timestamps.dt.tz is None else candle_timestamps.dt.tz_convert("Asia/Kolkata")
+            except Exception:
+                self.diagnostics["rejections"]["missing_data"] += 1
+                continue
+            trigger_rows = candles[candle_timestamps == trigger_stamp]
             if trigger_rows.empty:
+                self.diagnostics["rejections"]["missing_data"] += 1
                 continue
             trigger_candle = trigger_rows.iloc[-1]
 
-            nifty_candle = self._nifty500_candle(trigger_time, self.nifty500_market_data)
+            nifty_candle = self._nifty500_candle(trigger_stamp, self.nifty500_market_data)
+            if nifty_candle is None:
+                self.diagnostics["rejections"]["market_alignment"] += 1
+                continue
             nifty_dir = self.strategy._candle_direction(nifty_candle)
             side = trigger_probe["signal"]
             required = "BULLISH" if side == "BUY" else "BEARISH"
@@ -249,7 +267,7 @@ class ScannerEngine:
                 continue
             self.diagnostics["stock_alignment_passed"] += 1
 
-            today_data = candles[candles["Datetime"].dt.date == pd.Timestamp(trigger_time).date()]
+            today_data = candles[candle_timestamps.dt.date == trigger_stamp.date()]
             signal = self.strategy.finalize_trigger(
                 symbol, today_data, trigger_candle,
                 row["TodayOpen"], row["PDH"], row["PDL"], nifty_dir, side,
