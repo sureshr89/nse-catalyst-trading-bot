@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -25,7 +24,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-load_css()
+
+# Apply the same shared typography/components used by every other dashboard page.
+st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="live")
 
 # Start/keep exactly one persistent paper worker per Streamlit process.
@@ -36,7 +37,7 @@ except Exception as exc:
 
 status = get_status()
 
-st.markdown("# 📈 NSE Catalyst Trading Bot")
+st.title("📈 NSE Catalyst Trading Bot")
 st.caption("NIFTY 500 • PDH/PDL + Today's Open Reversal • Paper Trading")
 
 render_nav()
