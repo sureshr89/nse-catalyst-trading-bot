@@ -27,6 +27,9 @@ class ScannerEngine:
         return {"timestamp":None,"stocks_scanned":0,"opening_setup_passed":0,"market_alignment_passed":0,"strategy_setup_passed":0,"final_signals":0,"gap_up_count":0,"gap_down_count":0,"gap_data_count":0,"nifty500_direction":"UNKNOWN","nifty500_change_pct":0.0,"nifty500_bullish":0,"nifty500_bearish":0,"nifty500_neutral":0,"nifty500_coverage":0,"market_data_coverage":0.0,"buy_waiting":0,"sell_waiting":0,"buy_qualified":0,"sell_qualified":0,"ranking":[],"rejections":{"missing_data":0,"opening_setup":0,"market_alignment":0,"strategy_setup":0}}
     @staticmethod
     def _today(): return pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d")
+    @staticmethod
+    def _candidate_id(symbol,side,today_open,pdh,pdl):
+        return "|".join([pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d"),str(symbol).upper(),str(side).upper(),f"{float(today_open):.4f}",f"{float(pdh):.4f}",f"{float(pdl):.4f}"])
     def _waiting_path(self): return Path(__file__).resolve().parents[1]/"outputs"/"waiting_candidates.json"
     def _load_waiting(self):
         try:
@@ -105,10 +108,12 @@ class ScannerEngine:
         for _,row in self.opening_candidates.iterrows():
             symbol=str(row["Symbol"]).upper(); initial_side="BUY" if row["OpeningSetup"]=="OPEN_ABOVE_PDH" else "SELL" if row["OpeningSetup"]=="OPEN_BELOW_PDL" else None
             if initial_side!=side: continue
+            candidate_id=self._candidate_id(symbol,side,row["TodayOpen"],row["PDH"],row["PDL"])
             if symbol not in self.waiting[side] and symbol not in self.qualified[side]:
-                self.waiting[side][symbol]={"symbol":symbol,"side":side,"today_open":float(row["TodayOpen"]),"pdh":float(row["PDH"]),"pdl":float(row["PDL"]),"previous_day_close":float(row["PreviousDayClose"]),"gap":float(row.get("Gap",0)),"gap_percent":float(row.get("GapPercent",0)),"industry":row.get("Industry","UNKNOWN"),"state":"WAITING_FOR_BREACH","created_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds")}
+                self.waiting[side][symbol]={"candidate_id":candidate_id,"symbol":symbol,"side":side,"today_open":float(row["TodayOpen"]),"pdh":float(row["PDH"]),"pdl":float(row["PDL"]),"previous_day_close":float(row["PreviousDayClose"]),"gap":float(row.get("Gap",0)),"gap_percent":float(row.get("GapPercent",0)),"industry":row.get("Industry","UNKNOWN"),"state":"WAITING_FOR_BREACH","created_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds")}
             state=self.waiting[side].get(symbol)
             if not state: continue
+            state.setdefault("candidate_id",candidate_id)
             data=market_data.get(symbol); today=self.price_data.today_only(data) if data is not None else pd.DataFrame()
             if today.empty: continue
             if activation is not None: today=today[today["Datetime"]>=activation]
@@ -140,8 +145,8 @@ class ScannerEngine:
                 metric_values={k:item[k] for k in ("atr_pct","rvol","beta","traded_value","metrics_calculated_at")}
                 signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,metric_values)
                 if signal:
-                    signal.update({"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1})
-                    ranking.append({"symbol":symbol,"side":side,"atr_pct":item.get("atr_pct",0),"rvol":item.get("rvol",0),"beta":item.get("beta",0),"traded_value":item.get("traded_value",0)})
+                    signal.update({"candidate_id":item.get("candidate_id"),"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1})
+                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"atr_pct":item.get("atr_pct",0),"rvol":item.get("rvol",0),"beta":item.get("beta",0),"traded_value":item.get("traded_value",0)})
                     signals.append(signal)
         self.diagnostics["ranking"]=ranking; return signals
     def scan(self):
