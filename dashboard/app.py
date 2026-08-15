@@ -37,7 +37,7 @@ with left:
     st.markdown("<div class='dashboard-info-card'>"
                 "<div class='info-row'><span>BUY</span><b>Open above PDH → 1m close below PDH → wait for 1m close back to Today's Open → NIFTY 500 ≥ +0.25%</b></div>"
                 "<div class='info-row'><span>SELL</span><b>Open below PDL → 1m close above PDL → wait for 1m close back to Today's Open → NIFTY 500 ≤ −0.25%</b></div>"
-                "<div class='info-row'><span>PRIORITY</span><b>ATR% → RVOL → Beta → traded value</b></div>"
+                "<div class='info-row'><span>PRIORITY</span><b>ATR% highest first after qualification → News gate → available slot</b></div>"
                 "<div class='info-row'><span>RISK</span><b>SL: PDH / PDL • Target: 1.25R • Risk: ₹1,400–₹1,500 • Max positions: 2</b></div>"
                 "</div>",unsafe_allow_html=True)
 with right:
