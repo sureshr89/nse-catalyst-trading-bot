@@ -62,7 +62,13 @@ class TradingBot:
         except Exception as error:print("Risk trade-count rollback failed:",error)
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
-        signal["trigger_entry_time"]=signal.get("entry_time");key=self.signal_key(signal)
+        entry_time=signal.get("entry_time")
+        parsed_entry=pd.to_datetime(entry_time,errors="coerce")
+        if entry_time is None or pd.isna(parsed_entry):return
+        if getattr(parsed_entry,"tzinfo",None) is None:parsed_entry=parsed_entry.tz_localize(INDIA_TZ)
+        else:parsed_entry=parsed_entry.tz_convert(INDIA_TZ)
+        if parsed_entry.date()!=self._now().date():return
+        signal["trigger_entry_time"]=entry_time;key=self.signal_key(signal)
         if key in self.processed_signals:return
         symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol:return
