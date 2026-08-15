@@ -12,7 +12,15 @@ IST = ZoneInfo("Asia/Kolkata")
 MASTER_MONTHS = 6
 MASTER_STOCK = OUTPUT / "MASTER_DAILY_STOCK_DATA.csv"
 MASTER_TRADES = OUTPUT / "MASTER_TRADES.csv"
+MASTER_NEWS = OUTPUT / "MASTER_NEWS_ANALYSIS.csv"
 MASTER_DAILY = OUTPUT / "MASTER_DAILY_SUMMARY.csv"
+
+NEWS_FIELDS = [
+    "TradeDate", "timestamp", "candidate_id", "symbol", "signal", "candidate_state", "approved",
+    "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_source", "news_checked_at",
+    "nifty500_change_pct", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk",
+    "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "setup_type", "gap_percent", "reason"
+]
 
 
 def _read(path):
@@ -97,6 +105,7 @@ def _prune_to_last_six_months(path, date_columns):
 def enforce_six_month_retention():
     _prune_to_last_six_months(MASTER_STOCK, ["TradeDate", "DataSnapshotIST"])
     _prune_to_last_six_months(MASTER_TRADES, ["TradeDate", "entry_time", "exit_time", "timestamp"])
+    _prune_to_last_six_months(MASTER_NEWS, ["TradeDate", "timestamp", "news_checked_at"])
     _prune_to_last_six_months(MASTER_DAILY, ["TradeDate", "PreparedAtIST"])
 
 
@@ -130,10 +139,26 @@ def _closed_unique(frame):
     return closed.drop_duplicates(subset=fallback, keep="last") if fallback else closed
 
 
+def _build_news_history(signals, today):
+    if signals.empty:
+        return pd.DataFrame(columns=NEWS_FIELDS)
+    frame = signals.copy()
+    for column in NEWS_FIELDS:
+        if column not in frame.columns:
+            frame[column] = ""
+    frame["TradeDate"] = pd.to_datetime(frame["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d")
+    frame["TradeDate"] = frame["TradeDate"].fillna(today)
+    frame = frame[NEWS_FIELDS].copy()
+    # Keep one immutable decision record per candidate/news check; later runs update the same candidate.
+    key = [c for c in ["TradeDate", "candidate_id", "symbol", "signal"] if c in frame.columns]
+    return frame.drop_duplicates(subset=key, keep="last") if key else frame.drop_duplicates()
+
+
 def build_master_data():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     _restore_if_missing(MASTER_STOCK, "outputs/MASTER_DAILY_STOCK_DATA.csv")
     _restore_if_missing(MASTER_TRADES, "outputs/MASTER_TRADES.csv")
+    _restore_if_missing(MASTER_NEWS, "outputs/MASTER_NEWS_ANALYSIS.csv")
     _restore_if_missing(MASTER_DAILY, "outputs/MASTER_DAILY_SUMMARY.csv")
     today = datetime.now(IST).strftime("%Y-%m-%d")
     gaps = _read(OUTPUT / "gap_analysis.csv")
@@ -158,11 +183,17 @@ def build_master_data():
         t.insert(0, "TradeDate", t[date_col].astype(str).str[:10] if date_col else today)
         _trade_merge(t)
 
+    news_history = _build_news_history(signals, today)
+    if not news_history.empty:
+        _merge(MASTER_NEWS, news_history, ["TradeDate", "candidate_id", "symbol", "signal"])
+
     today_trades = _today_rows(trades, ["entry_time", "timestamp", "exit_time"], today)
     today_closed = _closed_unique(_today_rows(trades, ["exit_time"], today))
     today_signals = _today_rows(signals, ["timestamp", "entry_time"], today)
+    today_news = _today_rows(news_history, ["TradeDate", "timestamp"], today)
     today_pnl = float(pd.to_numeric(today_closed.get("pnl", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     gap_types = gaps.get("GapType", pd.Series(dtype=str)).astype(str).str.upper()
+    sentiment = today_news.get("news_sentiment", pd.Series(dtype=str)).astype(str).str.upper()
 
     row = {
         "TradeDate": today,
@@ -173,6 +204,12 @@ def build_master_data():
         "SignalsRecorded": int(len(today_signals)),
         "TradesRecorded": int(len(today_trades)),
         "ClosedTrades": int(len(today_closed)),
+        "NewsDecisions": int(len(today_news)),
+        "NewsPositive": int(sentiment.eq("POSITIVE").sum()),
+        "NewsNegative": int(sentiment.eq("NEGATIVE").sum()),
+        "NewsNeutral": int(sentiment.eq("NEUTRAL").sum()),
+        "NewsPassed": int(pd.to_numeric(today_news.get("approved", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).sum()),
+        "NewsRejected": int(len(today_news) - pd.to_numeric(today_news.get("approved", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1).sum()),
         "FinalSignals": int(diag.get("final_signals", 0) or 0),
         "StocksScanned": int(diag.get("stocks_scanned", 0) or 0),
         "OpeningSetupPassed": int(diag.get("opening_setup_passed", 0) or 0),
@@ -184,9 +221,9 @@ def build_master_data():
     _merge(MASTER_DAILY, pd.DataFrame([row]), ["TradeDate"])
     enforce_six_month_retention()
 
-    for path in (MASTER_STOCK, MASTER_TRADES, MASTER_DAILY):
+    for path in (MASTER_STOCK, MASTER_TRADES, MASTER_NEWS, MASTER_DAILY):
         try:
             sync(path, f"outputs/{path.name}", f"Update master trading data {today}")
         except Exception as error:
             print("Master data sync skipped:", error)
-    return {"stock": str(MASTER_STOCK), "trades": str(MASTER_TRADES), "daily": str(MASTER_DAILY)}
+    return {"stock": str(MASTER_STOCK), "trades": str(MASTER_TRADES), "news": str(MASTER_NEWS), "daily": str(MASTER_DAILY)}
