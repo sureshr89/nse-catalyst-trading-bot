@@ -133,8 +133,6 @@ class PriceData:
         except Exception as error:
             print(f"Fast market price failed for {symbol}: {error}")
 
-        # Fallback is accepted only when the latest intraday candle is very recent.
-        # A stale 14:59 candle must not be presented as a current 15:00 quote.
         try:
             raw = self._clean_data(yf.download(
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
@@ -231,11 +229,16 @@ class PriceData:
             return pd.DataFrame()
 
     def today_only(self, df):
-        if df is None or df.empty: return pd.DataFrame()
-        result = df.copy(); result["Datetime"] = self._to_ist(result["Datetime"]); result = result.dropna(subset=["Datetime"])
-        if result.empty: return pd.DataFrame()
-        latest_date = result["Datetime"].dt.date.max()
-        return result[result["Datetime"].dt.date == latest_date].sort_values("Datetime").reset_index(drop=True)
+        """Return only today's IST rows; never select the latest available historical date."""
+        if df is None or df.empty or "Datetime" not in df.columns:
+            return pd.DataFrame()
+        result = df.copy()
+        result["Datetime"] = self._to_ist(result["Datetime"])
+        result = result.dropna(subset=["Datetime"])
+        if result.empty:
+            return pd.DataFrame()
+        today = datetime.now(INDIA_TZ).date()
+        return result[result["Datetime"].dt.date == today].sort_values("Datetime").reset_index(drop=True)
 
     def latest_candle(self, symbol, interval="1m"):
         df = self.today_only(self.get_candles(symbol, interval, "1d"))
