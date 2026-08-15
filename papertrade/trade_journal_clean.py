@@ -70,7 +70,13 @@ class TradeJournal:
             if getattr(parsed,"tzinfo",None) is None:return parsed.date().isoformat()
             return parsed.tz_convert(INDIA_TZ).date().isoformat()
         except Exception:return ""
-    def _daily_setup_key(self,signal):return (self._signal_date(signal),self._normalise(signal.get("symbol","")),self._normalise(signal.get("signal","")),self._normalise(signal.get("setup_type","")))
+    def _daily_setup_key(self,signal):
+        # A distinct trigger candle is a distinct setup.  Keep same-day duplicate
+        # protection, but do not suppress a later valid setup for the same stock/side.
+        trigger=signal.get("trigger_entry_time") or signal.get("entry_time") or signal.get("timestamp") or ""
+        parsed=self._journal_ist(trigger)
+        trigger_key=parsed.isoformat() if not pd.isna(parsed) else self._normalise(trigger)
+        return (self._signal_date(signal),self._normalise(signal.get("symbol","")),self._normalise(signal.get("signal","")),self._normalise(signal.get("setup_type","")),trigger_key)
     def _deduplicate_signal_history(self,df):
         if df.empty:return df
         keys=df.apply(self._daily_setup_key,axis=1);return df.loc[~keys.duplicated(keep="first")].reset_index(drop=True)
@@ -122,7 +128,7 @@ class TradeJournal:
         return self.upsert_trade(trade)
     def log_signal(self,signal):
         if not isinstance(signal,dict) or not bool(signal.get("approved",False)):return {"saved":False,"reason":"Only approved signals are journaled"}
-        if self.signal_exists(signal):return {"saved":False,"duplicate":True,"reason":"Duplicate daily setup"}
+        if self.signal_exists(signal):return {"saved":False,"duplicate":True,"reason":"Duplicate setup"}
         row={column:self._value(signal.get(column,"")) for column in self.SIGNAL_COLUMNS}
         if not row["timestamp"]:row["timestamp"]=datetime.now(INDIA_TZ).isoformat()
         with open(self.signal_file,"a",newline="",encoding="utf-8") as file:csv.DictWriter(file,fieldnames=self.SIGNAL_COLUMNS).writerow(row)
