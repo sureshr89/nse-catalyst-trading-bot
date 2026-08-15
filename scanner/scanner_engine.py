@@ -78,18 +78,22 @@ class ScannerEngine:
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
         if data.empty:return None
-        stamp=self._ist_timestamp(as_of);timestamps=pd.to_datetime(data["Datetime"],errors="coerce")
+        stamp=self._ist_timestamp(as_of)
+        now=datetime.now(INDIA_TZ)
+        if stamp > now.replace(second=0,microsecond=0) or stamp.date()!=now.date():return None
+        timestamps=pd.to_datetime(data["Datetime"],errors="coerce")
         try:timestamps=timestamps.dt.tz_localize(INDIA_TZ) if timestamps.dt.tz is None else timestamps.dt.tz_convert(INDIA_TZ)
         except Exception:return None
-        matches=data[timestamps==stamp];return None if matches.empty else matches.iloc[-1].to_dict()
+        matches=data[timestamps==stamp]
+        if matches.empty:return None
+        candle=matches.iloc[-1]
+        candle_time=self._ist_timestamp(candle.get("Datetime"))
+        if (now-candle_time.to_pydatetime()).total_seconds()<60:return None
+        return candle.to_dict()
     def scan(self):
         self.diagnostics=self._empty_diagnostics();candidates=self.prepare_opening_candidates()
         if candidates.empty:return self._finish([])
-        symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);candidate_coverage=available_symbols/len(symbols) if symbols else 0.0;self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
-        required_candidate_coverage=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
-        if available_symbols<required_candidate_coverage:
-            self.diagnostics["market_data_coverage"]=candidate_coverage;self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available_symbols;self._write_diagnostics();print(f"Candidate 1m coverage incomplete: {available_symbols}/{len(symbols)} ({candidate_coverage:.1%}); need at least {required_candidate_coverage}. Skipping this scan and retrying.");return self._finish([])
-        self.diagnostics["market_data_coverage"]=candidate_coverage
+        symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
         if not available_symbols:return self._finish([])
         signals=[]
         for _,row in candidates.iterrows():
