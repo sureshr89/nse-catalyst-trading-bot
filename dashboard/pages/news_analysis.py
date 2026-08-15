@@ -51,7 +51,7 @@ if df.empty:
     render_daily_footer()
     st.stop()
 
-for col in ["news_confidence", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "nifty500_change_pct", "entry", "quantity", "actual_risk"]:
+for col in ["news_confidence", "atr_pct", "priority_rank", "nifty500_change_pct", "entry", "quantity", "actual_risk"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -110,7 +110,7 @@ fc1.metric("Filtered Decisions", len(filtered))
 fc2.metric("Passed News Gate", len(approved))
 fc3.metric("Rejected / Not Approved", max(0, len(filtered) - len(approved)))
 
-cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "ApprovedBool", "candidate_id", "entry", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "reason"] if c in filtered.columns]
+cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "ApprovedBool", "candidate_id", "entry", "atr_pct", "priority_rank", "reason"] if c in filtered.columns]
 st.dataframe(filtered[cols].sort_values(["TradeDate", "timestamp"], ascending=False), use_container_width=True, hide_index=True, height=500)
 
 st.download_button("⬇️ DOWNLOAD NEWS MASTER CSV", data=filtered.to_csv(index=False).encode("utf-8"), file_name="nse_catalyst_news_analysis.csv", mime="text/csv", width="stretch")
