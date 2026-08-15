@@ -29,7 +29,6 @@ class TradingBot:
             return parsed.tz_convert(INDIA_TZ)
         except Exception:return pd.NaT
     def current_time(self):return self._now().strftime("%H:%M")
-    def _journal_dates_ist(self,series):return series.map(self._journal_ist)
     def _restore_risk_counts_from_paper_state(self):
         try:
             today=self._now().date();paper_counts={}
@@ -37,11 +36,11 @@ class TradingBot:
                 if not isinstance(trade,dict):continue
                 entry_dt=self._journal_ist(trade.get("entry_time"))
                 if pd.isna(entry_dt) or entry_dt.date()!=today:continue
-                symbol=str(trade.get("symbol","")).strip().upper();
+                symbol=str(trade.get("symbol","")).strip().upper()
                 if not symbol:continue
-                trade_id=str(trade.get("trade_id","")).strip(); key=(symbol,trade_id) if trade_id else (symbol,str(trade.get("signal","")).strip().upper(),str(trade.get("entry_time","")).strip(),str(trade.get("entry",""))); paper_counts.setdefault(symbol,set()).add(key)
+                trade_id=str(trade.get("trade_id","")).strip();key=(symbol,trade_id) if trade_id else (symbol,str(trade.get("signal","")).strip().upper(),str(trade.get("entry_time","")).strip(),str(trade.get("entry","")));paper_counts.setdefault(symbol,set()).add(key)
             for symbol,keys in paper_counts.items():
-                target=len(keys); current=self.risk_engine.get_trade_count(symbol)
+                target=len(keys);current=self.risk_engine.get_trade_count(symbol)
                 if current<target:self.risk_engine.trade_counts[symbol]=target
         except Exception as error:print("Paper-state risk-count recovery skipped:",error)
     @staticmethod
@@ -49,14 +48,14 @@ class TradingBot:
         if not isinstance(trade,dict):return None
         trade_id=str(trade.get("trade_id","")).strip().upper()
         if trade_id:return ("id",trade_id)
-        symbol=str(trade.get("symbol","")).strip().upper(); signal=str(trade.get("signal","")).strip().upper(); entry=str(trade.get("entry_time","")).strip(); exit_time=str(trade.get("exit_time","")).strip(); entry_price=str(trade.get("entry","")).strip(); exit_price=str(trade.get("exit_price","")).strip()
+        symbol=str(trade.get("symbol","")).strip().upper();signal=str(trade.get("signal","")).strip().upper();entry=str(trade.get("entry_time","")).strip();exit_time=str(trade.get("exit_time","")).strip();entry_price=str(trade.get("entry","")).strip();exit_price=str(trade.get("exit_price","")).strip()
         if not symbol or not exit_time:return None
         return ("legacy",symbol,signal,entry,exit_time,entry_price,exit_price)
     def _today_closed_trades(self):
         today=self._now().date();merged={}
         def add_trade(trade,source,index=None):
             if not isinstance(trade,dict) or str(trade.get("status","")).upper()!="CLOSED":return
-            exit_dt=self._journal_ist(trade.get("exit_time"));
+            exit_dt=self._journal_ist(trade.get("exit_time"))
             if pd.isna(exit_dt) or exit_dt.date()!=today:return
             key=self._closed_trade_key(trade,source,index)
             if key is not None and (key not in merged or source=="paper"):merged[key]=dict(trade)
@@ -77,15 +76,16 @@ class TradingBot:
             stops=[]
             for trade in self._today_closed_trades():
                 if str(trade.get("exit_reason","")).upper()=="STOP_LOSS":
-                    dt=self._journal_ist(trade.get("exit_time"));
+                    dt=self._journal_ist(trade.get("exit_time"))
                     if pd.notna(dt):stops.append(dt)
             if not stops:return None
             end=max(stops).to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);now=self._now();return end.replace(tzinfo=None) if end>now.replace(tzinfo=None) else None
         except Exception:return None
     def signal_key(self,signal):
         candidate=str(signal.get("candidate_id","")).strip().upper()
-        if candidate:return ("CANDIDATE",candidate)
-        return (str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("trigger_entry_time",signal.get("entry_time",""))),str(signal.get("open_cross_level","")))
+        if not candidate:
+            candidate="|".join([str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("open_cross_level","")).strip(),str(signal.get("pdh","")).strip(),str(signal.get("pdl","")).strip()])
+        return ("CANDIDATE",candidate)
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
     def cooldown_active(self):
         if self.cooldown_until is None:return False
@@ -128,11 +128,11 @@ class TradingBot:
         return ok
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
-        entry_time=signal.get("entry_time"); parsed=pd.to_datetime(entry_time,errors="coerce")
+        entry_time=signal.get("entry_time");parsed=pd.to_datetime(entry_time,errors="coerce")
         if entry_time is None or pd.isna(parsed):return
         parsed=parsed.tz_localize(INDIA_TZ) if getattr(parsed,"tzinfo",None) is None else parsed.tz_convert(INDIA_TZ)
         if parsed.date()!=self._now().date():return
-        signal["trigger_entry_time"]=entry_time; key=self.signal_key(signal); symbol=str(signal.get("symbol","")).strip().upper()
+        signal["trigger_entry_time"]=entry_time;key=self.signal_key(signal);symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol or key in self.processed_signals:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
         risk_result=self.risk_engine.approve_trade(signal,available_capital=float(self.paper_engine.available_capital));self.log_signal(signal,risk_result)
