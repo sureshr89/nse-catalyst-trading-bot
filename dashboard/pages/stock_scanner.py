@@ -1,235 +1,75 @@
-import json
-import sys
+import json,sys
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
+ROOT=Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
-
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
-NIFTY_THRESHOLD = 0.25
-ENTRY_START = "09:45"
-ENTRY_END = "14:00"
-
-st.set_page_config(page_title="NSE Catalyst | Stock Scanner", page_icon="🔎", layout="wide")
-st_autorefresh(interval=5000, key="stock_scanner_live")
-st.markdown(load_css(), unsafe_allow_html=True)
-render_nav()
-
+INDIA_TZ=ZoneInfo("Asia/Kolkata");NIFTY_THRESHOLD=0.25;ENTRY_START="09:45";ENTRY_END="14:00"
+st.set_page_config(page_title="NSE Catalyst | Stock Scanner",page_icon="🔎",layout="wide");st_autorefresh(interval=5000,key="stock_scanner_live");st.markdown(load_css(),unsafe_allow_html=True);render_nav()
 
 def read_json(path):
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return {}
-
-
+    try:return json.loads(path.read_text())
+    except Exception:return {}
 def read_csv(path):
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        return pd.DataFrame()
+    try:return pd.read_csv(path)
+    except Exception:return pd.DataFrame()
+def money(v):
+    try:return f"₹{float(v):,.2f}"
+    except Exception:return "—"
+def pct(v):
+    try:return f"{float(v):+.2f}%"
+    except Exception:return "—"
 
+gaps=read_csv(ROOT/"outputs/gap_analysis.csv");waiting=read_json(ROOT/"outputs/waiting_candidates.json");signals=read_csv(ROOT/"outputs/signals.csv");trades=read_csv(ROOT/"outputs/trades.csv");state=read_json(ROOT/"outputs/paper_engine_state.json");diag=read_json(ROOT/"outputs/scanner_diagnostics.json")
+try:ensure_bot_running()
+except Exception:pass
+positions=state.get("open_positions",{}) if isinstance(state,dict) else {};market_change=float(diag.get("nifty500_change_pct",0) or 0);now=datetime.now(INDIA_TZ)
+st.title("🔎 NIFTY 500 Stock Scanner");st.caption("Complete stock-by-stock view • live waiting states • qualified candidates • entry priority")
 
-def money(value):
-    try:
-        return f"₹{float(value):,.2f}"
-    except Exception:
-        return "—"
+cards=[("BUY waiting",len((waiting.get("waiting",{}) or {}).get("BUY",{}))), ("SELL waiting",len((waiting.get("waiting",{}) or {}).get("SELL",{}))), ("BUY qualified",len((waiting.get("qualified",{}) or {}).get("BUY",{}))), ("SELL qualified",len((waiting.get("qualified",{}) or {}).get("SELL",{}))), ("Open positions",len(positions))]
+cols=st.columns(5)
+for c,(label,value) in zip(cols,cards):c.metric(label,value)
+st.caption(f"NIFTY 500 {market_change:+.2f}% • Control cycle 30s • 1-minute setup data • Updated {now.strftime('%H:%M:%S')} IST")
 
+st.subheader("⏳ Waiting Stocks")
+waiting_rows=[]
+for side in ("BUY","SELL"):
+    for symbol,item in ((waiting.get("waiting",{}) or {}).get(side,{}) or {}).items():
+        waiting_rows.append({"Side":side,"Symbol":symbol,"State":item.get("state","WAITING"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl")),"Created":item.get("created_at","—")})
+if waiting_rows:st.dataframe(pd.DataFrame(waiting_rows),width="stretch",hide_index=True,height=360)
+else:st.info("No stocks are currently waiting for a PDH/PDL breach or Today's Open return.")
 
-def pct(value):
-    try:
-        return f"{float(value):+.2f}%"
-    except Exception:
-        return "—"
+st.subheader("🏆 Qualified Candidate Priority")
+qualified_rows=[]
+for side in ("BUY","SELL"):
+    for symbol,item in ((waiting.get("qualified",{}) or {}).get(side,{}) or {}).items():
+        qualified_rows.append({"Side":side,"Symbol":symbol,"Qualified":item.get("qualified_at","—"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl"))})
+if qualified_rows:st.dataframe(pd.DataFrame(qualified_rows),width="stretch",hide_index=True)
+else:st.info("No qualified candidates yet. Once a stock returns to Today's Open after the PDH/PDL breach, it enters the ranking stage.")
 
+st.subheader("📊 Ranking Metrics")
+ranks=diag.get("ranking",[]) if isinstance(diag,dict) else []
+if ranks:
+    rank_df=pd.DataFrame(ranks);rank_df.insert(0,"Priority",range(1,len(rank_df)+1));st.dataframe(rank_df,width="stretch",hide_index=True)
+else:st.info("ATR%, RVOL, Beta and traded value appear after candidates qualify.")
 
-gaps = read_csv(ROOT / "outputs/gap_analysis.csv")
-signals = read_csv(ROOT / "outputs/signals.csv")
-trades = read_csv(ROOT / "outputs/trades.csv")
-state = read_json(ROOT / "outputs/paper_engine_state.json")
-status = read_json(ROOT / "outputs/bot_status.json")
-diag = read_json(ROOT / "outputs/scanner_diagnostics.json")
+st.subheader("📋 Gap / Opening Board")
+if gaps.empty:st.info("Gap board will appear when the 1-minute market feed populates it.")
+else:
+    board=gaps.copy()
+    for c in ["TodayOpen","PDH","PDL","Gap","GapPercent"]:
+        if c in board.columns:board[c]=pd.to_numeric(board[c],errors="coerce")
+    preferred=[c for c in ["Symbol","TodayOpen","PDH","PDL","GapType","GapPercent"] if c in board.columns];view=board[preferred].copy()
+    for c in ["TodayOpen","PDH","PDL","Gap"]:
+        if c in view.columns:view[c]=view[c].map(money)
+    if "GapPercent" in view.columns:view["GapPercent"]=view["GapPercent"].map(pct)
+    st.dataframe(view,width="stretch",hide_index=True,height=500)
 
-try:
-    live = ensure_bot_running()
-    if isinstance(live, dict):
-        status.update(live)
-except Exception as error:
-    status.setdefault("error", f"Worker launcher: {type(error).__name__}: {error}")
-
-positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
-market_change = float(diag.get("nifty500_change_pct", 0) or 0) if isinstance(diag, dict) else 0.0
-now = datetime.now(INDIA_TZ)
-
-st.title("🔎 NIFTY 500 Stock Scanner")
-st.caption("Complete stock-by-stock view • gap status • strategy progress • entry status")
-if status.get("error"):
-    st.warning(str(status["error"]))
-if gaps.empty:
-    st.info("Complete stock data will appear when the market data feed populates gap_analysis.csv.")
-    render_daily_footer()
-    st.stop()
-
-board = gaps.copy()
-for col in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercent"]:
-    if col in board.columns:
-        board[col] = pd.to_numeric(board[col], errors="coerce")
-
-# Only today's signal records can affect today's stock status.
-if not signals.empty:
-    date_col = "entry_time" if "entry_time" in signals.columns else "timestamp" if "timestamp" in signals.columns else None
-    if date_col:
-        dates = pd.to_datetime(signals[date_col], errors="coerce")
-        if dates.notna().any():
-            if getattr(dates.dt, "tz", None) is not None:
-                dates = dates.dt.tz_convert(INDIA_TZ)
-            else:
-                dates = dates.dt.tz_localize(INDIA_TZ)
-            signals = signals.loc[dates.dt.date.eq(now.date())].copy()
-
-if not trades.empty and "entry_time" in trades.columns:
-    trade_dates = pd.to_datetime(trades["entry_time"], errors="coerce")
-    if trade_dates.notna().any():
-        if getattr(trade_dates.dt, "tz", None) is not None:
-            trade_dates = trade_dates.dt.tz_convert(INDIA_TZ)
-        else:
-            trade_dates = trade_dates.dt.tz_localize(INDIA_TZ)
-        trades = trades.loc[trade_dates.dt.date.eq(now.date())].copy()
-
-position_symbols = {str(s).upper() for s in positions.keys()}
-latest_signal = {}
-if not signals.empty and "symbol" in signals.columns:
-    ordered = signals.copy()
-    sort_col = "timestamp" if "timestamp" in ordered.columns else "entry_time" if "entry_time" in ordered.columns else None
-    if sort_col:
-        ordered = ordered.sort_values(sort_col)
-    for _, row in ordered.iterrows():
-        latest_signal[str(row.get("symbol", "")).upper()] = row.to_dict()
-
-approved_symbols = set()
-for symbol, record in latest_signal.items():
-    if str(record.get("approved", "")).lower() in {"true", "1", "yes"}:
-        approved_symbols.add(symbol)
-
-capital_blocked_symbols = set()
-if not trades.empty and "symbol" in trades.columns and "status" in trades.columns:
-    capital_rows = trades[trades["status"].astype(str).str.upper().str.startswith("MISSED_CAPITAL")]
-    capital_blocked_symbols = set(capital_rows["symbol"].astype(str).str.upper())
-
-
-def stock_status(row):
-    symbol = str(row.get("Symbol", "")).upper()
-    gap_type = str(row.get("GapType", ""))
-    record = latest_signal.get(symbol, {})
-    if symbol in position_symbols:
-        return "🟢 ENTERED"
-    if symbol in capital_blocked_symbols:
-        return "⚫ NOT ENTERED — CASH"
-    if symbol in approved_symbols:
-        return "🔵 QUALIFIED / NOT ENTERED"
-    if record and str(record.get("approved", "")).lower() in {"false", "0", "no"} and str(record.get("reason", "")).strip():
-        return "🔴 NOT QUALIFIED"
-    if gap_type == "GAP_UP":
-        return "🟡 GAP UP / WAITING" if market_change >= NIFTY_THRESHOLD else "🔴 GAP UP / NIFTY FILTER"
-    if gap_type == "GAP_DOWN":
-        return "🟠 GAP DOWN / WAITING" if market_change <= -NIFTY_THRESHOLD else "🔴 GAP DOWN / NIFTY FILTER"
-    return "⚪ WAITING"
-
-
-board["Status"] = board.apply(stock_status, axis=1)
-board["NIFTY 500"] = "BUY" if market_change >= NIFTY_THRESHOLD else "SELL" if market_change <= -NIFTY_THRESHOLD else "WAIT"
-
-
-def reason(row):
-    symbol = str(row.get("Symbol", "")).upper()
-    record = latest_signal.get(symbol, {})
-    recorded = str(record.get("reason", "")).strip()
-    status_text = row["Status"]
-    if "ENTERED" in status_text:
-        return "Position open"
-    if "CASH" in status_text:
-        matching = trades[trades["symbol"].astype(str).str.upper().eq(symbol)] if not trades.empty and "symbol" in trades.columns else pd.DataFrame()
-        if not matching.empty and "exit_reason" in matching.columns:
-            return str(matching.iloc[-1].get("exit_reason", "NOT ENTERED: insufficient available capital"))
-        return "NOT ENTERED: insufficient available capital"
-    if recorded and str(record.get("approved", "")).lower() in {"false", "0", "no"}:
-        return recorded
-    if "QUALIFIED" in status_text:
-        return "Qualified signal; entry not recorded"
-    if "NIFTY FILTER" in status_text:
-        return "NIFTY 500 filter does not support this direction"
-    if "GAP UP" in status_text:
-        return "Waiting for PDH breach and trigger candle return above Today's Open"
-    if "GAP DOWN" in status_text:
-        return "Waiting for PDL breach and trigger candle return below Today's Open"
-    return "Open is inside PDH/PDL range"
-
-
-board["Reason"] = board.apply(reason, axis=1)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Stocks", len(board))
-c2.metric("Gap Up", int((board["GapType"] == "GAP_UP").sum()) if "GapType" in board.columns else 0)
-c3.metric("Gap Down", int((board["GapType"] == "GAP_DOWN").sum()) if "GapType" in board.columns else 0)
-c4.metric("Entered", len(position_symbols))
-c5.metric("Qualified", len(approved_symbols - position_symbols))
-
-st.caption(f"NIFTY 500: {market_change:+.2f}% • Entry window {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
-
-f1, f2, f3 = st.columns(3)
-with f1:
-    status_filter = st.selectbox("Status", ["ALL"] + sorted(board["Status"].dropna().unique().tolist()))
-with f2:
-    industry_values = sorted(board["Industry"].dropna().astype(str).unique().tolist()) if "Industry" in board.columns else []
-    industry_filter = st.selectbox("Industry (information only)", ["ALL"] + industry_values)
-with f3:
-    search = st.text_input("Search stock", placeholder="e.g. RELIANCE")
-
-view = board.copy()
-if status_filter != "ALL":
-    view = view[view["Status"] == status_filter]
-if industry_filter != "ALL" and "Industry" in view.columns:
-    view = view[view["Industry"].astype(str) == industry_filter]
-if search.strip():
-    q = search.strip().upper()
-    view = view[view["Symbol"].astype(str).str.upper().str.contains(q, na=False)]
-
-preferred = ["Status", "Symbol", "Industry", "TodayOpen", "PDH", "PDL", "Gap", "GapPercent", "NIFTY 500", "Reason"]
-cols = [c for c in preferred if c in view.columns]
-display = view[cols].copy()
-for col in ["TodayOpen", "PDH", "PDL", "Gap"]:
-    if col in display.columns:
-        display[col] = display[col].map(money)
-if "GapPercent" in display.columns:
-    display["GapPercent"] = display["GapPercent"].map(pct)
-
-st.subheader(f"📋 Stock-by-Stock Status ({len(display)} shown / {len(board)} total)")
-st.dataframe(display, width="stretch", hide_index=True, height=620)
-
-st.subheader("💰 Capital & Entry Status")
-available_capital = state.get("available_capital") if isinstance(state, dict) else None
-capital_items = [
-    ("Configured Capital", money(250000)),
-    ("Available Capital", money(available_capital) if available_capital is not None else "Not reported"),
-    ("Open Positions", len(positions)),
-    ("Max Positions", 2),
-]
-cap_cols = st.columns(len(capital_items))
-for col, (label, value) in zip(cap_cols, capital_items):
-    col.metric(label, value)
-
-st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Rejection reasons come from recorded scanner/risk results; the dashboard does not invent a strategy rule.")
-render_daily_footer()
+st.caption("Industry/Sector is not a strategy condition. Entry is based on 1-minute CLOSE state detection, then current market price for execution. Paper trading only.");render_daily_footer()
