@@ -77,10 +77,10 @@ market_change = float(diag.get("nifty500_change_pct", 0) or 0) if isinstance(dia
 
 if market_change >= NIFTY_THRESHOLD:
     permission = "🟢 BUY"
-    permission_note = "NIFTY 500 supports long setups"
+    permission_note = "NIFTY 500 supports BUY setups"
 elif market_change <= -NIFTY_THRESHOLD:
     permission = "🔴 SELL"
-    permission_note = "NIFTY 500 supports short setups"
+    permission_note = "NIFTY 500 supports SELL setups"
 else:
     permission = "⚪ WAIT"
     permission_note = "NIFTY 500 filter not satisfied"
@@ -106,15 +106,14 @@ st.caption(f"{permission_note} • {ENTRY_START}–{ENTRY_END} IST • Updated {
 if status.get("error"):
     st.warning(str(status["error"]))
 
-# Strategy state: concise, visual and based on the exact new rules.
 st.subheader("⚡ Live Strategy State")
 strategy_rows = [
     ("Universe", "NIFTY 500"),
-    ("Timeframe", "1-minute completed prices"),
-    ("BUY", "Open > PDH → close below PDH → reversal candle Open < Today's Open < Close"),
-    ("SELL", "Open < PDL → close above PDL → reversal candle Open > Today's Open > Close"),
     ("Market filter", "BUY ≥ +0.25% • SELL ≤ −0.25%"),
-    ("Entry", "Close of qualifying 1-minute reversal candle"),
+    ("BUY setup", "Today's Open > PDH → price moves below PDH → later returns above Today's Open"),
+    ("SELL setup", "Today's Open < PDL → price moves above PDL → later returns below Today's Open"),
+    ("Entry window", "09:45–14:00 IST"),
+    ("Risk", "Configured risk and target from the bot settings"),
 ]
 st.dataframe(pd.DataFrame(strategy_rows, columns=["Condition", "Current Rule"]), width="stretch", hide_index=True)
 
@@ -132,7 +131,7 @@ if not gaps.empty and "GapType" in gaps.columns:
     c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown("### 🟢 BUY WATCHLIST")
-        st.caption("Today's Open above PDH — waiting for PDH breach/reaction and reversal through Today's Open")
+        st.caption("Today's Open above PDH — monitor the required PDH-to-Open price sequence")
         if ups.empty:
             st.info("No BUY candidates currently.")
         else:
@@ -147,7 +146,7 @@ if not gaps.empty and "GapType" in gaps.columns:
 
     with c2:
         st.markdown("### 🔴 SELL WATCHLIST")
-        st.caption("Today's Open below PDL — waiting for PDL breach/reaction and reversal through Today's Open")
+        st.caption("Today's Open below PDL — monitor the required PDL-to-Open price sequence")
         if downs.empty:
             st.info("No SELL candidates currently.")
         else:
@@ -165,14 +164,14 @@ else:
 st.subheader("🚨 Active Signals")
 if not trades.empty:
     recent = trades.tail(20).copy()
-    preferred = ["symbol", "signal", "entry_time", "entry", "stop_loss", "target", "market_direction", "stock_direction"]
+    preferred = ["symbol", "signal", "entry_time", "entry", "stop_loss", "target", "market_direction", "sector_direction", "stock_direction"]
     cols = [c for c in preferred if c in recent.columns]
     if cols:
         st.dataframe(recent[cols].iloc[::-1], width="stretch", hide_index=True, height=260)
     else:
         st.info("No displayable signals yet.")
 else:
-    st.info("No qualifying signals yet. The bot will show a stock here only after every strategy condition is satisfied.")
+    st.info("No qualifying signals yet. A stock will appear here only after the configured strategy conditions are satisfied.")
 
 st.subheader("📍 Open Positions")
 if positions:
