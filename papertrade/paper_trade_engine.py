@@ -7,7 +7,7 @@ from config.settings import PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENT
 from market.price_data import PriceData
 from papertrade.persistent_storage import restore_json, sync_json
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
-STATE_VERSION=5
+STATE_VERSION=6
 class PaperTradeEngine:
     """Simulated execution engine. Live trading is deliberately prohibited."""
     def __init__(self):
@@ -55,6 +55,30 @@ class PaperTradeEngine:
         if not isinstance(position,dict):return False
         symbol=str(position.get("symbol",key)).strip().upper(); signal=str(position.get("signal","")).strip().upper(); entry=self._number(position.get("entry")); stop=self._number(position.get("stop_loss")); target=self._number(position.get("target")); quantity=self._number(position.get("quantity"))
         return bool(symbol and symbol==str(key).strip().upper() and signal in {"BUY","SELL"} and entry and entry>0 and stop and stop>0 and target and target>0 and quantity and quantity>0 and int(quantity)==quantity and position.get("trade_id"))
+    def _quarantine_state_file(self,path):
+        """Preserve a state created by a newer incompatible bot version instead of deleting it."""
+        try:
+            stamp=datetime.now(INDIA_TZ).strftime("%Y%m%d_%H%M%S")
+            target=f"{path}.future_{stamp}"
+            os.replace(path,target)
+            print(f"Future paper state preserved at {target}; starting without loading it.")
+        except OSError as error:
+            print(f"Future paper state could not be quarantined: {type(error).__name__}: {error}")
+    def _migrate_state(self,state,version):
+        """Migrate known older schemas by filling fields that current recovery expects."""
+        migrated=dict(state)
+        migrated.setdefault("strategy","NIFTY_500_PDH_PDL_OPEN_REVERSAL")
+        migrated.setdefault("open_positions",{})
+        migrated.setdefault("closed_positions",[])
+        migrated.setdefault("trade_counter",0)
+        migrated.setdefault("total_capital",TOTAL_CAPITAL)
+        migrated.setdefault("available_capital",migrated.get("total_capital",TOTAL_CAPITAL))
+        migrated.setdefault("used_capital",0.0)
+        migrated.setdefault("session_date",migrated.get("saved_at"))
+        if not isinstance(migrated.get("open_positions"),dict) or not isinstance(migrated.get("closed_positions"),list):
+            raise ValueError(f"Unsupported paper state collections in legacy version {version}")
+        migrated["state_version"]=STATE_VERSION
+        return migrated
     def _restore_state(self):
         path=self._state_path()
         try:
@@ -62,11 +86,15 @@ class PaperTradeEngine:
             if not os.path.exists(path):return
             with open(path,"r",encoding="utf-8") as file: state=json.load(file)
             if not isinstance(state,dict):raise ValueError("Persisted paper state must be an object")
-            if int(state.get("state_version",0) or 0)!=STATE_VERSION:
-                print("Legacy paper state detected; starting clean."); self._reset_state_file(path); return
+            try:version=int(state.get("state_version",0) or 0)
+            except (TypeError,ValueError):version=0
+            if version>STATE_VERSION:
+                print(f"Future paper state version {version} detected; preserving it instead of deleting it."); self._quarantine_state_file(path); return
+            migrated=version<STATE_VERSION
+            if migrated:state=self._migrate_state(state,version)
             restored_open=state.get("open_positions",{}); restored_closed=state.get("closed_positions",[])
             if not isinstance(restored_open,dict) or not isinstance(restored_closed,list):
-                print("Invalid persisted paper state collections detected; starting clean."); self._reset_state_file(path); return
+                raise ValueError("Invalid persisted paper state collections")
             self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if self._valid_open_position(symbol,position)}
             self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
             saved_date=self._session_date(state.get("session_date") or state.get("saved_at")); today=datetime.now(INDIA_TZ).date()
@@ -85,12 +113,8 @@ class PaperTradeEngine:
             self.trade_counter=max([counter,*counters],default=0)
             self.used_capital=round(sum(float(p.get("entry",0) or 0)*int(float(p.get("quantity",0) or 0)) for p in self.open_positions.values()),2); self.available_capital=round(self.total_capital-self.used_capital,2)
             if self.available_capital<0:raise ValueError("Persisted open positions exceed total capital")
-            if saved_date is not None and saved_date != today:self._save_state()
+            if migrated:self._save_state()
         except Exception as error:print(f"Paper state restore skipped: {type(error).__name__}: {error}")
-    @staticmethod
-    def _reset_state_file(path):
-        try:os.remove(path)
-        except OSError:pass
     def _save_state(self):
         path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True); state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
         try:
