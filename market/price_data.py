@@ -122,15 +122,19 @@ class PriceData:
             return None
 
     def get_latest_market_price(self, symbol):
-        """Return the freshest Yahoo market price for 15:00 paper square-off."""
+        """Return a fresh current quote for 15:00 paper square-off; never masquerade an old candle as current."""
         ticker = self.yahoo_symbol(symbol)
+        now = datetime.now(INDIA_TZ)
         try:
             fast_info = yf.Ticker(ticker).fast_info
             last_price = fast_info.get("last_price") if hasattr(fast_info, "get") else None
             if last_price is not None and float(last_price) > 0:
-                return {"Close": float(last_price), "Datetime": datetime.now(INDIA_TZ)}
+                return {"Close": float(last_price), "Datetime": now, "price_source": "fast_info"}
         except Exception as error:
             print(f"Fast market price failed for {symbol}: {error}")
+
+        # Fallback is accepted only when the latest intraday candle is very recent.
+        # A stale 14:59 candle must not be presented as a current 15:00 quote.
         try:
             raw = self._clean_data(yf.download(
                 tickers=ticker, period="1d", interval="1m", auto_adjust=False,
@@ -139,7 +143,15 @@ class PriceData:
             today = self._today_intraday(raw)
             if not today.empty:
                 latest = today.iloc[-1]
-                return {"Close": float(latest["Close"]), "Datetime": latest["Datetime"]}
+                candle_time = pd.Timestamp(latest["Datetime"])
+                if candle_time.tzinfo is None:
+                    candle_time = candle_time.tz_localize(INDIA_TZ)
+                else:
+                    candle_time = candle_time.tz_convert(INDIA_TZ)
+                age_seconds = (now - candle_time.to_pydatetime()).total_seconds()
+                if 0 <= age_seconds <= 120:
+                    return {"Close": float(latest["Close"]), "Datetime": candle_time.to_pydatetime(), "price_source": "recent_1m"}
+                print(f"Current quote for {symbol} is stale ({age_seconds:.0f}s); square-off will retry")
         except Exception as error:
             print(f"Intraday market price fallback failed for {symbol}: {error}")
         return None
