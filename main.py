@@ -154,7 +154,8 @@ class TradingBot:
             closed=self.paper_engine.process_candle(symbol,candle)
             if closed is not None:
                 closed_pnl=float(pd.to_numeric(pd.Series([closed.get("pnl",0)]),errors="coerce").fillna(0).iloc[0]);self.daily_pnl=round(self.daily_pnl+closed_pnl,2);self._persist_closed_trade(closed)
-                if str(closed.get("exit_reason","")).upper()=="STOP_LOSS":self.cooldown_until=self._now().replace(tzinfo=None)+timedelta(minutes=COOLDOWN_MINUTES)
+                if str(closed.get("exit_reason","")).upper()=="STOP_LOSS":
+                    exit_dt=self._journal_ist(closed.get("exit_time"));cooldown_base=exit_dt.to_pydatetime() if pd.notna(exit_dt) else self._now();self.cooldown_until=(cooldown_base+timedelta(minutes=COOLDOWN_MINUTES)).replace(tzinfo=None)
         self._retry_closed_journal();self.missed_capital.monitor()
     def _persist_master_data(self):
         try:
