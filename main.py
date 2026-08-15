@@ -117,8 +117,11 @@ class TradingBot:
         return False
     def _retry_closed_journal(self):
         """Reconcile persisted paper-engine CLOSED trades into the journal after transient failures."""
+        all_saved=True
         for trade in list(self.paper_engine.closed_positions):
-            if str(trade.get("exit_time","")).strip() and str(trade.get("status","")).upper()=="CLOSED":self._persist_closed_trade(trade)
+            if str(trade.get("exit_time","")).strip() and str(trade.get("status","")).upper()=="CLOSED":
+                if not self._persist_closed_trade(trade):all_saved=False
+        return all_saved
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         entry_time=signal.get("entry_time");parsed_entry=pd.to_datetime(entry_time,errors="coerce")
@@ -187,7 +190,7 @@ class TradingBot:
             if price is None:print(f"15:00 square-off price unavailable for {symbol}; position remains open until a valid market price is available");continue
             closed=self.paper_engine.close_position(symbol,price,exit_time,"SQUARE_OFF")
             if closed is not None:self.daily_pnl=round(self.daily_pnl+float(closed.get("pnl",0) or 0),2)
-        self._retry_closed_journal();self._persist_master_data();self.square_off_done=not bool(self.paper_engine.open_positions)
+        journal_ok=self._retry_closed_journal();self._persist_master_data();self.square_off_done=(not bool(self.paper_engine.open_positions)) and journal_ok
     def scan_for_entries(self):
         now=self.current_time()
         if now<TRADING_START or now>LAST_ENTRY_TIME or self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:return
