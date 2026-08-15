@@ -73,6 +73,17 @@ def _prepare_pre_entry_candidates(bot):
         _write_status(bot,status="WAITING",message=f"NIFTY 500 setups ready: {len(candidates)} stocks. Waiting for {TRADING_START} IST.",scanner_status="IDLE",error=None);return True
     except Exception as error:
         _write_status(bot,status="WAITING",message="Pre-entry preparation failed; worker will retry.",scanner_status="ERROR",error=f"{type(error).__name__}: {error}");return False
+def _refresh_master_data(bot=None, reason="End-of-day refresh"):
+    """Refresh master research files only after the journal has the final EOD state."""
+    try:
+        from master_data import build_master_data
+        result=build_master_data()
+        _write_status(bot,master_data_refreshed_at=_iso_now(),master_data_refresh_reason=reason,master_data_error=None)
+        return result
+    except Exception as error:
+        message=f"Master-data refresh failed: {type(error).__name__}: {error}"
+        _write_status(bot,master_data_refresh_error=message)
+        print(message);traceback.print_exc();return None
 def _run_one_trading_day():
     from main import TradingBot
     session_date=_now().date().isoformat();bot=TradingBot();_write_status(bot,status="RUNNING",message="NIFTY 500 paper-trading bot is running.",error=None,scanner_status="IDLE",cycle_count=0,scan_count=0,worker_id=_worker_id(),session_date=session_date);pre_entry_ready=False
@@ -92,14 +103,16 @@ def _run_one_trading_day():
             finally:_write_status(bot,scanner_status="IDLE",last_scan_completed=_iso_now(),scan_duration_seconds=round(time.monotonic()-scan_started,2))
             time.sleep(SCAN_INTERVAL_SECONDS);continue
         _write_status(bot,status="RUNNING",message="Running mandatory 15:00 IST square-off.",last_cycle=_iso_now(),scanner_status="IDLE")
-        # Do not leave the day loop until every open paper position has been closed.
-        # Retry current-market-price square-off when a quote is temporarily unavailable.
         while bot.paper_engine.open_positions:
             try:bot.square_off_all()
             except Exception as error:_write_status(bot,status="ERROR",message="15:00 square-off retry failed; retrying.",error=f"{type(error).__name__}: {error}");print("15:00 square-off error:",error)
             if bot.paper_engine.open_positions:
                 _write_status(bot,status="RUNNING",message=f"15:00 square-off pending: {len(bot.paper_engine.open_positions)} position(s) remain. Retrying market price.",scanner_status="IDLE");time.sleep(10)
-        _write_status(bot,status="WAITING",message="Trading day complete. All paper positions squared off at market price.",scanner_status="IDLE",error=None,open_positions=0)
+        # The journal is now final for the session. Refresh master data AFTER square-off
+        # so DailyPnL/ClosedTrades/Analysis/Downloads all include the final exits.
+        _write_status(bot,status="RUNNING",message="Refreshing final daily research data after 15:00 square-off.",scanner_status="IDLE")
+        _refresh_master_data(bot,reason="Final post-square-off refresh")
+        _write_status(bot,status="WAITING",message="Trading day complete. All paper positions squared off at market price and master data refreshed.",scanner_status="IDLE",error=None,open_positions=0)
         return
 def _run_bot():
     global _thread,_worker_lock_handle
