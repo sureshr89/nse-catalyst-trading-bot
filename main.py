@@ -55,6 +55,11 @@ class TradingBot:
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
+    def _rollback_registered_trade(self,symbol):
+        try:
+            count=self.risk_engine.get_trade_count(symbol)
+            if count>0:self.risk_engine.trade_counts[symbol]=count-1
+        except Exception as error:print("Risk trade-count rollback failed:",error)
     def process_signal(self,signal):
         if not isinstance(signal,dict):return
         signal["trigger_entry_time"]=signal.get("entry_time");key=self.signal_key(signal)
@@ -65,23 +70,29 @@ class TradingBot:
         available_capital=float(self.paper_engine.available_capital)
         risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):self.processed_signals.add(key);return
-        approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True;result=self.paper_engine.open_trade(approved_trade)
+        approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True
+        try:
+            result=self.paper_engine.open_trade(approved_trade)
+        except Exception as error:
+            self._rollback_registered_trade(symbol);print(f"Paper trade open failed for {symbol}; risk state rolled back: {type(error).__name__}: {error}");return
         if not result.get("opened",False):
             if result.get("reason","")=="Insufficient available capital":self.missed_capital.record(signal,risk_result,result["reason"])
-            try:
-                count=self.risk_engine.get_trade_count(symbol)
-                if count>0:self.risk_engine.trade_counts[symbol]=count-1
-            except Exception:pass
-            self.processed_signals.add(key);return
+            self._rollback_registered_trade(symbol);self.processed_signals.add(key);return
         self.processed_signals.add(key);position=self.paper_engine.open_positions.get(symbol)
-        if position is None:return
-        self._attach_trade_context(position,approved_trade);self.journal.log_trade(position.copy())
+        if position is None:
+            self._rollback_registered_trade(symbol);print(f"Paper trade {symbol} reported opened but position state was missing");return
+        self._attach_trade_context(position,approved_trade)
+        try:self.journal.log_trade(position.copy())
+        except Exception as error:print(f"Open trade journal save failed for {symbol}: {type(error).__name__}: {error}")
     def _process_open_positions(self):
         for symbol in list(self.paper_engine.open_positions):
             candle=self.latest_1m_candle(symbol)
             if candle is None:continue
             closed=self.paper_engine.process_candle(symbol,candle)
-            if closed is not None:self.journal.log_trade(closed);self.daily_pnl=self._restore_daily_pnl()
+            if closed is not None:
+                try:self.journal.log_trade(closed)
+                except Exception as error:print(f"Closed trade journal save failed for {symbol}: {type(error).__name__}: {error}")
+                self.daily_pnl=self._restore_daily_pnl()
         self.missed_capital.monitor()
     def _persist_master_data(self):
         try:
@@ -94,7 +105,9 @@ class TradingBot:
                 print(f"15:00 square-off price unavailable for {symbol}; retrying on next worker cycle")
                 continue
             closed=self.paper_engine.close_position(symbol,quote.get("Close"),quote.get("Datetime") or self._now(),"SQUARE_OFF")
-            if closed is not None:self.journal.log_trade(closed)
+            if closed is not None:
+                try:self.journal.log_trade(closed)
+                except Exception as error:print(f"Square-off journal save failed for {symbol}: {type(error).__name__}: {error}")
         self.daily_pnl=self._restore_daily_pnl();self._persist_master_data();self.square_off_done=not bool(self.paper_engine.open_positions)
     def scan_for_entries(self):
         now=self.current_time()
