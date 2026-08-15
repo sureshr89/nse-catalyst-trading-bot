@@ -1,30 +1,42 @@
 # NSE Catalyst Trading Bot
 
-## Active strategy — NIFTY 500 PDH/PDL + Today's Open Reversal
+## Active strategy — NIFTY 500 PDH/PDL + Today's Open Return
 
-A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The active strategy uses previous-day High/Low, today's Open, completed 1-minute price data and the NIFTY 500 market filter.
+A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The active strategy uses previous-day High/Low, today's Open, completed 1-minute CLOSE data for setup detection, and the NIFTY 500 market filter.
 
 ### BUY setup
 
-1. Today's Open is **above PDH**.
-2. A completed 1-minute price record must show price **below PDH** after the Open setup.
-3. After that breach, a later completed 1-minute trigger candle must **open below Today's Open and close above Today's Open**.
-4. The trigger must be fresh within the configured trigger-age window.
-5. NIFTY 500 must be **≥ +0.25%** versus the previous trading close.
-6. Entry price = the trigger candle **close**.
-7. Stop-loss = **PDH**.
-8. Target = **1.25 × entry-to-SL risk**.
+1. Activate the BUY side when NIFTY 500 is **≥ +0.25%** versus the previous trading close.
+2. Build the BUY candidate pool from stocks where **Today's Open > PDH**.
+3. Maintain those candidates in the waiting list using completed 1-minute **Close** prices.
+4. When a candidate's Close goes **below PDH**, mark `PDH_BREACHED` and keep waiting.
+5. When a breached candidate's Close returns to/reaches **Today's Open**, mark it **BUY QUALIFIED**.
+6. No separate reversal-candle Open/Close pattern is required.
+7. For qualified candidates, rank **ATR% → RVOL → Beta → traded value**.
+8. Immediately before entry, re-check NIFTY 500 ≥ +0.25% and the stock is at/above Today's Open.
+9. Use the current available market price as the entry price.
+10. Stop-loss = **PDH**; target = **1.25R**.
 
 ### SELL setup
 
-1. Today's Open is **below PDL**.
-2. A completed 1-minute price record must show price **above PDL** after the Open setup.
-3. After that breach, a later completed 1-minute trigger candle must **open above Today's Open and close below Today's Open**.
-4. The trigger must be fresh within the configured trigger-age window.
-5. NIFTY 500 must be **≤ −0.25%** versus the previous trading close.
-6. Entry price = the trigger candle **close**.
-7. Stop-loss = **PDL**.
-8. Target = **1.25 × entry-to-SL risk**.
+1. Activate the SELL side when NIFTY 500 is **≤ −0.25%** versus the previous trading close.
+2. Build the SELL candidate pool from stocks where **Today's Open < PDL**.
+3. Maintain those candidates in the waiting list using completed 1-minute **Close** prices.
+4. When a candidate's Close goes **above PDL**, mark `PDL_BREACHED` and keep waiting.
+5. When a breached candidate's Close returns to/reaches **Today's Open**, mark it **SELL QUALIFIED**.
+6. No separate reversal-candle Open/Close pattern is required.
+7. For qualified candidates, rank **ATR% → RVOL → Beta → traded value**.
+8. Immediately before entry, re-check NIFTY 500 ≤ −0.25% and the stock is at/below Today's Open.
+9. Use the current available market price as the entry price.
+10. Stop-loss = **PDL**; target = **1.25R**.
+
+### Runtime and data flow
+
+- Market setup data: completed **1-minute** data.
+- Control cycle: **30 seconds**.
+- Market-data refresh/cache: approximately **60 seconds**.
+- Waiting and qualified candidate states persist between cycles; the bot does not restart the setup from zero each cycle.
+- Once a stock is finalized for entry, entry/risk/SL/target are calculated immediately rather than waiting for another control cycle.
 
 ### Risk controls
 
@@ -47,14 +59,16 @@ A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The act
 - **Industry/Sector is not a trading filter.**
 - There is no separate stock-direction alignment filter.
 - No EMA, VWAP, BOS/CHOCH, FVG or other technical-pattern filter is used.
-- The gap board is informational/setup preparation; final entry requires the exact reversal sequence above.
+- ATR%, RVOL, Beta and traded value **rank already-qualified candidates only**; they do not create a trade by themselves.
 
 ### Main modules
 
-- `scanner/scanner_engine.py` — NIFTY 500 scanning and diagnostics
-- `strategy/open_reversal_engine.py` — active PDH/PDL + Today's Open reversal logic
+- `scanner/scanner_engine.py` — NIFTY 500 scanning, waiting states, qualification and ranking
+- `strategy/open_reversal_engine.py` — PDH/PDL + Today's Open state logic
+- `strategy/candidate_metrics.py` — ATR%, RVOL, Beta and traded-value ranking metrics
 - `strategy/risk_engine.py` — risk approval, position sizing and daily worst-case loss protection
 - `market/price_data.py` — NIFTY 500 and NIFTY market price data
+- `market/live_price.py` — fresh available 1-minute market price for paper entry
 - `data/stock_universe.py` — NIFTY 500 universe
 - `data/reference_store.py` — PDH/PDL daily references
 - `bot_runner.py` — persistent paper worker
