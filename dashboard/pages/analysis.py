@@ -18,6 +18,7 @@ from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
 
 TRADES = ROOT / "outputs" / "trades.csv"
+NEWS = ROOT / "outputs" / "MASTER_NEWS_ANALYSIS.csv"
 STARTING_CAPITAL = 250000.0
 
 st.set_page_config(page_title="NSE Catalyst | Analysis", page_icon="📊", layout="wide")
@@ -33,6 +34,13 @@ except Exception:
 def read_trades():
     try:
         return pd.read_csv(TRADES)
+    except Exception:
+        return pd.DataFrame()
+
+
+def read_news():
+    try:
+        return pd.read_csv(NEWS) if NEWS.exists() else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -107,12 +115,13 @@ st.dataframe(
         ("SELL", "Today's Open < PDL → price moves above PDL → return below Today's Open"),
         ("Market filter", "BUY ≥ +0.25% NIFTY 500 • SELL ≤ −0.25% NIFTY 500"),
         ("Entry window", "09:45–14:00 IST"),
+        ("News gate", "BUY requires POSITIVE news • SELL requires NEGATIVE news • NEUTRAL/no usable news is rejected"),
     ], columns=["Rule", "Definition"]),
     use_container_width=True,
     hide_index=True,
 )
 
-tabs = st.tabs(["📌 Overview", "💰 P&L", "🎯 Setup", "🏆 Stocks", "⚖️ Risk / Reward", "📋 Trades"])
+tabs = st.tabs(["📌 Overview", "💰 P&L", "🎯 Setup", "🏆 Stocks", "⚖️ Risk / Reward", "📰 News Analysis", "📋 Trades"])
 
 with tabs[0]:
     st.subheader("Performance Overview")
@@ -227,6 +236,50 @@ with tabs[4]:
                 st.info("No risk-per-share data recorded yet.")
 
 with tabs[5]:
+    st.subheader("📰 News Analysis")
+    st.caption("Recorded Yahoo Finance news decisions used at the candidate timestamp. Later headlines are not used for backtesting.")
+    news_df = read_news()
+    if news_df.empty:
+        st.info("No news decisions have been recorded yet. They will appear when qualified candidates reach the news gate during market hours.")
+    else:
+        sentiment = news_df.get("news_sentiment", pd.Series("NEUTRAL", index=news_df.index)).astype(str).str.upper()
+        approved_bool = news_df.get("approved", pd.Series(False, index=news_df.index)).astype(str).str.strip().str.lower().isin(["true", "1", "yes"])
+        n1, n2, n3, n4 = st.columns(4)
+        n1.metric("News Decisions", len(news_df))
+        n2.metric("🟢 Positive", int((sentiment == "POSITIVE").sum()))
+        n3.metric("🔴 Negative", int((sentiment == "NEGATIVE").sum()))
+        n4.metric("✅ Passed", int(approved_bool.sum()))
+
+        view = news_df.copy()
+        if "timestamp" in view.columns:
+            view["timestamp_dt"] = pd.to_datetime(view["timestamp"], errors="coerce")
+            view["TradeDate"] = view["timestamp_dt"].dt.strftime("%Y-%m-%d")
+        else:
+            view["TradeDate"] = ""
+
+        f1, f2 = st.columns(2)
+        with f1:
+            sentiment_options = ["POSITIVE", "NEGATIVE", "NEUTRAL"]
+            selected_sentiment = st.multiselect("Sentiment", sentiment_options, default=sentiment_options, key="analysis_news_sentiment")
+        with f2:
+            side_options = sorted(view["signal"].dropna().astype(str).str.upper().unique().tolist()) if "signal" in view.columns else []
+            selected_side = st.multiselect("Side", side_options, default=side_options, key="analysis_news_side")
+
+        if selected_sentiment:
+            view = view[sentiment.loc[view.index].isin(selected_sentiment)]
+        if selected_side and "signal" in view.columns:
+            view = view[view["signal"].astype(str).str.upper().isin(selected_side)]
+
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Filtered Decisions", len(view))
+        a2.metric("Passed News Gate", int(view.get("approved", pd.Series(False, index=view.index)).astype(str).str.lower().isin(["true", "1", "yes"]).sum()))
+        a3.metric("Rejected / Not Approved", max(0, len(view) - int(view.get("approved", pd.Series(False, index=view.index)).astype(str).str.lower().isin(["true", "1", "yes"]).sum())))
+
+        cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "approved", "candidate_id", "entry", "priority_rank"] if c in view.columns]
+        st.dataframe(view[cols].sort_values(["TradeDate", "timestamp"], ascending=False) if cols else view, use_container_width=True, hide_index=True, height=500)
+        st.download_button("⬇️ DOWNLOAD NEWS ANALYSIS CSV", data=view.to_csv(index=False).encode("utf-8"), file_name="nse_catalyst_news_analysis.csv", mime="text/csv", width="stretch")
+
+with tabs[6]:
     st.subheader("Closed Trades")
     if actual.empty:
         st.info("No completed paper trades yet.")
