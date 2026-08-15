@@ -52,12 +52,13 @@ class ScannerEngine:
         percentile=max(0.0,min(1.0,float(HIGH_LIQUIDITY_PERCENTILE)));cutoff=float(refs["PreviousDayTurnover"].quantile(percentile));refs["LiquidityQualified"]=refs["PreviousDayTurnover"]>=cutoff;self.diagnostics["liquidity_passed"]=int(refs["LiquidityQualified"].sum());self.diagnostics["rejections"]["liquidity"]=int((~refs["LiquidityQualified"]).sum())
         symbols=refs["Symbol"].astype(str).str.upper().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available_symbols=sum(1 for symbol in symbols if market_data.get(symbol) is not None and not market_data.get(symbol).empty);self.diagnostics["market_data_coverage"]=available_symbols/len(symbols) if symbols else 0.0
         if not available_symbols:self._opening_prepared_date=None;self.diagnostics["rejections"]["missing_data"]+=len(symbols);self._write_diagnostics();return pd.DataFrame()
-        rows=[];gap_rows=[]
+        rows=[];gap_rows=[];today_data_symbols=0
         for _,ref in refs.iterrows():
             symbol=str(ref["Symbol"]).upper();candles=market_data.get(symbol)
             if candles is None or candles.empty:self.diagnostics["rejections"]["missing_data"]+=1;continue
             today_data=self.price_data.today_only(candles)
             if today_data.empty:self.diagnostics["rejections"]["missing_data"]+=1;continue
+            today_data_symbols+=1
             try:today_open=float(today_data.iloc[0]["Open"]);pdc=float(ref["PreviousDayClose"]);pdh=float(ref["PDH"]);pdl=float(ref["PDL"])
             except (TypeError,ValueError):self.diagnostics["rejections"]["missing_data"]+=1;continue
             if today_open>pdh:gap_type,setup="GAP_UP_PDH","BUY_PDH_TO_OPEN";gap_value=today_open-pdh;gap_percent=(gap_value/pdh*100) if pdh else 0
@@ -67,7 +68,11 @@ class ScannerEngine:
             gap_rows.append({"Symbol":symbol,"PreviousClose":round(pdc,4),"TodayOpen":round(today_open,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"]),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
             rows.append({"Symbol":symbol,"PDH":round(pdh,4),"PDL":round(pdl,4),"TodayOpen":round(today_open,4),"PreviousDayClose":round(pdc,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"OpeningSetup":setup,"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"])})
-        self.gap_analysis=pd.DataFrame(gap_rows);self.diagnostics["gap_data_count"]=len(gap_rows);self.diagnostics["gap_up_count"]=sum(r["GapType"]=="GAP_UP_PDH" for r in gap_rows);self.diagnostics["gap_down_count"]=sum(r["GapType"]=="GAP_DOWN_PDL" for r in gap_rows);self._write_gap_analysis(gap_rows);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.diagnostics["opening_setup_passed"]=len(result);self.opening_candidates=result;self._opening_prepared_date=today;self._write_diagnostics();return result
+        self.gap_analysis=pd.DataFrame(gap_rows);self.diagnostics["gap_data_count"]=len(gap_rows);self.diagnostics["gap_up_count"]=sum(r["GapType"]=="GAP_UP_PDH" for r in gap_rows);self.diagnostics["gap_down_count"]=sum(r["GapType"]=="GAP_DOWN_PDL" for r in gap_rows);self._write_gap_analysis(gap_rows);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.diagnostics["opening_setup_passed"]=len(result);self.opening_candidates=result
+        # Cache an opening decision only after at least one symbol has today's IST data.
+        # If the first scan happens before the live session/data feed is ready, retry later.
+        self._opening_prepared_date=today if today_data_symbols>0 else None
+        self._write_diagnostics();return result
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
         if data.empty:return None
