@@ -1,6 +1,6 @@
 """Persistent paper-trade execution engine for the NIFTY 500 strategy."""
 import json, os, re
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 from config.settings import PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MARKET_CLOSE, TOTAL_CAPITAL, MAX_OPEN_POSITIONS, MIN_REQUIRED_RISK, MAX_RISK_PER_TRADE, MIN_RR_RATIO, TRADE_LOG_FILE
@@ -180,7 +180,16 @@ class PaperTradeEngine:
             except Exception:return None
         high=self._number(candle.get("High")); low=self._number(candle.get("Low")); close=self._number(candle.get("Close")); candle_time=candle.get("Datetime")
         if high is None or low is None or close is None:return None
-        key=self._candle_key(candle_time); exit_timestamp=key or candle_time; position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
+        parsed=pd.to_datetime(candle_time,errors="coerce")
+        if pd.isna(parsed):return None
+        if getattr(parsed,"tzinfo",None) is None:parsed=parsed.tz_localize(INDIA_TZ)
+        else:parsed=parsed.tz_convert(INDIA_TZ)
+        now=datetime.now(INDIA_TZ)
+        session_start=time(9,15); session_end=time(15,30)
+        if parsed.date()!=now.date():return None
+        if parsed.to_pydatetime()>now:return None
+        if not (session_start<=parsed.time()<=session_end):return None
+        key=self._candle_key(parsed); exit_timestamp=key; position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
         if key and last and key<=last:return None
         self._update_excursions(position,high,low); signal=position["signal"]; stop=float(position["stop_loss"]); target=float(position["target"])
         if signal=="BUY":sl_hit,target_hit=low<=stop,high>=target
