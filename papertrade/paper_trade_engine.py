@@ -71,7 +71,7 @@ class PaperTradeEngine:
             self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
             saved_date=self._session_date(state.get("session_date") or state.get("saved_at")); today=datetime.now(INDIA_TZ).date()
             if saved_date is not None and saved_date != today:
-                print(f"Stale paper session state ({saved_date}) detected; clearing old open positions for {today}."); self.open_positions={}
+                print(f"Stale paper session state ({saved_date}) detected; clearing old session results for {today}."); self.open_positions={}; self.closed_positions=[]
             for position in self.open_positions.values():
                 position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("last_processed_candle",self._candle_key(position.get("entry_time")))
             for position in self.closed_positions:
