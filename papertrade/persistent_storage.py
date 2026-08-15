@@ -8,7 +8,7 @@ such as Google Drive/database.
 import base64,json,os,time,urllib.error,urllib.request
 from pathlib import Path
 REPO=os.getenv("GITHUB_REPOSITORY","sureshr89/nse-catalyst-trading-bot");BRANCH=os.getenv("GITHUB_DATA_BRANCH","data");TOKEN=os.getenv("GITHUB_TOKEN","").strip();ALLOW_PUBLIC_DATA=os.getenv("GITHUB_ALLOW_PUBLIC_DATA","false").strip().lower()=="true";API_ROOT=f"https://api.github.com/repos/{REPO}/contents";_REPO_PRIVATE=None;_LAST_SIGNAL_SYNC=0.0;_MAX_SYNC_RETRIES=3
-CURRENT_PAPER_STATE_VERSION=5
+CURRENT_PAPER_STATE_VERSION=6
 
 def _repo_is_private():
  global _REPO_PRIVATE
@@ -31,11 +31,7 @@ def _request(url,method="GET",payload=None):
   raw=response.read().decode("utf-8");return json.loads(raw) if raw else {}
 
 def _migrate_paper_state_file(path):
- """Migrate known older paper-state schemas without discarding recoverable trades.
-
- Future/unknown versions are quarantined instead of being deleted so a newer
- schema can never be silently destroyed by an older deployment.
- """
+ """Migrate known older paper-state schemas without discarding recoverable trades."""
  try:
   if not path.exists() or path.stat().st_size<=0:return "missing"
   state=json.loads(path.read_text(encoding="utf-8"))
@@ -48,11 +44,8 @@ def _migrate_paper_state_file(path):
     path.replace(quarantine)
     print(f"Future paper state v{version} quarantined at {quarantine}; current engine is v{CURRENT_PAPER_STATE_VERSION}.")
    else:
-    # Never delete either copy. A repeated startup must not destroy the
-    # original future-state snapshot simply because the quarantine already exists.
     print(f"Future paper state v{version} already quarantined at {quarantine}; preserving existing state.")
    return "future"
-  # Known legacy states are structurally compatible with the current engine.
   state.setdefault("open_positions",{})
   state.setdefault("closed_positions",[])
   state.setdefault("trade_counter",0)
@@ -73,15 +66,12 @@ def restore(local_path,repo_path):
   return False
  try:
   path=Path(local_path)
-  # Preserve any already-present local paper state before considering remote data.
   if path.exists() and path.stat().st_size>0:
    result=_migrate_paper_state_file(path)
    if result in {"current","migrated","future"}:return False
   info=_request(f"{API_ROOT}/{repo_path}?ref={BRANCH}");encoded=info.get("content","").replace("\n","")
   if not encoded:return False
   content=base64.b64decode(encoded).decode("utf-8");path.parent.mkdir(parents=True,exist_ok=True)
-  # Never overwrite non-empty runtime data during automatic startup restore.
-  # This prevents a stale remote snapshot from rolling back newer local state.
   if path.exists() and path.stat().st_size>0 and os.getenv("GITHUB_FORCE_RESTORE","false").strip().lower()!="true":return False
   path.write_text(content,encoding="utf-8")
   _migrate_paper_state_file(path)
