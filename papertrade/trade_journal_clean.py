@@ -9,6 +9,10 @@ from papertrade.persistent_storage import restore, sync
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
+NEWS_COLUMNS = [
+    "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_source", "news_checked_at",
+]
+
 class TradeJournal:
     TRADE_COLUMNS = [
         "trade_id", "candidate_id", "symbol", "stock", "signal", "buy_sell", "entry_time", "trigger_entry_time", "market_entry_time",
@@ -16,13 +20,13 @@ class TradeJournal:
         "pnl", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "pdh", "pdl", "today_open",
         "today_low", "today_high", "previous_day_close", "gap", "gap_percent", "gap_type", "market_direction",
         "nifty500_change_pct", "setup_type", "entry_source", "candidate_state", "atr_pct", "rvol", "beta", "traded_value", "priority_rank",
-        "pdh_pdl_reached", "nifty500_universe", "mae", "mfe", "status"
+        "pdh_pdl_reached", "nifty500_universe", "mae", "mfe", *NEWS_COLUMNS, "status"
     ]
     SIGNAL_COLUMNS = [
         "timestamp", "candidate_id", "symbol", "signal", "market_direction", "nifty500_change_pct", "pdh", "pdl", "today_open", "today_low",
         "today_high", "previous_day_close", "gap", "gap_percent", "gap_type", "entry", "stop_loss", "target", "quantity",
         "risk_reward", "risk_per_share", "actual_risk", "position_value", "open_cross_level", "setup_type", "entry_source", "candidate_state",
-        "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "pdh_pdl_reached", "nifty500_universe", "approved", "reason"
+        "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "pdh_pdl_reached", "nifty500_universe", *NEWS_COLUMNS, "approved", "reason"
     ]
     EXIT_FIELDS = {"exit_time", "exit_price", "exit_reason", "pnl", "status", "mae", "mfe"}
     LEGACY_COLUMNS = {
@@ -184,7 +188,7 @@ class TradeJournal:
         return self.upsert_trade(trade)
 
     def log_signal(self, signal):
-        """Record approved and rejected decisions once per stable candidate."""
+        """Record approved/rejected setup decisions including the news audit fields."""
         if not isinstance(signal, dict):
             return {"saved": False, "reason": "Signal must be a dictionary"}
         if self.signal_exists(signal):
@@ -194,7 +198,7 @@ class TradeJournal:
             row["timestamp"] = datetime.now(INDIA_TZ).isoformat()
         with open(self.signal_file, "a", newline="", encoding="utf-8") as file:
             csv.DictWriter(file, fieldnames=self.SIGNAL_COLUMNS).writerow(row)
-        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save scanner signal decision")
+        sync(self.signal_file, self.signal_file.replace(os.sep, "/"), "Save scanner signal decision with news audit")
         return {"saved": True, "duplicate": False}
 
     def get_trades(self):
