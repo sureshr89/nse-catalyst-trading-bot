@@ -114,19 +114,32 @@ class OpenReversalEngine:
             if trigger is not None and self._fresh(trigger):
                 if nifty_candle is not None and self._candle_direction(nifty_candle) != "BULLISH":
                     return None
-                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                stock_direction = self._direction(setup_data)
-                return self._trade("BUY", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), nifty_direction, stock_direction)
+                return self.finalize_trigger(symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, "BUY")
 
         if ENABLE_SHORT and today_open < pdl:
             trigger = self._trigger_candle(today_data, today_open, pdh, pdl, "SELL")
             if trigger is not None and self._fresh(trigger):
                 if nifty_candle is not None and self._candle_direction(nifty_candle) != "BEARISH":
                     return None
-                setup_data = today_data[today_data["Datetime"] <= trigger["Datetime"]]
-                stock_direction = self._direction(setup_data)
-                return self._trade("SELL", symbol, trigger, today_open, pdh, pdl, float(setup_data["Low"].min()), float(setup_data["High"].max()), nifty_direction, stock_direction)
+                return self.finalize_trigger(symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, "SELL")
         return None
+
+    def finalize_trigger(self, symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, side):
+        """Finalize an already-identified trigger without rescanning for another trigger."""
+        if trigger is None or not self._fresh(trigger):
+            return None
+        data = self._clean(today_data)
+        if data.empty:
+            return None
+        setup_data = data[data["Datetime"] <= trigger["Datetime"]]
+        if setup_data.empty:
+            return None
+        stock_direction = self._candle_direction(pd.DataFrame([trigger]))
+        return self._trade(
+            side, symbol, trigger, float(today_open), float(pdh), float(pdl),
+            float(setup_data["Low"].min()), float(setup_data["High"].max()),
+            nifty_direction, stock_direction,
+        )
 
     def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, nifty_direction, stock_direction):
         trigger_close = float(candle["Close"])
