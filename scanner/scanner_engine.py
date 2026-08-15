@@ -217,6 +217,11 @@ class ScannerEngine:
             if trigger_probe is None:
                 continue
             trigger_time = trigger_probe.get("entry_time")
+            trigger_rows = candles[candles["Datetime"] == pd.Timestamp(trigger_time)]
+            if trigger_rows.empty:
+                continue
+            trigger_candle = trigger_rows.iloc[-1]
+
             nifty_candle = self._nifty500_candle(trigger_time)
             nifty_dir = self.strategy._candle_direction(nifty_candle)
             side = trigger_probe["signal"]
@@ -227,16 +232,15 @@ class ScannerEngine:
                 continue
             self.diagnostics["market_alignment_passed"] += 1
 
-            trigger_rows = candles[candles["Datetime"] == pd.Timestamp(trigger_time)]
-            stock_dir = self.strategy._candle_direction(trigger_rows)
+            stock_dir = self.strategy._candle_direction(pd.DataFrame([trigger_candle]))
             if REQUIRE_STOCK_ALIGNMENT and stock_dir != required:
                 self.diagnostics["rejections"]["stock_alignment"] += 1
                 continue
             self.diagnostics["stock_alignment_passed"] += 1
 
+            today_data = candles[candles["Datetime"].dt.date == pd.Timestamp(trigger_time).date()]
             signal = self.strategy.finalize_trigger(
-                symbol, candles[candles["Datetime"].dt.date == pd.Timestamp(trigger_time).date()],
-                trigger_probe if trigger_probe.get("entry_time") == trigger_time else None,
+                symbol, today_data, trigger_candle,
                 row["TodayOpen"], row["PDH"], row["PDL"], nifty_dir, side,
             )
             if signal is not None:
