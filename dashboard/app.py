@@ -1,37 +1,196 @@
 from pathlib import Path
-import json,sys
-from datetime import datetime,timezone
+import json
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-ROOT=Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
+
+import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
-st.set_page_config(page_title="NSE Catalyst | NIFTY 500 Bot",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
-st_autorefresh(interval=5000,key="live");st.markdown(load_css(),unsafe_allow_html=True)
-def load(p):
-    try:return json.loads(p.read_text())
-    except Exception:return {}
-def grid(items):st.markdown('<div class="metric-grid">'+''.join(f'<div class="metric-card"><small>{a}</small><b>{b}</b></div>' for a,b in items)+'</div>',unsafe_allow_html=True)
-def heartbeat_alive(value,max_age_seconds=90):
+
+ROOT = Path(__file__).resolve().parent.parent
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+ENTRY_START = "09:45"
+ENTRY_END = "14:00"
+NIFTY_THRESHOLD = 0.25
+
+st.set_page_config(
+    page_title="NSE Catalyst | NIFTY 500 Bot",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+st_autorefresh(interval=5000, key="live")
+st.markdown(load_css(), unsafe_allow_html=True)
+
+
+def load_json(path):
     try:
-        stamp=datetime.fromisoformat(str(value).replace("Z","+00:00"));stamp=stamp.replace(tzinfo=ZoneInfo("Asia/Kolkata")) if stamp.tzinfo is None else stamp;age=(datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds();return 0<=age<=max_age_seconds
-    except Exception:return False
-render_nav();status=load(ROOT/"outputs/bot_status.json");state=load(ROOT/"outputs/paper_engine_state.json")
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def load_csv(path):
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def grid(items):
+    st.markdown(
+        '<div class="metric-grid">'
+        + "".join(
+            f'<div class="metric-card"><small>{label}</small><b>{value}</b></div>'
+            for label, value in items
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def heartbeat_alive(value, max_age_seconds=90):
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=INDIA_TZ)
+        age = (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()
+        return 0 <= age <= max_age_seconds
+    except Exception:
+        return False
+
+
+render_nav()
+status = load_json(ROOT / "outputs/bot_status.json")
+state = load_json(ROOT / "outputs/paper_engine_state.json")
+diag = load_json(ROOT / "outputs/scanner_diagnostics.json")
+signals = load_csv(ROOT / "outputs/signals.csv")
+positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
+
 try:
-    live=ensure_bot_running()
-    if isinstance(live,dict):status.update(live)
-except Exception as error:status.setdefault("error",f"Worker launcher: {type(error).__name__}: {error}")
-worker=bool(status.get("worker_alive",False)) and heartbeat_alive(status.get("heartbeat"));bot=str(status.get("status","STARTING")).upper()
-st.title("📈 NIFTY 500 Trading Bot");st.caption("Direct 1-minute price strategy • PDH/PDL breach → return to Today's Open → entry • Paper trading only")
-if worker:st.success("🟢 NIFTY 500 BOT RUNNING • PAPER TRADING")
-else:st.warning("🟠 NIFTY 500 WORKER NOT CONFIRMED ALIVE")
-st.subheader("LIVE BOT STATUS");grid([("India Time",datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")),("Bot",bot),("Worker","ALIVE" if worker else "OFFLINE"),("Scanner",status.get("scanner_status","IDLE")),("Open Positions",len(state.get("open_positions",{}) or {})),("Heartbeat",status.get("heartbeat") or "—")])
-st.subheader("STRATEGY CONDITIONS");grid([("Universe","NIFTY 500"),("Data","Current completed 1-minute prices"),("BUY","Open > PDH → price below PDH → return to Open"),("SELL","Open < PDL → price above PDL → return to Open"),("NIFTY Filter","BUY ≥ +0.25% / SELL ≤ −0.25%"),("Entry Window","09:45–14:00 IST"),("BUY SL","PDH"),("SELL SL","PDL"),("Target","1.25 × entry-to-SL risk"),("Square-off","15:00 IST")])
-st.subheader("CAPITAL & RISK");grid([("Starting Capital","₹250,000"),("Available",f"₹{float(status.get('available_capital',250000) or 0):,.0f}"),("Used",f"₹{float(status.get('used_capital',0) or 0):,.0f}"),("Risk / Trade","₹1,400–₹1,500"),("R:R","1:1.25"),("Max Positions",2)])
-st.subheader("SCANNER ACTIVITY");grid([("NIFTY 500 Scans",status.get("scan_count",0)),("Cycle Count",status.get("cycle_count",0)),("Last Scan",status.get("last_scan") or "—"),("Scan Duration",f'{float(status.get("scan_duration_seconds",0) or 0):.2f}s'),("Last Completed",status.get("last_scan_completed") or "—")])
-if status.get("error"):st.error(str(status.get("error")))
+    live = ensure_bot_running()
+    if isinstance(live, dict):
+        status.update(live)
+except Exception as error:
+    status.setdefault("error", f"Worker launcher: {type(error).__name__}: {error}")
+
+now = datetime.now(INDIA_TZ)
+worker = bool(status.get("worker_alive", False)) and heartbeat_alive(status.get("heartbeat"))
+market_change = float(diag.get("nifty500_change_pct", 0) or 0) if isinstance(diag, dict) else 0.0
+
+if market_change >= NIFTY_THRESHOLD:
+    permission = "🟢 BUY ONLY"
+    permission_note = "NIFTY 500 ≥ +0.25%"
+elif market_change <= -NIFTY_THRESHOLD:
+    permission = "🔴 SELL ONLY"
+    permission_note = "NIFTY 500 ≤ −0.25%"
+else:
+    permission = "⚪ WAIT"
+    permission_note = "NIFTY 500 inside −0.25% to +0.25%"
+
+clock = now.strftime("%H:%M")
+if clock < ENTRY_START:
+    window = "🕘 PREPARE"
+elif clock <= ENTRY_END:
+    window = "🟢 ACTIVE"
+else:
+    window = "🔒 CLOSED"
+
+st.title("📈 NIFTY 500 Trading Bot")
+st.caption("Live command center • PDH/PDL → Today's Open → 1-minute reversal • Paper trading only")
+
+if worker:
+    st.success("🟢 BOT RUNNING • PAPER TRADING")
+else:
+    st.warning("🟠 BOT WORKER NOT CONFIRMED ALIVE")
+
+# Main decision strip — same shared metric-card style, but focused on today's decision.
+st.subheader("LIVE MARKET DECISION")
+grid([
+    ("NIFTY 500", f"{market_change:+.2f}%"),
+    ("Permission", permission),
+    ("Entry Window", window),
+    ("Open Positions", len(positions)),
+    ("India Time", now.strftime("%H:%M:%S")),
+])
+st.caption(f"{permission_note} • Entries {ENTRY_START}–{ENTRY_END} IST")
+
+if status.get("error"):
+    st.error(str(status["error"]))
+
+# The main page now explains the new strategy as a decision flow instead of exposing scanner internals.
+st.subheader("🎯 TODAY'S TRADE LOGIC")
+c1, c2 = st.columns(2, gap="large")
+with c1:
+    st.markdown("### 🟢 BUY")
+    grid([
+        ("1. Market", "NIFTY 500 ≥ +0.25%"),
+        ("2. Opening", "Today's Open > PDH"),
+        ("3. Reaction", "Price closes below PDH"),
+        ("4. Trigger", "1m Open < Today's Open"),
+        ("5. Confirmation", "1m Close > Today's Open"),
+    ])
+with c2:
+    st.markdown("### 🔴 SELL")
+    grid([
+        ("1. Market", "NIFTY 500 ≤ −0.25%"),
+        ("2. Opening", "Today's Open < PDL"),
+        ("3. Reaction", "Price closes above PDL"),
+        ("4. Trigger", "1m Open > Today's Open"),
+        ("5. Confirmation", "1m Close < Today's Open"),
+    ])
+
+st.caption("Sector/Industry and stock direction must also agree with the trade. Only completed 1-minute data is used; no look-ahead.")
+
+st.subheader("🧭 RISK & EXECUTION")
+grid([
+    ("Universe", "NIFTY 500"),
+    ("Entry", "Completed 1-minute reversal"),
+    ("BUY Stop", "PDH"),
+    ("SELL Stop", "PDL"),
+    ("R:R", "1 : 1.25"),
+    ("Risk / Trade", "₹1,400–₹1,500"),
+    ("Max Positions", "2"),
+    ("Daily Max Loss", "₹3,750"),
+    ("Square-off", "15:00 IST"),
+    ("Trading Mode", "PAPER"),
+])
+
+st.subheader("📡 LIVE SIGNALS")
+if not signals.empty:
+    display = signals.copy()
+    preferred = [
+        "symbol", "signal", "entry_time", "entry", "stop_loss", "target",
+        "nifty500_change_pct", "stock_direction", "industry_direction",
+    ]
+    cols = [c for c in preferred if c in display.columns]
+    if cols:
+        display = display[cols].tail(20).iloc[::-1]
+    st.dataframe(display, width="stretch", hide_index=True, height=300)
+else:
+    st.info("No qualifying signal yet. The bot will show a row here when every strategy condition is satisfied.")
+
+if positions:
+    st.subheader("📍 OPEN POSITIONS")
+    rows = []
+    for symbol, position in positions.items():
+        rows.append({
+            "Stock": symbol,
+            "Side": str(position.get("signal", "")).upper(),
+            "Entry": position.get("entry", "—"),
+            "SL": position.get("stop_loss", "—"),
+            "Target": position.get("target", "—"),
+            "Qty": position.get("quantity", "—"),
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+st.caption(
+    f"Completed 1-minute scanner coverage: {float(diag.get('market_data_coverage', 0) or 0) * 100:.1f}% • "
+    f"Final signals: {diag.get('final_signals', 0) if isinstance(diag, dict) else 0} • Auto-refresh: 5 seconds"
+)
 render_daily_footer()
