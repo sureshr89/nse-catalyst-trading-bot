@@ -130,8 +130,8 @@ class OpenReversalEngine:
         if data.empty or pdh is None or pdl is None:
             return None
         pdh, pdl = float(pdh), float(pdl)
-        latest_date = data["Datetime"].dt.date.max()
-        today_data = data[data["Datetime"].dt.date == latest_date].copy()
+        today = datetime.now(INDIA_TZ).date()
+        today_data = data[data["Datetime"].dt.date == today].copy()
         if today_data.empty:
             return None
         today_open = float(today_open) if today_open is not None else float(today_data.iloc[0]["Open"])
