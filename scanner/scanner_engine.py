@@ -91,13 +91,19 @@ class ScannerEngine:
         candle=matches.iloc[-1];candle_time=self._ist_timestamp(candle.get("Datetime"))
         if (now-candle_time.to_pydatetime()).total_seconds()<60:return None
         return candle.to_dict()
+    def _index_has_timestamp(self,stamp,data):
+        if data is None or data.empty:return False
+        try:
+            timestamps=pd.to_datetime(data["Datetime"],errors="coerce")
+            timestamps=timestamps.dt.tz_localize(INDIA_TZ) if timestamps.dt.tz is None else timestamps.dt.tz_convert(INDIA_TZ)
+            return bool((timestamps==stamp).any())
+        except Exception:return False
     def scan(self):
         self.diagnostics=self._empty_diagnostics();candidates=self.prepare_opening_candidates()
         if candidates.empty:return self._finish([])
         symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
         if not available_symbols:return self._finish([])
-        expected=self._latest_completed_minute()
-        aligned_symbols=0
+        expected=self._latest_completed_minute();aligned_symbols=0
         for symbol in symbols:
             candles=self.universe_market_data.get(symbol)
             if candles is None or candles.empty:continue
@@ -105,11 +111,11 @@ class ScannerEngine:
             try:stamps=stamps.dt.tz_localize(INDIA_TZ) if stamps.dt.tz is None else stamps.dt.tz_convert(INDIA_TZ)
             except Exception:continue
             if (stamps==expected).any():aligned_symbols+=1
-        aligned_coverage=aligned_symbols/len(symbols) if symbols else 0.0
-        self.diagnostics["market_data_coverage"]=aligned_coverage
-        required_aligned=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        aligned_coverage=aligned_symbols/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=aligned_coverage;required_aligned=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
         if aligned_symbols<required_aligned:
             self.diagnostics["rejections"]["missing_data"]+=len(symbols)-aligned_symbols;self._write_diagnostics();print(f"Synchronized 1m coverage incomplete: {aligned_symbols}/{len(symbols)} ({aligned_coverage:.1%}) at {expected.isoformat()}; need at least {required_aligned}. Retrying later.");return self._finish([])
+        if REQUIRE_MARKET_ALIGNMENT and not self._index_has_timestamp(expected,self.nifty500_market_data):
+            self.diagnostics["nifty500_coverage"]=0;self.diagnostics["rejections"]["market_alignment"]+=1;self._write_diagnostics();print(f"NIFTY 500 index candle missing at synchronized timestamp {expected.isoformat()}; rejecting scan and retrying later.");return self._finish([])
         signals=[]
         for _,row in candidates.iterrows():
             symbol=str(row["Symbol"]).upper();candles=self.universe_market_data.get(symbol)
