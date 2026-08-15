@@ -108,6 +108,23 @@ class OpenReversalEngine:
             stamp = stamp.tz_convert(INDIA_TZ)
         return (str(symbol).upper(), stamp.isoformat(), str(side).upper(), str(nifty_direction or "UNKNOWN").upper())
 
+    @staticmethod
+    def _setup_window(data, trigger, pdh, pdl, side):
+        """Return candles from the first PDH/PDL touch through the trigger candle."""
+        if data is None or data.empty or trigger is None:
+            return pd.DataFrame()
+        completed = data[data["Datetime"] <= trigger["Datetime"]].copy()
+        if completed.empty:
+            return pd.DataFrame()
+        if side == "BUY":
+            reached = completed[completed["Low"] <= float(pdh)]
+        else:
+            reached = completed[completed["High"] >= float(pdl)]
+        if reached.empty:
+            return pd.DataFrame()
+        level_time = reached.iloc[0]["Datetime"]
+        return completed[completed["Datetime"] >= level_time]
+
     def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
         data = self._clean(candles)
         if data.empty or pdh is None or pdl is None:
@@ -148,7 +165,7 @@ class OpenReversalEngine:
         data = self._clean(today_data)
         if data.empty:
             return None
-        setup_data = data[data["Datetime"] <= trigger["Datetime"]]
+        setup_data = self._setup_window(data, trigger, float(pdh), float(pdl), side)
         if setup_data.empty:
             return None
         stock_direction = self._candle_direction(pd.DataFrame([trigger]))
