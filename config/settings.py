@@ -43,6 +43,10 @@ PAPER_TRADING = True
 LIVE_TRADING = False
 SCAN_INTERVAL_SECONDS = 60
 
+# High-liquidity universe: top 25% by previous-day turnover.
+# Kept configurable so the threshold can be changed without editing scanner logic.
+HIGH_LIQUIDITY_PERCENTILE = 0.75
+
 TRADE_LOG_FILE = "outputs/trades.csv"
 SIGNAL_LOG_FILE = "outputs/signals.csv"
 GAP_ANALYSIS_FILE = "outputs/gap_analysis.csv"
