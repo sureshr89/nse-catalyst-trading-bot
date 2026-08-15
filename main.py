@@ -20,14 +20,21 @@ class TradingBot:
         self.scanner=ScannerEngine();self.risk_engine=RiskEngine();self.price_data=PriceData();self.paper_engine=PaperTradeEngine();self.journal=TradeJournal();self.missed_capital=MissedCapitalTracker(self.journal,self.price_data);self.running=True;self.processed_signals=set();self.daily_pnl=self._restore_daily_pnl();self.cooldown_until=self._restore_cooldown();self.square_off_done=False
     @staticmethod
     def _now():return datetime.now(INDIA_TZ)
+    @staticmethod
+    def _journal_ist(value):
+        try:
+            parsed=pd.to_datetime(value,errors="coerce")
+            if pd.isna(parsed):return pd.NaT
+            if getattr(parsed,"tzinfo",None) is None:return parsed.tz_localize(INDIA_TZ)
+            return parsed.tz_convert(INDIA_TZ)
+        except Exception:return pd.NaT
+    def _journal_dates_ist(self,series):return series.map(self._journal_ist)
     def current_time(self):return self._now().strftime("%H:%M")
     def _restore_daily_pnl(self):
         try:
             df=self.journal.get_trades()
             if df.empty or "pnl" not in df.columns or "exit_time" not in df.columns:return 0.0
-            # Parse all timestamps through UTC first so mixed naive/aware journal rows
-            # cannot cause pandas .dt failures or shift the trading day incorrectly.
-            exits=pd.to_datetime(df["exit_time"],errors="coerce",utc=True).dt.tz_convert(INDIA_TZ).dt.date;mask=exits==self._now().date()
+            exits=self._journal_dates_ist(df["exit_time"]);mask=exits.dt.date==self._now().date()
             if "status" in df.columns:mask &= df["status"].astype(str).str.upper().eq("CLOSED")
             return round(float(pd.to_numeric(df["pnl"],errors="coerce").fillna(0.0)[mask].sum()),2)
         except Exception as error:print("Daily P&L restore skipped:",error);return 0.0
@@ -37,8 +44,7 @@ class TradingBot:
             if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:return None
             status=df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("",index=df.index);closed=df[status.eq("CLOSED")].copy();closed=closed[closed["exit_reason"].astype(str).str.upper().eq("STOP_LOSS")]
             if closed.empty:return None
-            # Normalize every journal timestamp to IST before applying today's cooldown.
-            times=pd.to_datetime(closed["exit_time"],errors="coerce",utc=True).dt.tz_convert(INDIA_TZ);times=times[times.dt.date==self._now().date()].dropna()
+            times=self._journal_dates_ist(closed["exit_time"]);times=times[times.dt.date==self._now().date()].dropna()
             if times.empty:return None
             end=times.max().to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);return end.replace(tzinfo=None) if end>self._now().replace(tzinfo=None) else None
         except Exception:return None
