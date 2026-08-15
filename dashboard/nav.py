@@ -2,7 +2,7 @@ import streamlit as st
 
 
 def render_nav(top_offset=0):
-    """Shared navigation for the dashboard pages."""
+    """Shared 2x2 navigation for the dashboard pages."""
     offset = max(0, int(top_offset or 0))
     st.markdown(f'''<style>
 .st-key-global_nav{{position:relative!important;margin:{offset}px 0 12px!important;padding:0!important;width:100%!important}}
@@ -30,5 +30,8 @@ def render_nav(top_offset=0):
                 st.switch_page("pages/stock_scanner.py")
         r5, r6 = st.columns(2, gap="small")
         with r5:
+            if st.button("📰 NEWS ANALYSIS", key="global_nav_news", width="stretch"):
+                st.switch_page("pages/news_analysis.py")
+        with r6:
             if st.button("⬇️ DOWNLOADS", key="global_nav_downloads", width="stretch"):
                 st.switch_page("pages/downloads.py")
