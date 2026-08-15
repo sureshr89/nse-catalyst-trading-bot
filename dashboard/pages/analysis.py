@@ -136,7 +136,6 @@ with tabs[0]:
             chart(px.line(actual, x="Trade #", y="Cumulative P&L", markers=True, title="Cumulative P&L"), "cum")
         with b:
             chart(px.line(actual, x="Trade #", y="Drawdown", markers=True, title="Drawdown"), "dd")
-
     a, b = st.columns(2)
     if actual.empty:
         with a:
@@ -190,19 +189,10 @@ with tabs[2]:
         else:
             with b:
                 st.info("No setup-type data recorded yet.")
-
     if not actual.empty and "gap_percent" in actual.columns:
         gap = actual.copy()
-        gap["Gap Band"] = pd.cut(
-            gap["gap_percent"].abs(),
-            bins=[-0.0001, 0.25, 0.75, float("inf")],
-            labels=["<0.25%", "0.25–0.75%", ">0.75%"],
-        )
-        summary = gap.groupby("Gap Band", observed=False).agg(
-            Trades=("pnl", "size"),
-            Win_Rate=("pnl", lambda z: (z > 0).mean() * 100),
-            Net_PnL=("pnl", "sum"),
-        ).reset_index()
+        gap["Gap Band"] = pd.cut(gap["gap_percent"].abs(), bins=[-0.0001, 0.25, 0.75, float("inf")], labels=["<0.25%", "0.25–0.75%", ">0.75%"])
+        summary = gap.groupby("Gap Band", observed=False).agg(Trades=("pnl", "size"), Win_Rate=("pnl", lambda z: (z > 0).mean() * 100), Net_PnL=("pnl", "sum")).reset_index()
         st.dataframe(summary, use_container_width=True, hide_index=True)
 
 with tabs[3]:
@@ -240,7 +230,7 @@ with tabs[5]:
     st.caption("Recorded Yahoo Finance news decisions used at the candidate timestamp. Later headlines are not used for backtesting.")
     news_df = read_news()
     if news_df.empty:
-        st.info("No news decisions have been recorded yet. They will appear when qualified candidates reach the news gate during market hours.")
+        st.info("No news decisions have been recorded yet. Charts will populate automatically when qualified candidates reach the news gate during market hours.")
     else:
         sentiment = news_df.get("news_sentiment", pd.Series("NEUTRAL", index=news_df.index)).astype(str).str.upper()
         approved_bool = news_df.get("approved", pd.Series(False, index=news_df.index)).astype(str).str.strip().str.lower().isin(["true", "1", "yes"])
@@ -249,6 +239,29 @@ with tabs[5]:
         n2.metric("🟢 Positive", int((sentiment == "POSITIVE").sum()))
         n3.metric("🔴 Negative", int((sentiment == "NEGATIVE").sum()))
         n4.metric("✅ Passed", int(approved_bool.sum()))
+
+        chart_sent = pd.DataFrame({"Sentiment": sentiment}).value_counts().reset_index(name="Decisions")
+        chart_pass = pd.DataFrame({"Decision": approved_bool.map({True: "PASSED", False: "REJECTED"})}).value_counts().reset_index(name="Decisions")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart(px.bar(chart_sent, x="Sentiment", y="Decisions", text="Decisions", title="News Sentiment Distribution"), "news_sentiment_distribution", 320)
+        with c2:
+            chart(px.pie(chart_pass, names="Decision", values="Decisions", title="News Gate: Passed vs Rejected"), "news_gate_mix", 320)
+
+        chart_view = news_df.copy()
+        if "timestamp" in chart_view.columns:
+            chart_view["timestamp_dt"] = pd.to_datetime(chart_view["timestamp"], errors="coerce")
+            chart_view["TradeDate"] = chart_view["timestamp_dt"].dt.date
+        else:
+            chart_view["TradeDate"] = pd.NaT
+        if chart_view["TradeDate"].notna().any():
+            daily_news = chart_view.groupby("TradeDate", as_index=False).size().rename(columns={"size": "Decisions"})
+            chart(px.bar(daily_news, x="TradeDate", y="Decisions", text="Decisions", title="News Decisions by Day"), "news_daily", 320)
+
+        if "news_confidence" in news_df.columns:
+            confidence = pd.to_numeric(news_df["news_confidence"], errors="coerce").dropna()
+            if not confidence.empty:
+                chart(px.histogram(pd.DataFrame({"Confidence": confidence}), x="Confidence", nbins=10, title="News Confidence Distribution"), "news_confidence", 320)
 
         view = news_df.copy()
         if "timestamp" in view.columns:
@@ -271,9 +284,10 @@ with tabs[5]:
             view = view[view["signal"].astype(str).str.upper().isin(selected_side)]
 
         a1, a2, a3 = st.columns(3)
+        passed_filtered = view.get("approved", pd.Series(False, index=view.index)).astype(str).str.lower().isin(["true", "1", "yes"])
         a1.metric("Filtered Decisions", len(view))
-        a2.metric("Passed News Gate", int(view.get("approved", pd.Series(False, index=view.index)).astype(str).str.lower().isin(["true", "1", "yes"]).sum()))
-        a3.metric("Rejected / Not Approved", max(0, len(view) - int(view.get("approved", pd.Series(False, index=view.index)).astype(str).str.lower().isin(["true", "1", "yes"]).sum())))
+        a2.metric("Passed News Gate", int(passed_filtered.sum()))
+        a3.metric("Rejected / Not Approved", max(0, len(view) - int(passed_filtered.sum())))
 
         cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "approved", "candidate_id", "entry", "priority_rank"] if c in view.columns]
         st.dataframe(view[cols].sort_values(["TradeDate", "timestamp"], ascending=False) if cols else view, use_container_width=True, hide_index=True, height=500)
