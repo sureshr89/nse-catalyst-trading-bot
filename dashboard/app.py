@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
+from config import settings
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
@@ -51,11 +52,20 @@ def cards(items):
     ) + "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
+# Weekend/idle status files may legitimately omit paper-engine capital fields.
+# In that case show the configured paper capital rather than displaying ₹0.
+# If the status explicitly contains a value (including 0 after trading), preserve it.
+available_capital = status.get("available_capital")
+if available_capital is None:
+    available_capital = getattr(settings, "TOTAL_CAPITAL", 0)
+
+daily_pnl = status.get("daily_pnl", 0)
+
 cards([
     ("Bot Status", status_value),
     ("Open Positions", int(status.get("open_positions", 0) or 0)),
-    ("Available Capital", f"₹{float(status.get('available_capital', 0) or 0):,.0f}"),
-    ("Daily P&L", f"₹{float(status.get('daily_pnl', 0) or 0):,.0f}"),
+    ("Available Capital", f"₹{float(available_capital or 0):,.0f}"),
+    ("Daily P&L", f"₹{float(daily_pnl or 0):,.0f}"),
 ])
 
 st.divider()
