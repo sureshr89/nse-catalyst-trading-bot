@@ -4,7 +4,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
 import pandas as pd
-from config.settings import REQUIRE_MARKET_ALIGNMENT, REQUIRE_STOCK_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO
+from config.settings import REQUIRE_MARKET_ALIGNMENT, REQUIRE_STOCK_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO, HIGH_LIQUIDITY_PERCENTILE
 from data.reference_store import ReferenceStore
 from data.stock_universe import StockUniverse
 from market.price_data import PriceData
@@ -49,12 +49,9 @@ class ScannerEngine:
         for column in ["PreviousDayClose","PreviousDayTurnover","PDH","PDL"]:refs[column]=pd.to_numeric(refs[column],errors="coerce")
         total=len(refs);refs=refs.dropna(subset=["PDH","PDL","PreviousDayClose","PreviousDayTurnover"]);self.diagnostics["stocks_scanned"]=len(self.universe);self.diagnostics["rejections"]["missing_data"]=max(0,total-len(refs))
         if refs.empty:self._opening_prepared_date=None;self._write_diagnostics();return pd.DataFrame()
-        cutoff=float(refs["PreviousDayTurnover"].median());refs["LiquidityQualified"]=refs["PreviousDayTurnover"]>=cutoff;self.diagnostics["liquidity_passed"]=int(refs["LiquidityQualified"].sum());self.diagnostics["rejections"]["liquidity"]=int((~refs["LiquidityQualified"]).sum())
+        percentile=max(0.0,min(1.0,float(HIGH_LIQUIDITY_PERCENTILE)));cutoff=float(refs["PreviousDayTurnover"].quantile(percentile));refs["LiquidityQualified"]=refs["PreviousDayTurnover"]>=cutoff;self.diagnostics["liquidity_passed"]=int(refs["LiquidityQualified"].sum());self.diagnostics["rejections"]["liquidity"]=int((~refs["LiquidityQualified"]).sum())
         symbols=refs["Symbol"].astype(str).str.upper().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available_symbols=sum(1 for symbol in symbols if market_data.get(symbol) is not None and not market_data.get(symbol).empty);self.diagnostics["market_data_coverage"]=available_symbols/len(symbols) if symbols else 0.0
-        # Partial market-data coverage is valid: process every stock for which data exists.
-        # Missing data is recorded per stock and must not suppress valid candidates.
-        if not available_symbols:
-            self._opening_prepared_date=None;self.diagnostics["rejections"]["missing_data"]+=len(symbols);self._write_diagnostics();return pd.DataFrame()
+        if not available_symbols:self._opening_prepared_date=None;self.diagnostics["rejections"]["missing_data"]+=len(symbols);self._write_diagnostics();return pd.DataFrame()
         rows=[];gap_rows=[]
         for _,ref in refs.iterrows():
             symbol=str(ref["Symbol"]).upper();candles=market_data.get(symbol)
