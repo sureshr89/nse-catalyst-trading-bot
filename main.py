@@ -37,7 +37,7 @@ class TradingBot:
             if closed.empty:return None
             times=pd.to_datetime(closed["exit_time"],errors="coerce");times=times.dt.tz_localize(INDIA_TZ) if getattr(times.dt,"tz",None) is None else times.dt.tz_convert(INDIA_TZ);times=times[times.dt.date==self._now().date()].dropna()
             if times.empty:return None
-            end=times.max().to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);return end.replace(tzinfo=None) if end>self._now() else None
+            end=times.max().to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);return end.replace(tzinfo=None) if end>self._now().replace(tzinfo=None) else None
         except Exception:return None
     def signal_key(self,signal):return (str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("trigger_entry_time",signal.get("entry_time",""))),str(signal.get("open_cross_level","")))
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
@@ -62,7 +62,8 @@ class TradingBot:
         symbol=str(signal.get("symbol","")).strip().upper()
         if not symbol:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
-        risk_result=self.risk_engine.approve_trade(signal);self.log_signal(signal,risk_result)
+        available_capital=float(self.paper_engine.available_capital)
+        risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):self.processed_signals.add(key);return
         approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True;result=self.paper_engine.open_trade(approved_trade)
         if not result.get("opened",False):
