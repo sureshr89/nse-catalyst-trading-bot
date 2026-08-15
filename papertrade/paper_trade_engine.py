@@ -154,14 +154,9 @@ class PaperTradeEngine:
         if not self.has_open_position(symbol): return None
         exit_price = self._number(exit_price)
         if exit_price is None or exit_price <= 0: return None
-        if str(reason).upper() == "SQUARE_OFF":
-            try:
-                latest = self.price_data.get_latest_available_1m(symbol)
-                if latest:
-                    latest_price = self._number(latest.get("Close")); latest_time = latest.get("Datetime")
-                    if latest_price is not None and latest_price > 0: exit_price = latest_price
-                    if latest_time is not None: exit_time = latest_time
-            except Exception: pass
+        # For square-off, the caller supplies the current/latest market price.
+        # Do not replace it with an older completed 1-minute candle: at exactly
+        # 15:00 that would otherwise execute the paper square-off at 14:59.
         position = self.open_positions[symbol]; pnl = self.calculate_pnl(position["signal"], position["entry"], exit_price, position["quantity"])
         position.update({"status": "CLOSED", "exit_time": exit_time, "exit_price": round(exit_price, 4), "exit_reason": reason, "pnl": pnl})
         closed = position.copy(); self.closed_positions.append(closed)
