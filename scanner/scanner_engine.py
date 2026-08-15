@@ -1,5 +1,5 @@
 """NIFTY 500 scanner for the PDH/PDL + today's Open reversal strategy."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
@@ -26,6 +26,9 @@ class ScannerEngine:
     def _ist_timestamp(value):
         stamp=pd.Timestamp(value)
         return stamp.tz_localize(INDIA_TZ) if stamp.tzinfo is None else stamp.tz_convert(INDIA_TZ)
+    @staticmethod
+    def _latest_completed_minute():
+        return datetime.now(INDIA_TZ).replace(second=0,microsecond=0)-timedelta(minutes=1)
     def _write_diagnostics(self):
         payload=dict(self.diagnostics);payload["rejections"]=dict(self.diagnostics.get("rejections",{}));payload["timestamp"]=datetime.now(INDIA_TZ).isoformat(timespec="seconds");self.diagnostics["timestamp"]=payload["timestamp"];path=Path(__file__).resolve().parents[1]/"outputs"/"scanner_diagnostics.json";path.parent.mkdir(parents=True,exist_ok=True);temp=path.with_name("scanner_diagnostics.tmp")
         try:temp.write_text(json.dumps(payload,indent=2,default=str),encoding="utf-8");temp.replace(path)
@@ -78,16 +81,14 @@ class ScannerEngine:
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
         if data.empty:return None
-        stamp=self._ist_timestamp(as_of)
-        now=datetime.now(INDIA_TZ)
+        stamp=self._ist_timestamp(as_of);now=datetime.now(INDIA_TZ)
         if stamp > now.replace(second=0,microsecond=0) or stamp.date()!=now.date():return None
         timestamps=pd.to_datetime(data["Datetime"],errors="coerce")
         try:timestamps=timestamps.dt.tz_localize(INDIA_TZ) if timestamps.dt.tz is None else timestamps.dt.tz_convert(INDIA_TZ)
         except Exception:return None
         matches=data[timestamps==stamp]
         if matches.empty:return None
-        candle=matches.iloc[-1]
-        candle_time=self._ist_timestamp(candle.get("Datetime"))
+        candle=matches.iloc[-1];candle_time=self._ist_timestamp(candle.get("Datetime"))
         if (now-candle_time.to_pydatetime()).total_seconds()<60:return None
         return candle.to_dict()
     def scan(self):
@@ -95,6 +96,20 @@ class ScannerEngine:
         if candidates.empty:return self._finish([])
         symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
         if not available_symbols:return self._finish([])
+        expected=self._latest_completed_minute()
+        aligned_symbols=0
+        for symbol in symbols:
+            candles=self.universe_market_data.get(symbol)
+            if candles is None or candles.empty:continue
+            stamps=pd.to_datetime(candles.get("Datetime"),errors="coerce")
+            try:stamps=stamps.dt.tz_localize(INDIA_TZ) if stamps.dt.tz is None else stamps.dt.tz_convert(INDIA_TZ)
+            except Exception:continue
+            if (stamps==expected).any():aligned_symbols+=1
+        aligned_coverage=aligned_symbols/len(symbols) if symbols else 0.0
+        self.diagnostics["market_data_coverage"]=aligned_coverage
+        required_aligned=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        if aligned_symbols<required_aligned:
+            self.diagnostics["rejections"]["missing_data"]+=len(symbols)-aligned_symbols;self._write_diagnostics();print(f"Synchronized 1m coverage incomplete: {aligned_symbols}/{len(symbols)} ({aligned_coverage:.1%}) at {expected.isoformat()}; need at least {required_aligned}. Retrying later.");return self._finish([])
         signals=[]
         for _,row in candidates.iterrows():
             symbol=str(row["Symbol"]).upper();candles=self.universe_market_data.get(symbol)
@@ -118,8 +133,7 @@ class ScannerEngine:
             if REQUIRE_STOCK_ALIGNMENT and stock_dir!=required:self.diagnostics["rejections"]["stock_alignment"]+=1;continue
             self.diagnostics["stock_alignment_passed"]+=1
             if not bool(row.get("LiquidityQualified",False)):
-                self.diagnostics["rejections"]["liquidity"]+=1
-                continue
+                self.diagnostics["rejections"]["liquidity"]+=1;continue
             today_data=candles[candle_timestamps.dt.date==trigger_stamp.date()];signal=self.strategy.finalize_trigger(symbol,today_data,trigger_candle,row["TodayOpen"],row["PDH"],row["PDL"],nifty_dir,side)
             if signal is not None:
                 signal.update({"nifty500_universe":True,"liquidity_qualified":True,"gap":row.get("Gap"),"gap_percent":row.get("GapPercent"),"gap_type":row.get("GapType")});signals.append(signal);self.diagnostics["strategy_setup_passed"]+=1
