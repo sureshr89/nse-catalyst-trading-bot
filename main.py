@@ -31,23 +31,46 @@ class TradingBot:
         except Exception:return pd.NaT
     def _journal_dates_ist(self,series):return series.map(self._journal_ist)
     def current_time(self):return self._now().strftime("%H:%M")
-    def _restore_daily_pnl(self):
+    def _today_closed_trades(self):
+        """Return today's CLOSED trades from journal + persisted paper state, deduplicated by trade_id."""
+        today=self._now().date();merged={}
         try:
             df=self.journal.get_trades()
-            if df.empty or "pnl" not in df.columns or "exit_time" not in df.columns:return 0.0
-            exits=self._journal_dates_ist(df["exit_time"]);mask=exits.dt.date==self._now().date()
-            if "status" in df.columns:mask &= df["status"].astype(str).str.upper().eq("CLOSED")
-            return round(float(pd.to_numeric(df["pnl"],errors="coerce").fillna(0.0)[mask].sum()),2)
+            if not df.empty and "exit_time" in df.columns:
+                exits=self._journal_dates_ist(df["exit_time"])
+                status=df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("CLOSED",index=df.index)
+                for idx,row in df[status.eq("CLOSED")].iterrows():
+                    exit_dt=exits.loc[idx] if idx in exits.index else pd.NaT
+                    if pd.notna(exit_dt) and exit_dt.date()==today:
+                        trade=dict(row);trade_id=str(trade.get("trade_id","")).strip()
+                        key=trade_id or f"journal:{idx}"
+                        merged[key]=trade
+        except Exception as error:print("Journal closed-trade recovery skipped:",error)
+        try:
+            for trade in self.paper_engine.closed_positions:
+                if not isinstance(trade,dict) or str(trade.get("status","")).upper()!="CLOSED":continue
+                exit_dt=self._journal_ist(trade.get("exit_time"))
+                if pd.notna(exit_dt) and exit_dt.date()==today:
+                    trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"paper:{trade.get('symbol','')}:{trade.get('exit_time','')}"
+                    merged[key]=dict(trade)
+        except Exception as error:print("Paper-state closed-trade recovery skipped:",error)
+        return list(merged.values())
+    def _restore_daily_pnl(self):
+        try:
+            trades=self._today_closed_trades()
+            return round(sum(float(pd.to_numeric(pd.Series([trade.get("pnl",0)]),errors="coerce").fillna(0).iloc[0]) for trade in trades),2)
         except Exception as error:print("Daily P&L restore skipped:",error);return 0.0
     def _restore_cooldown(self):
         try:
-            df=self.journal.get_trades()
-            if df.empty or "exit_time" not in df.columns or "exit_reason" not in df.columns:return None
-            status=df["status"].astype(str).str.upper() if "status" in df.columns else pd.Series("",index=df.index);closed=df[status.eq("CLOSED")].copy();closed=closed[closed["exit_reason"].astype(str).str.upper().eq("STOP_LOSS")]
-            if closed.empty:return None
-            times=self._journal_dates_ist(closed["exit_time"]);times=times[times.dt.date==self._now().date()].dropna()
-            if times.empty:return None
-            end=times.max().to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);return end.replace(tzinfo=None) if end>self._now().replace(tzinfo=None) else None
+            stop_times=[]
+            for trade in self._today_closed_trades():
+                if str(trade.get("exit_reason","")).upper()=="STOP_LOSS":
+                    exit_dt=self._journal_ist(trade.get("exit_time"))
+                    if pd.notna(exit_dt):stop_times.append(exit_dt)
+            if not stop_times:return None
+            end=max(stop_times).to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES)
+            now=self._now()
+            return end.replace(tzinfo=None) if end>now.replace(tzinfo=None) else None
         except Exception:return None
     def signal_key(self,signal):return (str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("trigger_entry_time",signal.get("entry_time",""))),str(signal.get("open_cross_level","")))
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
