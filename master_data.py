@@ -21,16 +21,13 @@ def _merge(path,new,keys):
     old=_read(path);combined=pd.concat([old,new],ignore_index=True) if not old.empty else new.copy()
     for key in keys:
         if key not in combined.columns:combined[key]=""
-    combined=combined.drop_duplicates(subset=keys,keep="last")
-    _write(path,combined)
+    _write(path,combined.drop_duplicates(subset=keys,keep="last"))
 def _trade_merge(new):
     if new.empty:return
     old=_read(MASTER_TRADES);combined=pd.concat([old,new],ignore_index=True) if not old.empty else new.copy()
     if "trade_id" in combined.columns:
-        ids=combined["trade_id"].astype(str).str.strip()
-        has_id=ids.ne("") & ids.ne("nan")
-        with_id=combined.loc[has_id].drop_duplicates(subset=["trade_id"],keep="last")
-        without_id=combined.loc[~has_id].copy()
+        ids=combined["trade_id"].astype(str).str.strip();has_id=ids.ne("") & ids.ne("nan")
+        with_id=combined.loc[has_id].drop_duplicates(subset=["trade_id"],keep="last");without_id=combined.loc[~has_id].copy()
         fallback=[c for c in ["TradeDate","symbol","entry_time","signal","entry"] if c in without_id.columns]
         if fallback:without_id=without_id.drop_duplicates(subset=fallback,keep="last")
         combined=pd.concat([with_id,without_id],ignore_index=True)
@@ -58,6 +55,16 @@ def _today_rows(frame,date_columns,today):
             values=pd.to_datetime(frame[column],errors="coerce")
             if values.notna().any():return frame.loc[values.dt.strftime("%Y-%m-%d").eq(today)].copy()
     return frame.iloc[0:0].copy()
+def _closed_unique(frame):
+    if frame.empty:return frame
+    closed=frame[frame.get("status",pd.Series(index=frame.index,dtype=str)).astype(str).str.upper().eq("CLOSED")].copy() if "status" in frame.columns else frame.iloc[0:0].copy()
+    if closed.empty:return closed
+    if "trade_id" in closed.columns:
+        ids=closed["trade_id"].astype(str).str.strip();with_id=closed.loc[ids.ne("")&ids.ne("nan")].drop_duplicates(subset=["trade_id"],keep="last");without_id=closed.loc[~(ids.ne("")&ids.ne("nan"))].copy();fallback=[c for c in ["symbol","entry_time","signal","entry"] if c in without_id.columns]
+        if fallback:without_id=without_id.drop_duplicates(subset=fallback,keep="last")
+        return pd.concat([with_id,without_id],ignore_index=True)
+    fallback=[c for c in ["symbol","entry_time","signal","entry"] if c in closed.columns]
+    return closed.drop_duplicates(subset=fallback,keep="last") if fallback else closed
 def build_master_data():
     OUTPUT.mkdir(parents=True,exist_ok=True);_restore_if_missing(MASTER_STOCK,"outputs/MASTER_DAILY_STOCK_DATA.csv");_restore_if_missing(MASTER_TRADES,"outputs/MASTER_TRADES.csv");_restore_if_missing(MASTER_DAILY,"outputs/MASTER_DAILY_SUMMARY.csv")
     today=datetime.now(IST).strftime("%Y-%m-%d");gaps=_read(OUTPUT/"gap_analysis.csv");trades=_read(OUTPUT/"trades.csv");signals=_read(OUTPUT/"signals.csv")
@@ -71,8 +78,8 @@ def build_master_data():
         t=trades.copy()
         if "TradeDate" in t.columns:t=t.drop(columns=["TradeDate"])
         date_col=next((c for c in ["entry_time","exit_time","timestamp"] if c in t.columns),None);t.insert(0,"TradeDate",t[date_col].astype(str).str[:10] if date_col else today);_trade_merge(t)
-    today_trades=_today_rows(trades,["entry_time","timestamp","exit_time"],today);today_closed=_today_rows(trades,["exit_time"],today);today_signals=_today_rows(signals,["timestamp","entry_time"],today);today_pnl=float(pd.to_numeric(today_closed.get("pnl",pd.Series(dtype=float)),errors="coerce").fillna(0).sum());gap_types=gaps.get("GapType",pd.Series(dtype=str)).astype(str).str.upper()
-    row={"TradeDate":today,"PreparedAtIST":datetime.now(IST).isoformat(timespec="seconds"),"StocksInGapBoard":int(len(gaps)),"GapUps":int(gap_types.eq("GAP_UP_PDH").sum()),"GapDowns":int(gap_types.eq("GAP_DOWN_PDL").sum()),"SignalsRecorded":int(len(today_signals)),"TradesRecorded":int(len(today_trades)),"ClosedTrades":int((today_closed.get("status",pd.Series(dtype=str)).astype(str).str.upper()=="CLOSED").sum()),"FinalSignals":int(diag.get("final_signals",0) or 0),"StocksScanned":int(diag.get("stocks_scanned",0) or 0),"LiquidityPassed":int(diag.get("liquidity_passed",0) or 0),"OpeningSetupPassed":int(diag.get("opening_setup_passed",0) or 0),"MarketAlignmentPassed":int(diag.get("market_alignment_passed",0) or 0),"StrategySetupPassed":int(diag.get("strategy_setup_passed",0) or 0),"StockAlignmentPassed":int(diag.get("stock_alignment_passed",0) or 0),"DailyPnL":round(today_pnl,2)}
+    today_trades=_today_rows(trades,["entry_time","timestamp","exit_time"],today);today_closed=_closed_unique(_today_rows(trades,["exit_time"],today));today_signals=_today_rows(signals,["timestamp","entry_time"],today);today_pnl=float(pd.to_numeric(today_closed.get("pnl",pd.Series(dtype=float)),errors="coerce").fillna(0).sum());gap_types=gaps.get("GapType",pd.Series(dtype=str)).astype(str).str.upper()
+    row={"TradeDate":today,"PreparedAtIST":datetime.now(IST).isoformat(timespec="seconds"),"StocksInGapBoard":int(len(gaps)),"GapUps":int(gap_types.eq("GAP_UP_PDH").sum()),"GapDowns":int(gap_types.eq("GAP_DOWN_PDL").sum()),"SignalsRecorded":int(len(today_signals)),"TradesRecorded":int(len(today_trades)),"ClosedTrades":int(len(today_closed)),"FinalSignals":int(diag.get("final_signals",0) or 0),"StocksScanned":int(diag.get("stocks_scanned",0) or 0),"LiquidityPassed":int(diag.get("liquidity_passed",0) or 0),"OpeningSetupPassed":int(diag.get("opening_setup_passed",0) or 0),"MarketAlignmentPassed":int(diag.get("market_alignment_passed",0) or 0),"StrategySetupPassed":int(diag.get("strategy_setup_passed",0) or 0),"StockAlignmentPassed":int(diag.get("stock_alignment_passed",0) or 0),"DailyPnL":round(today_pnl,2)}
     _merge(MASTER_DAILY,pd.DataFrame([row]),["TradeDate"]);enforce_six_month_retention()
     for path in (MASTER_STOCK,MASTER_TRADES,MASTER_DAILY):
         try:sync(path,f"outputs/{path.name}",f"Update master trading data {today}")
