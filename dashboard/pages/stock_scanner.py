@@ -59,8 +59,8 @@ def pct(value):
 gaps = read_csv(ROOT / "outputs/gap_analysis.csv")
 signals = read_csv(ROOT / "outputs/signals.csv")
 state = read_json(ROOT / "outputs/paper_engine_state.json")
-diag = read_json(ROOT / "outputs/scanner_diagnostics.json")
 status = read_json(ROOT / "outputs/bot_status.json")
+diag = read_json(ROOT / "outputs/scanner_diagnostics.json")
 
 try:
     live = ensure_bot_running()
@@ -80,7 +80,7 @@ if status.get("error"):
     st.warning(str(status["error"]))
 
 if gaps.empty:
-    st.info("Complete stock data will appear automatically when the market data feed populates gap_analysis.csv.")
+    st.info("Complete stock data will appear when the market data feed populates gap_analysis.csv.")
     render_daily_footer()
     st.stop()
 
@@ -89,7 +89,6 @@ for col in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercent"]:
     if col in board.columns:
         board[col] = pd.to_numeric(board[col], errors="coerce")
 
-# Normalize signal/position information so the table explains the current state of each stock.
 approved_symbols = set()
 if not signals.empty and "symbol" in signals.columns:
     sig = signals.copy()
@@ -98,12 +97,6 @@ if not signals.empty and "symbol" in signals.columns:
     approved_symbols = set(sig["symbol"].astype(str).str.upper())
 
 position_symbols = {str(s).upper() for s in positions.keys()}
-
-# Use available signal fields for alignment/status when present.
-signal_map = {}
-if not signals.empty and "symbol" in signals.columns:
-    for _, row in signals.iterrows():
-        signal_map[str(row.get("symbol", "")).upper()] = row.to_dict()
 
 
 def stock_status(row):
@@ -117,22 +110,11 @@ def stock_status(row):
         return "🟡 GAP UP / WAITING"
     if gap_type == "GAP_DOWN":
         return "🟠 GAP DOWN / WAITING"
-    if gap_type == "INSIDE":
-        return "⚪ INSIDE / WAITING"
     return "⚪ WAITING"
 
 
 board["Status"] = board.apply(stock_status, axis=1)
 board["NIFTY 500"] = "BUY" if market_change >= NIFTY_THRESHOLD else "SELL" if market_change <= -NIFTY_THRESHOLD else "WAIT"
-board["Industry"] = board.get("Industry", pd.Series(["—"] * len(board), index=board.index))
-
-# Add alignment and reason fields from the most recent signal record where available.
-def alignment_value(row, field):
-    rec = signal_map.get(str(row.get("Symbol", "")).upper(), {})
-    return rec.get(field, "—")
-
-board["Industry Direction"] = board.apply(lambda r: alignment_value(r, "sector_direction"), axis=1)
-board["Stock Direction"] = board.apply(lambda r: alignment_value(r, "stock_direction"), axis=1)
 
 
 def reason(row):
@@ -140,17 +122,16 @@ def reason(row):
     if "ENTERED" in status_text:
         return "Position open"
     if "QUALIFIED" in status_text:
-        return "Qualified signal; entry not recorded"
+        return "Qualified by strategy; entry not recorded"
     if "GAP UP" in status_text:
-        return "Waiting for BUY setup"
+        return "Waiting for BUY PDH/Today's Open setup"
     if "GAP DOWN" in status_text:
-        return "Waiting for SELL setup"
-    return "No active gap setup"
+        return "Waiting for SELL PDL/Today's Open setup"
+    return "No gap setup"
+
 
 board["Reason"] = board.apply(reason, axis=1)
 
-# Summary counts.
-counts = board["Status"].value_counts()
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Stocks", len(board))
 c2.metric("Gap Up", int((board["GapType"] == "GAP_UP").sum()) if "GapType" in board.columns else 0)
@@ -160,29 +141,25 @@ c5.metric("Qualified", len(approved_symbols - position_symbols))
 
 st.caption(f"NIFTY 500: {market_change:+.2f}% • Entry window {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
 
-# User controls.
 f1, f2, f3 = st.columns(3)
 with f1:
     status_filter = st.selectbox("Status", ["ALL"] + sorted(board["Status"].dropna().unique().tolist()))
 with f2:
-    industry_values = sorted(board["Industry"].dropna().astype(str).unique().tolist())
-    industry_filter = st.selectbox("Industry", ["ALL"] + industry_values)
+    industry_values = sorted(board["Industry"].dropna().astype(str).unique().tolist()) if "Industry" in board.columns else []
+    industry_filter = st.selectbox("Industry (information only)", ["ALL"] + industry_values)
 with f3:
     search = st.text_input("Search stock", placeholder="e.g. RELIANCE")
 
 view = board.copy()
 if status_filter != "ALL":
     view = view[view["Status"] == status_filter]
-if industry_filter != "ALL":
+if industry_filter != "ALL" and "Industry" in view.columns:
     view = view[view["Industry"].astype(str) == industry_filter]
 if search.strip():
     q = search.strip().upper()
     view = view[view["Symbol"].astype(str).str.upper().str.contains(q, na=False)]
 
-preferred = [
-    "Status", "Symbol", "Industry", "TodayOpen", "PDH", "PDL", "Gap", "GapPercent",
-    "NIFTY 500", "Industry Direction", "Stock Direction", "Reason"
-]
+preferred = ["Status", "Symbol", "Industry", "TodayOpen", "PDH", "PDL", "Gap", "GapPercent", "NIFTY 500", "Reason"]
 cols = [c for c in preferred if c in view.columns]
 display = view[cols].copy()
 for col in ["TodayOpen", "PDH", "PDL", "Gap"]:
@@ -194,11 +171,11 @@ if "GapPercent" in display.columns:
 st.subheader(f"📋 Stock-by-Stock Status ({len(display)} shown / {len(board)} total)")
 st.dataframe(display, width="stretch", hide_index=True, height=620)
 
-st.subheader("💰 Entry / Capital Status")
+st.subheader("💰 Capital & Entry Status")
 available_cash = state.get("available_cash") if isinstance(state, dict) else None
 capital_items = [
     ("Configured Capital", money(250000)),
-    ("Available Cash", money(available_cash) if available_cash is not None else "Not reported by paper state"),
+    ("Available Cash", money(available_cash) if available_cash is not None else "Not reported"),
     ("Open Positions", len(positions)),
     ("Max Positions", 2),
 ]
@@ -206,6 +183,5 @@ cap_cols = st.columns(len(capital_items))
 for col, (label, value) in zip(cap_cols, capital_items):
     col.metric(label, value)
 
-st.caption("A stock is marked ENTERED only when it exists in the open-position state. A qualified-but-not-entered stock is shown separately. Cash-blocked status is shown only when the execution state explicitly reports insufficient cash; the dashboard does not guess a cash rejection.")
-
+st.caption("Industry is displayed only for information/filtering. It is not a strategy condition. Entry/rejection reasons are shown only when the underlying state records enough information; the dashboard does not invent cash rejection reasons.")
 render_daily_footer()
