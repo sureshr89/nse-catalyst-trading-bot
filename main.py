@@ -32,8 +32,8 @@ class TradingBot:
     def _journal_dates_ist(self,series):return series.map(self._journal_ist)
     def current_time(self):return self._now().strftime("%H:%M")
     def _restore_risk_counts_from_paper_state(self):
-        """Reconcile today's persisted paper trades into RiskEngine after a crash/restart."""
-        today=self._now().date()
+        """Reconcile paper-state trades without double-counting trades already restored from the journal."""
+        today=self._now().date();paper_counts={}
         try:
             for trade in list(self.paper_engine.open_positions.values())+list(self.paper_engine.closed_positions):
                 if not isinstance(trade,dict):continue
@@ -41,7 +41,12 @@ class TradingBot:
                 if pd.isna(entry_dt) or entry_dt.date()!=today:continue
                 symbol=str(trade.get("symbol","")).strip().upper()
                 if not symbol:continue
-                if self.risk_engine.get_trade_count(symbol)<self.risk_engine.max_trades_per_stock:self.risk_engine.register_trade(symbol)
+                trade_id=str(trade.get("trade_id","")).strip()
+                key=(symbol,trade_id) if trade_id else (symbol,str(trade.get("signal","")).strip().upper(),str(trade.get("entry_time","")).strip(),str(trade.get("entry","")))
+                paper_counts.setdefault(symbol,set()).add(key)
+            for symbol,keys in paper_counts.items():
+                target=len(keys);current=self.risk_engine.get_trade_count(symbol)
+                if current<target:self.risk_engine.trade_counts[symbol]=target
         except Exception as error:print("Paper-state risk-count recovery skipped:",error)
     def _today_closed_trades(self):
         """Return today's CLOSED trades from journal + persisted paper state, deduplicated by trade_id."""
@@ -137,8 +142,7 @@ class TradingBot:
         available_capital=float(self.paper_engine.available_capital);risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
         if not risk_result.get("approved",False):
             reasons=" ".join(str(x).upper() for x in risk_result.get("reasons",[]))
-            if "INSUFFICIENT AVAILABLE CAPITAL" not in reasons and "INSUFFICIENT CAPITAL" not in reasons and "CAPITAL" not in reasons:
-                self.processed_signals.add(key)
+            if "INSUFFICIENT AVAILABLE CAPITAL" not in reasons and "INSUFFICIENT CAPITAL" not in reasons and "CAPITAL" not in reasons:self.processed_signals.add(key)
             return
         approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True
         try:result=self.paper_engine.open_trade(approved_trade)
