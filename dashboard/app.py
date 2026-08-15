@@ -18,34 +18,22 @@ from bot_runner import ensure_bot_running, get_status
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
-st.set_page_config(
-    page_title="NSE Catalyst | NIFTY 500 Bot",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# One shared typography/style system for every dashboard page.
+st.set_page_config(page_title="NSE Catalyst | NIFTY 500 Bot", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="live")
 
-# Start/keep exactly one persistent paper worker per Streamlit process.
 try:
     ensure_bot_running()
 except Exception as exc:
     st.error(f"Paper bot startup error: {type(exc).__name__}: {exc}")
 
 status = get_status()
-
-# Keep page structure identical to the other dashboard pages:
-# navigation first, then the page title/content.
 render_nav()
 st.title("📈 NSE Catalyst Trading Bot")
 st.caption("NIFTY 500 • PDH/PDL + Today's Open Reversal • Paper Trading")
 
 status_value = str(status.get("status", "UNKNOWN"))
 message = str(status.get("message", "No status message available."))
-
 if status_value == "ERROR":
     st.error(message)
 elif status_value in {"RUNNING", "PREPARING"}:
@@ -55,7 +43,7 @@ elif status_value == "WAITING":
 else:
     st.warning(message)
 
-# Use the same responsive 2×2 metric-card component as Current Trading.
+# Same responsive 2×2 metric-card component as Current Trading.
 def cards(items):
     html = "<div class='metric-grid'>" + "".join(
         f"<div class='metric-card'><small>{label}</small><b>{value}</b></div>"
@@ -72,18 +60,24 @@ cards([
 
 st.divider()
 
-left, right = st.columns(2)
+# Strategy and Session are presented as equal dashboard cards so the desktop
+# layout is balanced and the mobile layout stacks cleanly.
+left, right = st.columns(2, gap="large")
 with left:
     st.subheader("Strategy")
-    st.write("**BUY:** Open above PDH → price below PDH → Open reversal → NIFTY 500 ≥ +0.25%")
-    st.write("**SELL:** Open below PDL → price above PDL → Open reversal → NIFTY 500 ≤ −0.25%")
-    st.write("**SL:** PDH / PDL  •  **Target:** 1.25R  •  **Max positions:** 2")
+    st.markdown("<div class='dashboard-info-card'>"
+                "<div class='info-row'><span>BUY</span><b>Open above PDH → price below PDH → Open reversal → NIFTY 500 ≥ +0.25%</b></div>"
+                "<div class='info-row'><span>SELL</span><b>Open below PDL → price above PDL → Open reversal → NIFTY 500 ≤ −0.25%</b></div>"
+                "<div class='info-row'><span>RISK</span><b>SL: PDH / PDL &nbsp;•&nbsp; Target: 1.25R &nbsp;•&nbsp; Max positions: 2</b></div>"
+                "</div>", unsafe_allow_html=True)
 with right:
     st.subheader("Session")
     now = datetime.now(INDIA_TZ).strftime("%d-%b-%Y %H:%M:%S IST")
-    st.write(f"Current time: **{now}**")
-    st.write(f"Last scan: **{status.get('last_scan_completed') or 'Not scanned yet'}**")
-    st.write(f"Signals in last scan: **{int(status.get('last_signal_count', 0) or 0)}**")
+    st.markdown("<div class='dashboard-info-card'>"
+                f"<div class='session-row'><span>Current time</span><b>{now}</b></div>"
+                f"<div class='session-row'><span>Last scan</span><b>{status.get('last_scan_completed') or 'Not scanned yet'}</b></div>"
+                f"<div class='session-row'><span>Signals in last scan</span><b>{int(status.get('last_signal_count', 0) or 0)}</b></div>"
+                "</div>", unsafe_allow_html=True)
     if status.get("last_scan_error"):
         st.warning(str(status.get("last_scan_error")))
 
