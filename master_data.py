@@ -26,9 +26,7 @@ def _trade_merge(new):
     if new.empty:return
     old=_read(MASTER_TRADES);combined=pd.concat([old,new],ignore_index=True) if not old.empty else new.copy()
     if "trade_id" in combined.columns:
-        ids=combined["trade_id"].astype(str).str.strip();has_id=ids.ne("") & ids.ne("nan")
-        with_id=combined.loc[has_id].drop_duplicates(subset=["trade_id"],keep="last");without_id=combined.loc[~has_id].copy()
-        fallback=[c for c in ["TradeDate","symbol","entry_time","signal","entry"] if c in without_id.columns]
+        ids=combined["trade_id"].astype(str).str.strip();has_id=ids.ne("") & ids.ne("nan");with_id=combined.loc[has_id].drop_duplicates(subset=["trade_id"],keep="last");without_id=combined.loc[~has_id].copy();fallback=[c for c in ["TradeDate","symbol","entry_time","signal","entry"] if c in without_id.columns]
         if fallback:without_id=without_id.drop_duplicates(subset=fallback,keep="last")
         combined=pd.concat([with_id,without_id],ignore_index=True)
     else:
@@ -44,7 +42,9 @@ def _month_values(frame,columns):
 def _prune_to_last_six_months(path,date_columns):
     frame=_read(path)
     if frame.empty:return
-    months=_month_values(frame,date_columns);now=datetime.now(IST);current_period=pd.Period(now.strftime("%Y-%m"),freq="M");first_period=current_period-(MASTER_MONTHS-1);allowed={str(p) for p in pd.period_range(first_period,current_period,freq="M")};trimmed=frame.loc[months.notna()&months.isin(allowed)].copy()
+    months=_month_values(frame,date_columns);now=datetime.now(IST);current_period=pd.Period(now.strftime("%Y-%m"),freq="M");first_period=current_period-(MASTER_MONTHS-1);allowed={str(p) for p in pd.period_range(first_period,current_period,freq="M")}
+    # Keep unparseable legacy rows rather than silently deleting historical research data.
+    keep=months.isna()|months.isin(allowed);trimmed=frame.loc[keep].copy()
     if len(trimmed)!=len(frame):_write(path,trimmed)
 def enforce_six_month_retention():
     _prune_to_last_six_months(MASTER_STOCK,["TradeDate","DataSnapshotIST"]);_prune_to_last_six_months(MASTER_TRADES,["TradeDate","entry_time","exit_time","timestamp"]);_prune_to_last_six_months(MASTER_DAILY,["TradeDate","PreparedAtIST"])
@@ -60,7 +60,7 @@ def _closed_unique(frame):
     closed=frame[frame.get("status",pd.Series(index=frame.index,dtype=str)).astype(str).str.upper().eq("CLOSED")].copy() if "status" in frame.columns else frame.iloc[0:0].copy()
     if closed.empty:return closed
     if "trade_id" in closed.columns:
-        ids=closed["trade_id"].astype(str).str.strip();with_id=closed.loc[ids.ne("")&ids.ne("nan")].drop_duplicates(subset=["trade_id"],keep="last");without_id=closed.loc[~(ids.ne("")&ids.ne("nan"))].copy();fallback=[c for c in ["symbol","entry_time","signal","entry"] if c in without_id.columns]
+        ids=closed["trade_id"].astype(str).str.strip();has_id=ids.ne("") & ids.ne("nan");with_id=closed.loc[has_id].drop_duplicates(subset=["trade_id"],keep="last");without_id=closed.loc[~has_id].copy();fallback=[c for c in ["symbol","entry_time","signal","entry"] if c in without_id.columns]
         if fallback:without_id=without_id.drop_duplicates(subset=fallback,keep="last")
         return pd.concat([with_id,without_id],ignore_index=True)
     fallback=[c for c in ["symbol","entry_time","signal","entry"] if c in closed.columns]
