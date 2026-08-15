@@ -48,8 +48,6 @@ class PriceData:
                 timestamps = timestamps.dt.tz_convert(INDIA_TZ)
             valid = timestamps.notna()
             current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
-            # A candle stamped at the current minute is still forming. Never let
-            # malformed/unparseable timestamps bypass this completed-candle gate.
             valid &= timestamps < current_minute
             return data.loc[valid].copy().reset_index(drop=True)
         except Exception as error:
@@ -97,7 +95,6 @@ class PriceData:
     def get_1m(self, symbol): return self.get_candles(symbol, "1m", "1d")
 
     def _today_intraday(self, data):
-        """Return only today's IST candles; never fall back to a previous session."""
         if data is None or data.empty or "Datetime" not in data.columns: return pd.DataFrame()
         result = data.copy(); result["Datetime"] = self._to_ist(result["Datetime"]); result = result.dropna(subset=["Datetime"])
         if result.empty: return pd.DataFrame()
@@ -105,7 +102,6 @@ class PriceData:
         return result[result["Datetime"].dt.date == today].sort_values("Datetime").reset_index(drop=True)
 
     def get_latest_available_1m(self, symbol):
-        """Return the latest completed 1-minute candle from today's IST session only."""
         try:
             data = self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol), period="1d", interval="1m", auto_adjust=False, progress=False, threads=False, prepost=False, timeout=self.download_timeout))
             data = self._completed_1m(self._today_intraday(data))
@@ -115,15 +111,12 @@ class PriceData:
             return None
 
     def get_latest_market_price(self, symbol):
-        """Return only a timestamp-validated recent 1-minute price for square-off."""
-        ticker = self.yahoo_symbol(symbol)
-        now = datetime.now(INDIA_TZ)
+        ticker = self.yahoo_symbol(symbol); now = datetime.now(INDIA_TZ)
         try:
             raw = self._clean_data(yf.download(tickers=ticker, period="1d", interval="1m", auto_adjust=False, progress=False, threads=False, prepost=False, timeout=self.download_timeout))
             today = self._completed_1m(self._today_intraday(raw))
             if not today.empty:
-                latest = today.iloc[-1]
-                candle_time = pd.Timestamp(latest["Datetime"])
+                latest = today.iloc[-1]; candle_time = pd.Timestamp(latest["Datetime"])
                 if candle_time.tzinfo is None: candle_time = candle_time.tz_localize(INDIA_TZ)
                 else: candle_time = candle_time.tz_convert(INDIA_TZ)
                 age_seconds = (now - candle_time.to_pydatetime()).total_seconds()
@@ -179,6 +172,16 @@ class PriceData:
                 try: result.update(future.result())
                 except Exception as error: print("Yahoo batch worker failed:",error)
         for symbol in symbols: result.setdefault(symbol,pd.DataFrame())
+        # Synchronize every returned stock to the latest common completed minute.
+        # A stock that is one or more minutes behind must not be compared against newer stocks.
+        non_empty=[df for df in result.values() if isinstance(df,pd.DataFrame) and not df.empty and "Datetime" in df.columns]
+        if non_empty:
+            latest_common=min(pd.Timestamp(df["Datetime"].max()) for df in non_empty)
+            latest_common=self._to_ist(pd.Series([latest_common])).iloc[0]
+            for symbol,df in list(result.items()):
+                if df is not None and not df.empty:
+                    ts=self._to_ist(df["Datetime"])
+                    result[symbol]=df.loc[ts <= latest_common].reset_index(drop=True)
         return result
 
     def get_index_1m(self, ticker="^NSEI"):
@@ -188,7 +191,6 @@ class PriceData:
             print("NIFTY market-index data failed:",error); return pd.DataFrame()
 
     def today_only(self, df):
-        """Return only today's IST rows; never select the latest available historical date."""
         if df is None or df.empty or "Datetime" not in df.columns:return pd.DataFrame()
         result=df.copy(); result["Datetime"]=self._to_ist(result["Datetime"]); result=result.dropna(subset=["Datetime"])
         if result.empty:return pd.DataFrame()
