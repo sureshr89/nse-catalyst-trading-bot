@@ -188,8 +188,8 @@ class ScannerEngine:
         self._write_diagnostics()
         return result
 
-    def _nifty500_candle(self, as_of):
-        data = self.price_data.today_only(self.price_data.get_index_1m("^CRSLDX"))
+    def _nifty500_candle(self, as_of, data=None):
+        data = self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
         if data.empty:
             return None
         stamp = pd.Timestamp(as_of)
@@ -204,6 +204,17 @@ class ScannerEngine:
         self.diagnostics = self._empty_diagnostics()
         candidates = self.prepare_opening_candidates()
         if candidates.empty:
+            return self._finish([])
+
+        # Opening candidates (PDH/PDL, gap and liquidity) are static for the day,
+        # but 1-minute prices are live. Refresh candidate candles every scan.
+        symbols = candidates["Symbol"].astype(str).str.upper().tolist()
+        self.universe_market_data = self.price_data.get_multi_1m(symbols)
+        self.nifty500_market_data = self.price_data.get_index_1m("^CRSLDX")
+        available_symbols = sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty)
+        self.diagnostics["nifty500_coverage"] = int(not self.nifty500_market_data.empty)
+        if symbols and available_symbols == 0:
+            self.diagnostics["rejections"]["missing_data"] = len(symbols)
             return self._finish([])
 
         signals = []
@@ -222,7 +233,7 @@ class ScannerEngine:
                 continue
             trigger_candle = trigger_rows.iloc[-1]
 
-            nifty_candle = self._nifty500_candle(trigger_time)
+            nifty_candle = self._nifty500_candle(trigger_time, self.nifty500_market_data)
             nifty_dir = self.strategy._candle_direction(nifty_candle)
             side = trigger_probe["signal"]
             required = "BULLISH" if side == "BUY" else "BEARISH"
