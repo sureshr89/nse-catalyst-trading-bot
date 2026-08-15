@@ -25,7 +25,9 @@ class TradeJournal:
             if not os.path.exists(path):self._write_header(path,columns);continue
             try:
                 df=pd.read_csv(path)
-                if self.LEGACY_COLUMNS.intersection(set(df.columns)):self._write_header(path,columns);continue
+                legacy=self.LEGACY_COLUMNS.intersection(set(df.columns))
+                # Preserve existing records while migrating obsolete schemas.
+                if legacy:df=df.drop(columns=list(legacy),errors="ignore")
                 for column in columns:
                     if column not in df.columns:df[column]=""
                 df=df.reindex(columns=columns)
