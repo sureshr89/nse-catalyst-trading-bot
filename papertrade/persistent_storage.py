@@ -44,9 +44,13 @@ def _migrate_paper_state_file(path):
   if version==CURRENT_PAPER_STATE_VERSION:return "current"
   if version>CURRENT_PAPER_STATE_VERSION:
    quarantine=path.with_name(path.name+f".future-v{version}")
-   if not quarantine.exists():path.replace(quarantine)
-   else:path.unlink()
-   print(f"Future paper state v{version} quarantined at {quarantine}; current engine is v{CURRENT_PAPER_STATE_VERSION}.")
+   if not quarantine.exists():
+    path.replace(quarantine)
+    print(f"Future paper state v{version} quarantined at {quarantine}; current engine is v{CURRENT_PAPER_STATE_VERSION}.")
+   else:
+    # Never delete either copy. A repeated startup must not destroy the
+    # original future-state snapshot simply because the quarantine already exists.
+    print(f"Future paper state v{version} already quarantined at {quarantine}; preserving existing state.")
    return "future"
   # Known legacy states are structurally compatible with the current engine.
   state.setdefault("open_positions",{})
