@@ -69,9 +69,9 @@ class ScannerEngine:
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
             rows.append({"Symbol":symbol,"PDH":round(pdh,4),"PDL":round(pdl,4),"TodayOpen":round(today_open,4),"PreviousDayClose":round(pdc,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"OpeningSetup":setup,"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"])})
         self.gap_analysis=pd.DataFrame(gap_rows);self.diagnostics["gap_data_count"]=len(gap_rows);self.diagnostics["gap_up_count"]=sum(r["GapType"]=="GAP_UP_PDH" for r in gap_rows);self.diagnostics["gap_down_count"]=sum(r["GapType"]=="GAP_DOWN_PDL" for r in gap_rows);self._write_gap_analysis(gap_rows);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.diagnostics["opening_setup_passed"]=len(result);self.opening_candidates=result
-        # Cache an opening decision only after at least one symbol has today's IST data.
-        # If the first scan happens before the live session/data feed is ready, retry later.
-        self._opening_prepared_date=today if today_data_symbols>0 else None
+        # Cache only when the complete reference universe has today's IST data.
+        # Partial coverage must remain retryable so temporarily unavailable stocks are not frozen out for the day.
+        self._opening_prepared_date=today if today_data_symbols==len(symbols) else None
         self._write_diagnostics();return result
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
