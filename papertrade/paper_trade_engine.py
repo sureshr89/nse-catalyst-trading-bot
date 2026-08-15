@@ -1,20 +1,13 @@
 """Persistent paper-trade execution engine for the NIFTY 500 strategy."""
-
-import json
-import os
-import re
+import json, os, re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import pandas as pd
-
 from config.settings import PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MARKET_CLOSE, TOTAL_CAPITAL, MAX_OPEN_POSITIONS, MIN_REQUIRED_RISK, MAX_RISK_PER_TRADE, MIN_RR_RATIO, TRADE_LOG_FILE
 from market.price_data import PriceData
 from papertrade.persistent_storage import restore_json, sync_json
-
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
-STATE_VERSION = 4
-
+INDIA_TZ=ZoneInfo("Asia/Kolkata")
+STATE_VERSION=5
 class PaperTradeEngine:
     """Simulated execution engine. Live trading is deliberately prohibited."""
     def __init__(self):
@@ -52,18 +45,34 @@ class PaperTradeEngine:
             else:parsed=parsed.tz_convert(INDIA_TZ)
             return parsed.isoformat()
         except Exception:return str(value)
+    @staticmethod
+    def _session_date(value):
+        if value is None:return None
+        try:
+            parsed=pd.to_datetime(value,errors="coerce")
+            if pd.isna(parsed):return None
+            if getattr(parsed,"tzinfo",None) is None:parsed=parsed.tz_localize(INDIA_TZ)
+            else:parsed=parsed.tz_convert(INDIA_TZ)
+            return parsed.date()
+        except Exception:return None
     def _restore_state(self):
         path=self._state_path()
         try:
             restore_json(path,path.replace(os.sep,"/"))
             if not os.path.exists(path):return
-            with open(path,"r",encoding="utf-8") as file:state=json.load(file)
+            with open(path,"r",encoding="utf-8") as file: state=json.load(file)
             if int(state.get("state_version",0) or 0)!=STATE_VERSION:
                 print("Legacy paper state detected; starting clean."); self._reset_state_file(path); return
             self.open_positions=state.get("open_positions",{}) or {}; self.closed_positions=state.get("closed_positions",[]) or []
+            saved_date=self._session_date(state.get("session_date") or state.get("saved_at"))
+            today=datetime.now(INDIA_TZ).date()
+            if saved_date is not None and saved_date != today:
+                print(f"Stale paper session state ({saved_date}) detected; clearing old open positions for {today}.")
+                self.open_positions={}
             for position in self.open_positions.values():
                 position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("last_processed_candle",self._candle_key(position.get("entry_time")))
-            for position in self.closed_positions:position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("exit_reason","")
+            for position in self.closed_positions:
+                position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("exit_reason","")
             self.total_capital=float(state.get("total_capital",TOTAL_CAPITAL) or TOTAL_CAPITAL)
             counters=[self._trade_number(p.get("trade_id")) for p in self.open_positions.values()]+[self._trade_number(p.get("trade_id")) for p in self.closed_positions]; counter=int(state.get("trade_counter",0) or 0)
             try:
@@ -73,6 +82,7 @@ class PaperTradeEngine:
             self.trade_counter=max([counter,*counters],default=0)
             self.used_capital=round(sum(float(p.get("entry",0) or 0)*int(float(p.get("quantity",0) or 0)) for p in self.open_positions.values()),2); self.available_capital=round(self.total_capital-self.used_capital,2)
             if self.available_capital<0:raise ValueError("Persisted open positions exceed total capital")
+            if saved_date is not None and saved_date != today:self._save_state()
         except Exception as error:print(f"Paper state restore skipped: {type(error).__name__}: {error}")
     @staticmethod
     def _reset_state_file(path):
@@ -80,7 +90,7 @@ class PaperTradeEngine:
         except OSError:pass
     def _save_state(self):
         path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True)
-        state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now().isoformat()}
+        state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
         try:
             with open(path,"w",encoding="utf-8") as file:json.dump(state,file,ensure_ascii=False,indent=2,default=str)
             sync_json(path,path.replace(os.sep,"/"),"Save NIFTY 500 paper-trading state")
@@ -139,8 +149,7 @@ class PaperTradeEngine:
         if not self.has_open_position(symbol):return None
         exit_price=self._number(exit_price)
         if exit_price is None or exit_price<=0:return None
-        position=self.open_positions[symbol]; pnl=self.calculate_pnl(position["signal"],position["entry"],exit_price,position["quantity"])
-        position.update({"status":"CLOSED","exit_time":exit_time,"exit_price":round(exit_price,4),"exit_reason":reason,"pnl":pnl})
+        position=self.open_positions[symbol]; pnl=self.calculate_pnl(position["signal"],position["entry"],exit_price,position["quantity"]); position.update({"status":"CLOSED","exit_time":exit_time,"exit_price":round(exit_price,4),"exit_reason":reason,"pnl":pnl})
         closed=position.copy(); self.closed_positions.append(closed); position_value=round(float(position["entry"])*int(position["quantity"]),2); self.used_capital=round(max(0.0,self.used_capital-position_value),2); self.available_capital=round(self.total_capital-self.used_capital,2); del self.open_positions[symbol]; self._save_state(); return closed
     def process_candle(self,symbol,candle):
         symbol=str(symbol).strip().upper()
@@ -150,8 +159,7 @@ class PaperTradeEngine:
             except Exception:return None
         high=self._number(candle.get("High")); low=self._number(candle.get("Low")); close=self._number(candle.get("Close")); candle_time=candle.get("Datetime")
         if high is None or low is None or close is None:return None
-        key=self._candle_key(candle_time)
-        position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
+        key=self._candle_key(candle_time); position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
         if key and last and key<=last:return None
         self._update_excursions(position,high,low); signal=position["signal"]; stop=float(position["stop_loss"]); target=float(position["target"])
         if signal=="BUY":sl_hit,target_hit=low<=stop,high>=target
