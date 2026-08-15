@@ -135,13 +135,19 @@ class TradingBot:
         if not symbol:return
         if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS or self.paper_engine.has_open_position(symbol):return
         available_capital=float(self.paper_engine.available_capital);risk_result=self.risk_engine.approve_trade(signal, available_capital=available_capital);self.log_signal(signal,risk_result)
-        if not risk_result.get("approved",False):self.processed_signals.add(key);return
+        if not risk_result.get("approved",False):
+            reasons=" ".join(str(x).upper() for x in risk_result.get("reasons",[]))
+            if "INSUFFICIENT AVAILABLE CAPITAL" not in reasons and "INSUFFICIENT CAPITAL" not in reasons and "CAPITAL" not in reasons:
+                self.processed_signals.add(key)
+            return
         approved_trade=dict(signal);approved_trade.update(risk_result);approved_trade["approved"]=True
         try:result=self.paper_engine.open_trade(approved_trade)
         except Exception as error:self._rollback_registered_trade(symbol);print(f"Paper trade open failed for {symbol}; risk state rolled back: {type(error).__name__}: {error}");return
         if not result.get("opened",False):
             if result.get("reason","")=="Insufficient available capital":self.missed_capital.record(signal,risk_result,result["reason"])
-            self._rollback_registered_trade(symbol);self.processed_signals.add(key);return
+            self._rollback_registered_trade(symbol)
+            if "capital" not in str(result.get("reason","")).lower():self.processed_signals.add(key)
+            return
         position=self.paper_engine.open_positions.get(symbol)
         if position is None:self._rollback_registered_trade(symbol);print(f"Paper trade {symbol} reported opened but position state was missing");return
         self._attach_trade_context(position,approved_trade)
