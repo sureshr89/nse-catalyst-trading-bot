@@ -65,27 +65,33 @@ class ScannerEngine:
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
             rows.append({"Symbol":symbol,"PDH":pdh,"PDL":pdl,"TodayOpen":today_open,"PreviousDayClose":pdc,"Gap":gap_from_close,"GapPercent":gap_pct,"GapType":gap_type,"OpeningSetup":setup,"PreviousDayTurnover":float(ref["PreviousDayTurnover"]),"LiquidityQualified":bool(ref["LiquidityQualified"])})
         self.gap_analysis=pd.DataFrame(gaps);self.diagnostics["gap_data_count"]=len(gaps);self.diagnostics["gap_up_count"]=sum(x["GapType"]=="GAP_UP" for x in gaps);self.diagnostics["gap_down_count"]=sum(x["GapType"]=="GAP_DOWN" for x in gaps);self._write_gap_analysis(gaps);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.opening_candidates=result;self.diagnostics["opening_setup_passed"]=len(result);return result
+    def prepare_opening_candidates(self,force=False):
+        """Compatibility/pre-market helper: prepare today's gap candidates using fresh 1m prices."""
+        references=self.prepare_reference_data(force=force)
+        if references.empty:return pd.DataFrame()
+        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data
+        available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        if available<required:
+            self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();return pd.DataFrame()
+        return self._build_candidates(references,market_data)
     def _aligned_coverage(self,symbols,market_data,expected):
         aligned=0
         for symbol in symbols:
             data=market_data.get(symbol)
             if data is None or data.empty:continue
-            stamps=self._ist_series(data["Datetime"])
-            if bool((stamps==expected).any()):aligned+=1
+            if bool((self._ist_series(data["Datetime"])==expected).any()):aligned+=1
         return aligned
     def scan(self):
         self.diagnostics=self._empty_diagnostics();references=self.prepare_reference_data()
         if references.empty:return self._finish([])
-        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();self.diagnostics["stocks_scanned"]=len(symbols)
-        market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data
+        symbols=references["Symbol"].astype(str).str.upper().drop_duplicates().tolist();self.diagnostics["stocks_scanned"]=len(symbols);market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data
         available=sum(1 for s in symbols if s in market_data and not market_data[s].empty);coverage=available/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=coverage;required=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
-        if available<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();print(f"NIFTY 500 current 1m coverage incomplete: {available}/{len(symbols)} ({coverage:.1%}); need at least {required}.");return self._finish([])
+        if available<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available;self._write_diagnostics();return self._finish([])
         expected=self._latest_completed_minute();aligned=self._aligned_coverage(symbols,market_data,expected);aligned_cov=aligned/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=aligned_cov
-        if aligned<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-aligned;self._write_diagnostics();print(f"Synchronized 1m coverage incomplete: {aligned}/{len(symbols)} ({aligned_cov:.1%}) at {expected.isoformat()}; need at least {required}.");return self._finish([])
+        if aligned<required:self.diagnostics["rejections"]["missing_data"]+=len(symbols)-aligned;self._write_diagnostics();return self._finish([])
         self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
         if self.nifty500_market_data.empty:self.diagnostics["rejections"]["market_alignment"]+=1;return self._finish([])
-        index_stamps=self._ist_series(self.nifty500_market_data["Datetime"])
-        if REQUIRE_MARKET_ALIGNMENT and not bool((index_stamps==expected).any()):self.diagnostics["rejections"]["market_alignment"]+=1;self._write_diagnostics();print(f"NIFTY 500 index missing synchronized 1m price at {expected.isoformat()}; retrying.");return self._finish([])
+        if REQUIRE_MARKET_ALIGNMENT and not bool((self._ist_series(self.nifty500_market_data["Datetime"])==expected).any()):self.diagnostics["rejections"]["market_alignment"]+=1;self._write_diagnostics();return self._finish([])
         nifty_change=self.price_data.get_index_change_pct("^CRSLDX")
         if nifty_change is None:return self._finish([])
         nifty_change=float(nifty_change);self.diagnostics["nifty500_change_pct"]=round(nifty_change,4)
@@ -97,8 +103,7 @@ class ScannerEngine:
         if REQUIRE_MARKET_ALIGNMENT and abs(nifty_change)<NIFTY500_MIN_CHANGE_PCT:self.diagnostics["rejections"]["market_alignment"]=len(candidates);self._write_diagnostics();return self._finish([])
         self.diagnostics["market_alignment_passed"]=len(candidates);signals=[]
         for _,row in candidates.iterrows():
-            symbol=str(row["Symbol"]).upper();data=market_data.get(symbol)
-            signal=self.strategy.build(symbol,data,row["PDH"],row["PDL"],row["TodayOpen"],nifty_change_pct=nifty_change)
+            symbol=str(row["Symbol"]).upper();signal=self.strategy.build(symbol,market_data.get(symbol),row["PDH"],row["PDL"],row["TodayOpen"],nifty_change_pct=nifty_change)
             if signal is None:self.diagnostics["rejections"]["strategy_setup"]+=1;continue
             signal.update({"nifty500_universe":True,"liquidity_qualified":bool(row.get("LiquidityQualified",False)),"gap":row.get("Gap"),"gap_percent":row.get("GapPercent"),"gap_type":row.get("GapType"),"nifty500_change_pct":nifty_change});signals.append(signal);self.diagnostics["strategy_setup_passed"]+=1
         return self._finish(signals)
