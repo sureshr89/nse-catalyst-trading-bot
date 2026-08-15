@@ -126,11 +126,13 @@ def monthly_excel(month):
 
         pd.DataFrame([
             ["Month", month],
-            ["Strategy", "NIFTY 500 PDH/PDL + Today's Open reversal"],
-            ["BUY", "Open above PDH → price moves below PDH → price returns above Today's Open → NIFTY 500 ≥ +0.25%"],
-            ["SELL", "Open below PDL → price moves above PDL → price returns below Today's Open → NIFTY 500 ≤ −0.25%"],
+            ["Strategy", "NIFTY 500 PDH/PDL + Today's Open return"],
+            ["BUY", "NIFTY 500 ≥ +0.25% → Open > PDH → 1m Close below PDH → 1m Close returns to Today's Open → rank → current market entry"],
+            ["SELL", "NIFTY 500 ≤ −0.25% → Open < PDL → 1m Close above PDL → 1m Close returns to Today's Open → rank → current market entry"],
+            ["Ranking", "ATR% → RVOL → Beta → traded value, applied only after qualification"],
             ["Risk", "BUY SL = PDH; SELL SL = PDL; Target = 1.25 × entry-to-SL risk"],
             ["Risk limits", "₹1,400–₹1,500 per trade; maximum 2 positions; ₹3,000 daily max loss"],
+            ["Runtime", "30-second control cycle; 1-minute setup data; immediate entry after final approval"],
             ["Generated", pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")],
         ], columns=["Field", "Value"]).to_excel(writer, sheet_name="README", index=False)
     output.seek(0)
@@ -143,7 +145,7 @@ except Exception as error:
     st.warning(f"Master data refresh warning: {type(error).__name__}: {error}")
 
 st.title("⬇️ Downloads")
-st.caption("Download trading records, daily market data, gap board and strategy results.")
+st.caption("Download paper-trading records, strategy data, waiting states, gap board and master research files.")
 trades = canonical_trades(read_csv("trades.csv"))
 signals = read_csv("signals.csv")
 gaps = read_csv("gap_analysis.csv")
@@ -172,23 +174,39 @@ st.download_button(
 st.subheader("📁 Trading Data")
 st.download_button(
     "⬇️ TRADES CSV",
-    data=trades.to_csv(index=False).encode() if not trades.empty else file_bytes("trades.csv", ["status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "pnl"]),
+    data=trades.to_csv(index=False).encode() if not trades.empty else file_bytes("trades.csv", ["trade_id", "status", "symbol", "signal", "entry_time", "exit_time", "entry", "stop_loss", "target", "quantity", "risk", "actual_risk", "pnl", "candidate_id", "atr_pct", "rvol", "beta", "traded_value", "priority_rank"]),
     file_name="nifty500_trades.csv",
     mime="text/csv",
     width="stretch",
 )
 st.download_button(
     "⬇️ SIGNALS CSV",
-    data=signals.to_csv(index=False).encode() if not signals.empty else file_bytes("signals.csv", ["timestamp", "symbol", "signal", "entry", "stop_loss", "target", "approved", "reason"]),
+    data=signals.to_csv(index=False).encode() if not signals.empty else file_bytes("signals.csv", ["timestamp", "symbol", "signal", "candidate_id", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk", "approved", "reason", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "candidate_state", "entry_source"]),
     file_name="nifty500_signals.csv",
     mime="text/csv",
     width="stretch",
 )
 st.download_button(
     "⬇️ PREMARKET GAP BOARD CSV",
-    data=gaps.to_csv(index=False).encode() if not gaps.empty else file_bytes("gap_analysis.csv", ["Symbol", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL"]),
+    data=gaps.to_csv(index=False).encode() if not gaps.empty else file_bytes("gap_analysis.csv", ["Symbol", "Industry", "PreviousClose", "TodayOpen", "Gap", "GapPercent", "GapType", "PDH", "PDL", "GapFromPreviousClose", "GapPercentFromPreviousClose"]),
     file_name="nifty500_premarket_gap_board.csv",
     mime="text/csv",
+    width="stretch",
+)
+
+st.subheader("⏳ Scanner State")
+st.download_button(
+    "⬇️ WAITING / QUALIFIED JSON",
+    data=json_bytes("waiting_candidates.json", {"waiting": {"BUY": {}, "SELL": {}}, "qualified": {"BUY": {}, "SELL": {}}}),
+    file_name="nifty500_waiting_candidates.json",
+    mime="application/json",
+    width="stretch",
+)
+st.download_button(
+    "⬇️ SCANNER DIAGNOSTICS JSON",
+    data=json_bytes("scanner_diagnostics.json", {"nifty500_change_pct": 0, "buy_waiting": 0, "sell_waiting": 0, "buy_qualified": 0, "sell_qualified": 0, "ranking": []}),
+    file_name="nifty500_scanner_diagnostics.json",
+    mime="application/json",
     width="stretch",
 )
 
@@ -202,7 +220,7 @@ st.download_button(
 )
 st.download_button(
     "⬇️ PAPER STATE JSON",
-    data=json_bytes("paper_engine_state.json", {"open_positions": {}, "available_capital": 250000}),
+    data=json_bytes("paper_engine_state.json", {"strategy": "NIFTY_500_PDH_PDL_OPEN_RETURN", "open_positions": {}, "available_capital": 250000}),
     file_name="nifty500_paper_state.json",
     mime="application/json",
     width="stretch",
