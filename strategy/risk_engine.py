@@ -41,12 +41,15 @@ class RiskEngine:
             if pd.isna(parsed):
                 return None
             if getattr(parsed, "tzinfo", None) is None:
-                return parsed.date()
-            return parsed.tz_convert(INDIA_TZ).date()
+                parsed = parsed.tz_localize(INDIA_TZ)
+            else:
+                parsed = parsed.tz_convert(INDIA_TZ)
+            return parsed.date()
         except Exception:
             return None
 
     def restore_today_trade_counts(self):
+        """Restore unique today's trades, not every journal row for the same trade."""
         self.trade_counts = {}
         path = Path(TRADE_LOG_FILE)
         if not path.exists():
@@ -56,6 +59,7 @@ class RiskEngine:
             if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
                 return
             today = self._today_ist()
+            seen_ids = set()
             for row in df.itertuples(index=False):
                 if self._entry_date_ist(getattr(row, "entry_time", "")) != today:
                     continue
@@ -63,8 +67,24 @@ class RiskEngine:
                 if status.startswith("MISSED_CAPITAL"):
                     continue
                 symbol = str(getattr(row, "symbol", "")).strip().upper()
-                if symbol:
-                    self.trade_counts[symbol] = self.trade_counts.get(symbol, 0) + 1
+                if not symbol:
+                    continue
+                trade_id = str(getattr(row, "trade_id", "")).strip()
+                if trade_id:
+                    unique_key = (symbol, trade_id)
+                    if unique_key in seen_ids:
+                        continue
+                    seen_ids.add(unique_key)
+                else:
+                    # Older journal rows may have no trade_id. Use the entry identity
+                    # so an OPEN row and its CLOSED update are counted once.
+                    signal = str(getattr(row, "signal", "")).strip().upper()
+                    entry = str(getattr(row, "entry", "")).strip()
+                    unique_key = (symbol, signal, str(getattr(row, "entry_time", "")).strip(), entry)
+                    if unique_key in seen_ids:
+                        continue
+                    seen_ids.add(unique_key)
+                self.trade_counts[symbol] = self.trade_counts.get(symbol, 0) + 1
         except Exception:
             self.trade_counts = {}
 
