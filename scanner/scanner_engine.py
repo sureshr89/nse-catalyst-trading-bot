@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
+import math
 import pandas as pd
 from config.settings import REQUIRE_MARKET_ALIGNMENT, REQUIRE_STOCK_ALIGNMENT, TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO, HIGH_LIQUIDITY_PERCENTILE
 from data.reference_store import ReferenceStore
@@ -11,6 +12,7 @@ from market.price_data import PriceData
 from strategy.open_reversal_engine import OpenReversalEngine
 
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
+MIN_MARKET_DATA_COVERAGE=0.95
 
 class ScannerEngine:
     def __init__(self):
@@ -50,8 +52,10 @@ class ScannerEngine:
         total=len(refs);refs=refs.dropna(subset=["PDH","PDL","PreviousDayClose","PreviousDayTurnover"]);self.diagnostics["stocks_scanned"]=len(self.universe);self.diagnostics["rejections"]["missing_data"]=max(0,total-len(refs))
         if refs.empty:self._opening_prepared_date=None;self._write_diagnostics();return pd.DataFrame()
         percentile=max(0.0,min(1.0,float(HIGH_LIQUIDITY_PERCENTILE)));cutoff=float(refs["PreviousDayTurnover"].quantile(percentile));refs["LiquidityQualified"]=refs["PreviousDayTurnover"]>=cutoff;self.diagnostics["liquidity_passed"]=int(refs["LiquidityQualified"].sum());self.diagnostics["rejections"]["liquidity"]=int((~refs["LiquidityQualified"]).sum())
-        symbols=refs["Symbol"].astype(str).str.upper().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available_symbols=sum(1 for symbol in symbols if market_data.get(symbol) is not None and not market_data.get(symbol).empty);self.diagnostics["market_data_coverage"]=available_symbols/len(symbols) if symbols else 0.0
-        if not available_symbols:self._opening_prepared_date=None;self.diagnostics["rejections"]["missing_data"]+=len(symbols);self._write_diagnostics();return pd.DataFrame()
+        symbols=refs["Symbol"].astype(str).str.upper().tolist();market_data=self.price_data.get_multi_1m(symbols);self.universe_market_data=market_data;available_symbols=sum(1 for symbol in symbols if market_data.get(symbol) is not None and not market_data.get(symbol).empty);coverage=available_symbols/len(symbols) if symbols else 0.0;self.diagnostics["market_data_coverage"]=coverage
+        required_coverage=math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE)
+        if available_symbols<required_coverage:
+            self._opening_prepared_date=None;self.opening_candidates=pd.DataFrame();self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available_symbols;self._write_diagnostics();print(f"NIFTY 500 1m coverage incomplete: {available_symbols}/{len(symbols)} ({coverage:.1%}); need at least {required_coverage}. Retrying later.");return pd.DataFrame()
         rows=[];gap_rows=[];today_data_symbols=0
         for _,ref in refs.iterrows():
             symbol=str(ref["Symbol"]).upper();candles=market_data.get(symbol)
@@ -69,9 +73,7 @@ class ScannerEngine:
             if setup=="NO_GAP_SETUP":self.diagnostics["rejections"]["opening_setup"]+=1;continue
             rows.append({"Symbol":symbol,"PDH":round(pdh,4),"PDL":round(pdl,4),"TodayOpen":round(today_open,4),"PreviousDayClose":round(pdc,4),"Gap":round(gap_value,4),"GapPercent":round(gap_percent,3),"GapType":gap_type,"OpeningSetup":setup,"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_close,3),"PreviousDayTurnover":round(float(ref["PreviousDayTurnover"]),2),"LiquidityQualified":bool(ref["LiquidityQualified"])})
         self.gap_analysis=pd.DataFrame(gap_rows);self.diagnostics["gap_data_count"]=len(gap_rows);self.diagnostics["gap_up_count"]=sum(r["GapType"]=="GAP_UP_PDH" for r in gap_rows);self.diagnostics["gap_down_count"]=sum(r["GapType"]=="GAP_DOWN_PDL" for r in gap_rows);self._write_gap_analysis(gap_rows);result=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame();self.diagnostics["opening_setup_passed"]=len(result);self.opening_candidates=result
-        # Cache only when the complete reference universe has today's IST data.
-        # Partial coverage must remain retryable so temporarily unavailable stocks are not frozen out for the day.
-        self._opening_prepared_date=today if today_data_symbols==len(symbols) else None
+        self._opening_prepared_date=today if today_data_symbols>=required_coverage else None
         self._write_diagnostics();return result
     def _nifty500_candle(self,as_of,data=None):
         data=self.price_data.today_only(data if data is not None else self.price_data.get_index_1m("^CRSLDX"))
@@ -84,7 +86,7 @@ class ScannerEngine:
         self.diagnostics=self._empty_diagnostics();candidates=self.prepare_opening_candidates()
         if candidates.empty:return self._finish([])
         symbols=candidates["Symbol"].astype(str).str.upper().tolist();self.universe_market_data=self.price_data.get_multi_1m(symbols);self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX");available_symbols=sum(1 for symbol in symbols if self.universe_market_data.get(symbol) is not None and not self.universe_market_data.get(symbol).empty);self.diagnostics["nifty500_coverage"]=int(not self.nifty500_market_data.empty)
-        if not available_symbols:self.diagnostics["rejections"]["missing_data"]=len(symbols);return self._finish([])
+        if not available_symbols:return self._finish([])
         signals=[]
         for _,row in candidates.iterrows():
             symbol=str(row["Symbol"]).upper();candles=self.universe_market_data.get(symbol)
