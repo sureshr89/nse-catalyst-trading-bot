@@ -91,12 +91,15 @@ class RiskEngine:
             return None
         return {"risk_per_share": round(risk_per_share, 4), "actual_risk": round(risk_per_share * quantity, 2), "position_value": round(entry * quantity, 2)}
 
-    def validate(self, trade, check_trade_count=True):
+    def validate(self, trade, check_trade_count=True, available_capital=None):
         if not isinstance(trade, dict):
             return {"approved": False, "reasons": ["Trade must be a dictionary"]}
         symbol = str(trade.get("symbol", "")).strip().upper()
         signal = str(trade.get("signal", "")).strip().upper()
         entry = self._number(trade.get("entry")); stop = self._number(trade.get("stop_loss")); target = self._number(trade.get("target")); reasons = []
+        capital = self.total_capital if available_capital is None else self._number(available_capital)
+        if capital is None or capital <= 0:
+            capital = 0.0
         if not symbol: reasons.append("Missing symbol")
         if signal not in {"BUY", "SELL"}: reasons.append("Signal must be BUY or SELL")
         if entry is None or entry <= 0: reasons.append("Invalid entry price")
@@ -113,10 +116,10 @@ class RiskEngine:
 
         risk_per_share = abs(entry - stop)
         max_risk_qty = int(self.max_risk_per_trade // risk_per_share)
-        capital_qty = int(self.total_capital // entry)
+        capital_qty = int(capital // entry)
         quantity = min(max_risk_qty, capital_qty)
         if quantity <= 0:
-            return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Risk distance is too large for capital/risk budget"]}
+            return {"approved": False, "symbol": symbol, "signal": signal, "reasons": ["Insufficient available capital for one share at the calculated entry price"]}
 
         actual_risk = round(risk_per_share * quantity, 2)
         position_value = round(entry * quantity, 2)
@@ -126,13 +129,13 @@ class RiskEngine:
         if rr < float(MIN_RR_RATIO): reasons.append(f"Risk:Reward {rr:.2f} is below minimum 1:{float(MIN_RR_RATIO):.1f}")
         if actual_risk < self.min_required_risk: reasons.append(f"Actual risk Rs {actual_risk:.2f} is below minimum required Rs {self.min_required_risk:.2f}")
         if actual_risk > self.max_risk_per_trade: reasons.append(f"Actual risk Rs {actual_risk:.2f} exceeds maximum Rs {self.max_risk_per_trade:.2f}")
-        if position_value > self.total_capital: reasons.append(f"Position value Rs {position_value:.2f} exceeds capital Rs {self.total_capital:.2f}")
+        if position_value > capital: reasons.append(f"Position value Rs {position_value:.2f} exceeds available capital Rs {capital:.2f}")
         if check_trade_count and not self.stock_trade_allowed(symbol): reasons.append(f"{symbol} already reached maximum trades per stock ({self.max_trades_per_stock})")
 
-        return {"approved": not reasons, "symbol": symbol, "signal": signal, "entry": round(entry, 4), "stop_loss": round(stop, 4), "target": round(target, 4), "quantity": int(quantity), "risk_per_share": round(risk_per_share, 4), "actual_risk": actual_risk, "reward": reward, "rr": round(rr, 4), "min_rr_ratio": float(MIN_RR_RATIO), "position_value": position_value, "min_required_risk": self.min_required_risk, "max_risk": self.max_risk_per_trade, "capital": self.total_capital, "reasons": reasons}
+        return {"approved": not reasons, "symbol": symbol, "signal": signal, "entry": round(entry, 4), "stop_loss": round(stop, 4), "target": round(target, 4), "quantity": int(quantity), "risk_per_share": round(risk_per_share, 4), "actual_risk": actual_risk, "reward": reward, "rr": round(rr, 4), "min_rr_ratio": float(MIN_RR_RATIO), "position_value": position_value, "min_required_risk": self.min_required_risk, "max_risk": self.max_risk_per_trade, "capital": capital, "reasons": reasons}
 
-    def approve_trade(self, trade):
-        result = self.validate(trade, check_trade_count=True)
+    def approve_trade(self, trade, available_capital=None):
+        result = self.validate(trade, check_trade_count=True, available_capital=available_capital)
         if not result.get("approved"):
             return result
         self.register_trade(result["symbol"])
