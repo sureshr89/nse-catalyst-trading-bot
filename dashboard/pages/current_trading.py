@@ -54,8 +54,9 @@ def candle_pct(candle):
 def candle_label(pct): return "—" if pct is None else f"{pct:+.2f}%"
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def live_alignment_for_positions(symbols):
+    """Keep live alignment no older than the page's 5-second refresh interval."""
     symbols=[str(s).upper().replace(".NS","") for s in symbols if str(s).strip()]
     if not symbols: return pd.DataFrame()
     price=PriceData(); nifty_df=price.get_index_1m("^CRSLDX"); nifty=None if nifty_df.empty else nifty_df.iloc[-1].to_dict(); stock_data=price.get_multi_1m(symbols); rows=[]; nifty_pct=candle_pct(nifty)
@@ -98,7 +99,7 @@ if pos:
 else: st.info("No open paper positions.")
 
 st.subheader("Live Alignment — Signaled Stocks")
-st.caption("NIFTY 500 and stock percentages use the latest completed 1-minute candle. The page refreshes every 5 seconds; market data is cached for 30 seconds.")
+st.caption("NIFTY 500 and stock percentages use the latest completed 1-minute candle. The page and alignment cache refresh every 5 seconds.")
 signaled=list(pos.keys())
 if not trades.empty and "symbol" in trades.columns: signaled=list(dict.fromkeys(signaled+trades["symbol"].dropna().astype(str).tail(20).tolist()))
 if signaled:
