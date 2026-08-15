@@ -2,9 +2,12 @@
 import csv
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 from config.settings import TRADE_LOG_FILE, SIGNAL_LOG_FILE
 from papertrade.persistent_storage import restore, sync
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 class TradeJournal:
     TRADE_COLUMNS=["trade_id","symbol","stock","signal","buy_sell","entry_time","trigger_entry_time","market_entry_time","entry","stop_loss","target","quantity","exit_time","exit_price","exit_reason","risk","reward","rr","pnl","risk_per_share","actual_risk","position_value","open_cross_level","pdh","pdl","today_open","today_low","today_high","previous_day_close","gap","gap_percent","gap_type","market_direction","stock_direction","stock_today_direction","setup_type","trigger_candle_open","trigger_candle_close","trigger_close","pdh_pdl_reached","liquidity_qualified","nifty500_universe","signal_quality_score","why_this_trade","mae","mfe","status"]
@@ -51,7 +54,10 @@ class TradeJournal:
     def _signal_date(signal):
         value=signal.get("timestamp") or signal.get("entry_time") or ""
         try:
-            parsed=pd.to_datetime(value,errors="coerce");return "" if pd.isna(parsed) else parsed.strftime("%Y-%m-%d")
+            parsed=pd.to_datetime(value,errors="coerce")
+            if pd.isna(parsed):return ""
+            if getattr(parsed,"tzinfo",None) is None:return parsed.date().isoformat()
+            return parsed.tz_convert(INDIA_TZ).date().isoformat()
         except Exception:return ""
     def _daily_setup_key(self,signal):return (self._signal_date(signal),self._normalise(signal.get("symbol","")),self._normalise(signal.get("signal","")),self._normalise(signal.get("setup_type","")))
     def _deduplicate_signal_history(self,df):
@@ -107,7 +113,7 @@ class TradeJournal:
         if not isinstance(signal,dict) or not bool(signal.get("approved",False)):return {"saved":False,"reason":"Only approved signals are journaled"}
         if self.signal_exists(signal):return {"saved":False,"duplicate":True,"reason":"Duplicate daily setup"}
         row={column:self._value(signal.get(column,"")) for column in self.SIGNAL_COLUMNS}
-        if not row["timestamp"]:row["timestamp"]=datetime.now().isoformat()
+        if not row["timestamp"]:row["timestamp"]=datetime.now(INDIA_TZ).isoformat()
         with open(self.signal_file,"a",newline="",encoding="utf-8") as file:csv.DictWriter(file,fieldnames=self.SIGNAL_COLUMNS).writerow(row)
         sync(self.signal_file,self.signal_file.replace(os.sep,"/"),"Save approved scanner signal");return {"saved":True,"duplicate":False}
     def get_trades(self):
@@ -117,8 +123,17 @@ class TradeJournal:
         try:return pd.read_csv(self.signal_file)
         except (FileNotFoundError,pd.errors.EmptyDataError):return pd.DataFrame(columns=self.SIGNAL_COLUMNS)
     def summary(self):
+        """Return today's journal statistics; analysis pages read the full CSV separately."""
         df=self.get_trades()
-        if df.empty:return {"total_trades":0,"winning_trades":0,"losing_trades":0,"breakeven_trades":0,"win_rate":0.0,"total_pnl":0.0,"average_pnl":0.0}
+        empty={"total_trades":0,"winning_trades":0,"losing_trades":0,"breakeven_trades":0,"win_rate":0.0,"total_pnl":0.0,"average_pnl":0.0}
+        if df.empty or "status" not in df.columns:return empty
         closed=df[df["status"].astype(str).str.upper().eq("CLOSED")].copy()
-        if closed.empty:return {"total_trades":0,"winning_trades":0,"losing_trades":0,"breakeven_trades":0,"win_rate":0.0,"total_pnl":0.0,"average_pnl":0.0}
-        pnl=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0.0);total=len(pnl);winning=int((pnl>0).sum());losing=int((pnl<0).sum());breakeven=int((pnl==0).sum());return {"total_trades":total,"winning_trades":winning,"losing_trades":losing,"breakeven_trades":breakeven,"win_rate":round(winning/total*100,2),"total_pnl":round(float(pnl.sum()),2),"average_pnl":round(float(pnl.mean()),2)}
+        if closed.empty:return empty
+        if "exit_time" in closed.columns:
+            dates=pd.to_datetime(closed["exit_time"],errors="coerce")
+            if getattr(dates.dt,"tz",None) is None:dates=dates.dt.tz_localize(INDIA_TZ,ambiguous="NaT",nonexistent="NaT")
+            else:dates=dates.dt.tz_convert(INDIA_TZ)
+            closed=closed[dates.dt.date==datetime.now(INDIA_TZ).date()]
+        if closed.empty:return empty
+        pnl=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0.0);total=len(pnl);winning=int((pnl>0).sum());losing=int((pnl<0).sum());breakeven=int((pnl==0).sum())
+        return {"total_trades":total,"winning_trades":winning,"losing_trades":losing,"breakeven_trades":breakeven,"win_rate":round(winning/total*100,2),"total_pnl":round(float(pnl.sum()),2),"average_pnl":round(float(pnl.mean()),2)}
