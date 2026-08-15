@@ -117,7 +117,7 @@ class PaperTradeEngine:
         if risk>float(MAX_RISK_PER_TRADE):return None,f"Actual risk Rs {risk:.2f} exceeds maximum {float(MAX_RISK_PER_TRADE):.2f}"
         if rr<float(MIN_RR_RATIO):return None,f"Risk:Reward {rr:.2f} is below minimum 1:{float(MIN_RR_RATIO):.1f}"
         if actual_risk is not None and abs(actual_risk-risk)>1.0:return None,"Approved risk does not match calculated risk"
-        entry_hhmm=self._time_string(trade.get("entry_time") or datetime.now())
+        entry_hhmm=self._time_string(trade.get("entry_time") or datetime.now(INDIA_TZ))
         if entry_hhmm is None or entry_hhmm<self.trading_start or entry_hhmm>self.last_entry_time:return None,"Entry time is outside the allowed window"
         position_value=round(entry*quantity,2)
         if position_value>self.available_capital:return None,"Insufficient available capital"
