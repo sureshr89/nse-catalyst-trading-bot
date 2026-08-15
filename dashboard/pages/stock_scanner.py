@@ -34,7 +34,7 @@ try:ensure_bot_running()
 except Exception:pass
 positions=state.get("open_positions",{}) if isinstance(state,dict) else {};market_change=float(diag.get("nifty500_change_pct",0) or 0);now=datetime.now(INDIA_TZ);waiting_data=waiting.get("waiting",{}) if isinstance(waiting,dict) else {};qualified_data=waiting.get("qualified",{}) if isinstance(waiting,dict) else {}
 
-st.title("🔎 NIFTY 500 Stock Scanner");st.caption("Complete stock-by-stock view • live waiting states • qualified candidates • entry priority • news confirmation")
+st.title("🔎 NIFTY 500 Stock Scanner");st.caption("Complete stock-by-stock view • live waiting states • qualified candidates • ATR priority • news confirmation")
 metric_cards([("BUY waiting",len((waiting_data or {}).get("BUY",{}))), ("SELL waiting",len((waiting_data or {}).get("SELL",{}))), ("BUY qualified",len((qualified_data or {}).get("BUY",{}))), ("SELL qualified",len((qualified_data or {}).get("SELL",{})))])
 st.markdown(f"<div class='dashboard-info-card'><div class='session-row'><span>POSITIONS</span><b>{len(positions)}</b></div></div>",unsafe_allow_html=True)
 st.caption(f"NIFTY 500 {market_change:+.2f}% • Control cycle 30s • 1-minute setup data • Updated {now.strftime('%H:%M:%S')} IST")
@@ -51,13 +51,13 @@ qualified_rows=[]
 for side in ("BUY","SELL"):
     for symbol,item in ((qualified_data or {}).get(side,{}) or {}).items():qualified_rows.append({"Side":side,"Symbol":symbol,"Qualified":item.get("qualified_at","—"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl"))})
 if qualified_rows:st.dataframe(pd.DataFrame(qualified_rows),width="stretch",hide_index=True)
-else:st.info("No qualified candidates yet. Once a stock returns to Today's Open after the PDH/PDL breach, it enters the ranking stage.")
+else:st.info("No qualified candidates yet. Once a stock returns to Today's Open after the PDH/PDL breach, it enters ATR ranking.")
 
-st.subheader("📊 Ranking Metrics")
+st.subheader("📊 ATR Ranking")
 ranks=diag.get("ranking",[]) if isinstance(diag,dict) else []
 if ranks:
     rank_df=pd.DataFrame(ranks);rank_df.insert(0,"Priority",range(1,len(rank_df)+1));st.dataframe(rank_df,width="stretch",hide_index=True)
-else:st.info("ATR%, RVOL, Beta and traded value appear after candidates qualify.")
+else:st.info("ATR% appears after candidates qualify and are eligible for ranking.")
 
 st.subheader("📰 News Confirmation")
 if not news.empty:
