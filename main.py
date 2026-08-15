@@ -162,7 +162,7 @@ class TradingBot:
             from master_data import build_master_data;build_master_data()
         except Exception as error:print("Master data finalization skipped:",type(error).__name__,error)
     def _square_off_price(self,symbol,position):
-        """Return the freshest available exit price, with deterministic data fallbacks for the 15:00 paper square-off."""
+        """Return a fresh exit price; never use an arbitrarily old scanner candle."""
         try:
             quote=self.price_data.get_latest_market_price(symbol)
             if quote and pd.to_numeric(pd.Series([quote.get("Close")]),errors="coerce").notna().iloc[0]:return float(quote.get("Close")), quote.get("Datetime") or self._now()
@@ -174,8 +174,11 @@ class TradingBot:
         try:
             candles=self.scanner.universe_market_data.get(symbol)
             if candles is not None and not candles.empty:
-                row=candles.iloc[-1];close=pd.to_numeric(pd.Series([row.get("Close")]),errors="coerce").iloc[0]
-                if pd.notna(close):return float(close),row.get("Datetime") or self._now()
+                row=candles.iloc[-1];close=pd.to_numeric(pd.Series([row.get("Close")]),errors="coerce").iloc[0];stamp=self._journal_ist(row.get("Datetime"))
+                if pd.notna(close) and pd.notna(stamp):
+                    age=(self._now()-stamp.to_pydatetime()).total_seconds()
+                    if 0<=age<=120:return float(close),stamp.to_pydatetime()
+                    print(f"Cached scanner price for {symbol} is stale ({age:.0f}s); square-off will retry")
         except Exception as error:print(f"Cached scanner price unavailable for {symbol}: {type(error).__name__}: {error}")
         return None,None
     def square_off_all(self):
