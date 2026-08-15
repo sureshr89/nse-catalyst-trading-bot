@@ -100,13 +100,13 @@ class OpenReversalEngine:
         return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES)
 
     @staticmethod
-    def _trigger_key(symbol, trigger, side):
+    def _trigger_key(symbol, trigger, side, nifty_direction="UNKNOWN"):
         stamp = pd.Timestamp(trigger["Datetime"])
         if stamp.tzinfo is None:
             stamp = stamp.tz_localize(INDIA_TZ)
         else:
             stamp = stamp.tz_convert(INDIA_TZ)
-        return (str(symbol).upper(), stamp.isoformat(), str(side).upper())
+        return (str(symbol).upper(), stamp.isoformat(), str(side).upper(), str(nifty_direction or "UNKNOWN").upper())
 
     def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
         data = self._clean(candles)
@@ -135,10 +135,11 @@ class OpenReversalEngine:
         return None
 
     def finalize_trigger(self, symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, side):
-        """Finalize a trigger once; repeated calls for the same trigger return the cached signal."""
+        """Finalize a trigger once per market-direction context; repeated calls reuse the cached signal."""
         if trigger is None:
             return None
-        key = self._trigger_key(symbol, trigger, side)
+        direction = str(nifty_direction or "UNKNOWN").upper()
+        key = self._trigger_key(symbol, trigger, side, direction)
         cached = self._finalized_triggers.get(key)
         if cached is not None:
             return cached.copy()
@@ -154,7 +155,7 @@ class OpenReversalEngine:
         signal = self._trade(
             side, symbol, trigger, float(today_open), float(pdh), float(pdl),
             float(setup_data["Low"].min()), float(setup_data["High"].max()),
-            nifty_direction, stock_direction,
+            direction, stock_direction,
         )
         self._finalized_triggers[key] = signal.copy()
         return signal
