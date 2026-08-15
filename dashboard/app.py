@@ -55,15 +55,22 @@ elif status_value == "WAITING":
 else:
     st.warning(message)
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.metric("Bot Status", status_value)
-with c2:
-    st.metric("Open Positions", int(status.get("open_positions", 0) or 0))
-with c3:
-    st.metric("Available Capital", f"₹{float(status.get('available_capital', 0) or 0):,.0f}")
-with c4:
-    st.metric("Daily P&L", f"₹{float(status.get('daily_pnl', 0) or 0):,.0f}")
+# Use the same responsive 2-column metric-card component as Current Trading.
+# On mobile this remains a clean 2 x 2 grid instead of Streamlit's default
+# four-column layout stacking vertically.
+def metric_cards(items):
+    html = '<div class="metric-grid">'
+    for label, value in items:
+        html += f'<div class="metric-card"><small>{label}</small><b>{value}</b></div>'
+    html += '</div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+metric_cards([
+    ("Bot Status", status_value),
+    ("Open Positions", int(status.get("open_positions", 0) or 0)),
+    ("Available Capital", f"₹{float(status.get('available_capital', 0) or 0):,.0f}"),
+    ("Daily P&L", f"₹{float(status.get('daily_pnl', 0) or 0):,.0f}"),
+])
 
 st.divider()
 
