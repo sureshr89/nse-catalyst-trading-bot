@@ -42,11 +42,8 @@ def win_loss_chart(trades):
 
 
 def industry_chart(trades):
-    df = _closed(trades)
-    if df.empty or "industry" not in df.columns:
-        return None
-    grouped = df.groupby("industry", dropna=False)["pnl"].sum().reset_index()
-    return px.bar(grouped, x="industry", y="pnl", title="Industry Performance").update_layout(template="plotly_dark", height=420)
+    """Deprecated compatibility hook: sector/industry analysis is intentionally removed."""
+    return None
 
 
 def capital_chart(metrics):
