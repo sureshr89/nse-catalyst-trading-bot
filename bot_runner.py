@@ -30,14 +30,16 @@ _state = {"status":"STARTING","message":"Paper bot is starting.","last_cycle":No
 def _now(): return datetime.now(INDIA_TZ)
 def _iso_now(): return _now().isoformat(timespec="seconds")
 def _worker_id(): return f"pid-{os.getpid()}-thread-{threading.get_ident()}"
-def _disk_heartbeat_alive():
+def _heartbeat_age_seconds(value):
     try:
-        with open(STATUS_FILE,"r",encoding="utf-8") as file: payload=json.load(file)
-        heartbeat=payload.get("heartbeat")
-        if not heartbeat:return False
-        stamp=datetime.fromisoformat(str(heartbeat).replace("Z","+00:00")); stamp=stamp.replace(tzinfo=INDIA_TZ) if stamp.tzinfo is None else stamp
-        age=(datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds(); return 0<=age<=HEARTBEAT_MAX_AGE_SECONDS
-    except Exception:return False
+        stamp=datetime.fromisoformat(str(value).replace("Z","+00:00")); stamp=stamp.replace(tzinfo=INDIA_TZ) if stamp.tzinfo is None else stamp
+        return max(0.0,(datetime.now(timezone.utc)-stamp.astimezone(timezone.utc)).total_seconds())
+    except Exception:return float("inf")
+def _disk_heartbeat_alive(): return _heartbeat_age_seconds(_read_disk_status().get("heartbeat"))<=HEARTBEAT_MAX_AGE_SECONDS
+def _read_disk_status():
+    try:
+        with open(STATUS_FILE,"r",encoding="utf-8") as file:return json.load(file)
+    except Exception:return {}
 
 def _with_file_lock(lock_path):
     OUTPUT_DIR.mkdir(parents=True,exist_ok=True); handle=open(lock_path,"a+",encoding="utf-8")
@@ -101,8 +103,7 @@ def _run_one_trading_day():
     session_date=_now().date().isoformat(); bot=TradingBot(); _write_status(bot,status="RUNNING",message="NIFTY 500 paper-trading bot is running.",error=None,scanner_status="IDLE",cycle_count=0,scan_count=0,worker_id=_worker_id(),session_date=session_date)
     pre_entry_ready=False
     while True:
-        if _now().date().isoformat()!=session_date:
-            return
+        if _now().date().isoformat()!=session_date:return
         current=_now().strftime("%H:%M")
         if current<TRADING_START:
             if current>=PREMARKET_PREP_TIME and not pre_entry_ready:pre_entry_ready=_prepare_pre_entry_candidates(bot)
@@ -156,10 +157,16 @@ def ensure_bot_running():
     return get_status() if alive else start_bot()
 
 def get_status():
-    try:
-        with open(STATUS_FILE,"r",encoding="utf-8") as file:disk_state=json.load(file)
-    except Exception:disk_state={}
-    with _lock:current=dict(_state); local_alive=_thread is not None and _thread.is_alive()
-    current.update(disk_state); current["worker_alive"]=local_alive or _disk_heartbeat_alive()
-    if not current["worker_alive"]:current["status"]="STOPPED"; current["message"]="Paper bot worker is not running. Dashboard watchdog will restart it."
+    disk_state=_read_disk_status()
+    with _lock:local_alive=_thread is not None and _thread.is_alive(); current=dict(_state)
+    disk_fresh=_heartbeat_age_seconds(disk_state.get("heartbeat"))<=HEARTBEAT_MAX_AGE_SECONDS
+    if local_alive:
+        current.update(disk_state)
+        current["worker_alive"]=True
+        if not disk_fresh:
+            current["status"]="STARTING"; current["message"]="Paper-bot worker thread is alive; waiting for a fresh heartbeat."; current["error"]=None
+    elif disk_fresh:
+        current.update(disk_state); current["worker_alive"]=True
+    else:
+        current.update(disk_state); current["worker_alive"]=False; current["status"]="STOPPED"; current["message"]="Paper bot worker is not running. Dashboard watchdog will restart it."
     return current
