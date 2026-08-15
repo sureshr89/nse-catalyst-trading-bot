@@ -52,6 +52,16 @@ class TradeJournal:
         try:return f"{float(text):.8f}"
         except (TypeError,ValueError):return text.upper()
     @staticmethod
+    def _journal_ist(value):
+        try:
+            parsed=pd.to_datetime(value,errors="coerce")
+            if pd.isna(parsed):return pd.NaT
+            if getattr(parsed,"tzinfo",None) is None:return parsed.tz_localize(INDIA_TZ)
+            return parsed.tz_convert(INDIA_TZ)
+        except Exception:return pd.NaT
+    @classmethod
+    def _series_dates_ist(cls,series):return series.map(cls._journal_ist)
+    @staticmethod
     def _signal_date(signal):
         value=signal.get("timestamp") or signal.get("entry_time") or ""
         try:
@@ -131,9 +141,7 @@ class TradeJournal:
         closed=df[df["status"].astype(str).str.upper().eq("CLOSED")].copy()
         if closed.empty:return empty
         if "exit_time" in closed.columns:
-            dates=pd.to_datetime(closed["exit_time"],errors="coerce")
-            if getattr(dates.dt,"tz",None) is None:dates=dates.dt.tz_localize(INDIA_TZ,ambiguous="NaT",nonexistent="NaT")
-            else:dates=dates.dt.tz_convert(INDIA_TZ)
+            dates=self._series_dates_ist(closed["exit_time"])
             closed=closed[dates.dt.date==datetime.now(INDIA_TZ).date()]
         if closed.empty:return empty
         pnl=pd.to_numeric(closed["pnl"],errors="coerce").fillna(0.0);total=len(pnl);winning=int((pnl>0).sum());losing=int((pnl<0).sum());breakeven=int((pnl==0).sum())
