@@ -11,11 +11,7 @@ STATE_VERSION=5
 class PaperTradeEngine:
     """Simulated execution engine. Live trading is deliberately prohibited."""
     def __init__(self):
-        self.paper_trading=bool(PAPER_TRADING); self.live_trading=bool(LIVE_TRADING)
-        self.trading_start=TRADING_START; self.last_entry_time=LAST_ENTRY_TIME; self.square_off_time=SQUARE_OFF_TIME; self.market_close=MARKET_CLOSE
-        self.open_positions={}; self.closed_positions=[]; self.trade_counter=0
-        self.total_capital=float(TOTAL_CAPITAL); self.available_capital=float(TOTAL_CAPITAL); self.used_capital=0.0
-        self.price_data=PriceData(); self._restore_state()
+        self.paper_trading=bool(PAPER_TRADING); self.live_trading=bool(LIVE_TRADING); self.trading_start=TRADING_START; self.last_entry_time=LAST_ENTRY_TIME; self.square_off_time=SQUARE_OFF_TIME; self.market_close=MARKET_CLOSE; self.open_positions={}; self.closed_positions=[]; self.trade_counter=0; self.total_capital=float(TOTAL_CAPITAL); self.available_capital=float(TOTAL_CAPITAL); self.used_capital=0.0; self.price_data=PriceData(); self._restore_state()
     def _state_path(self): return os.path.join("outputs","paper_engine_state.json")
     @staticmethod
     def _number(value):
@@ -61,14 +57,18 @@ class PaperTradeEngine:
             restore_json(path,path.replace(os.sep,"/"))
             if not os.path.exists(path):return
             with open(path,"r",encoding="utf-8") as file: state=json.load(file)
+            if not isinstance(state,dict):raise ValueError("Persisted paper state must be an object")
             if int(state.get("state_version",0) or 0)!=STATE_VERSION:
                 print("Legacy paper state detected; starting clean."); self._reset_state_file(path); return
-            self.open_positions=state.get("open_positions",{}) or {}; self.closed_positions=state.get("closed_positions",[]) or []
-            saved_date=self._session_date(state.get("session_date") or state.get("saved_at"))
-            today=datetime.now(INDIA_TZ).date()
+            restored_open=state.get("open_positions",{})
+            restored_closed=state.get("closed_positions",[])
+            if not isinstance(restored_open,dict) or not isinstance(restored_closed,list):
+                print("Invalid persisted paper state collections detected; starting clean."); self._reset_state_file(path); return
+            self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if isinstance(position,dict)}
+            self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
+            saved_date=self._session_date(state.get("session_date") or state.get("saved_at")); today=datetime.now(INDIA_TZ).date()
             if saved_date is not None and saved_date != today:
-                print(f"Stale paper session state ({saved_date}) detected; clearing old open positions for {today}.")
-                self.open_positions={}
+                print(f"Stale paper session state ({saved_date}) detected; clearing old open positions for {today}."); self.open_positions={}
             for position in self.open_positions.values():
                 position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("last_processed_candle",self._candle_key(position.get("entry_time")))
             for position in self.closed_positions:
@@ -89,8 +89,7 @@ class PaperTradeEngine:
         try:os.remove(path)
         except OSError:pass
     def _save_state(self):
-        path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True)
-        state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
+        path=self._state_path(); os.makedirs(os.path.dirname(path),exist_ok=True); state={"state_version":STATE_VERSION,"strategy":"NIFTY_500_PDH_PDL_OPEN_REVERSAL","session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
         try:
             with open(path,"w",encoding="utf-8") as file:json.dump(state,file,ensure_ascii=False,indent=2,default=str)
             sync_json(path,path.replace(os.sep,"/"),"Save NIFTY 500 paper-trading state")
@@ -125,14 +124,10 @@ class PaperTradeEngine:
     def open_trade(self,trade):
         validated,reason=self._validate_trade(trade)
         if validated is None:return {"opened":False,"reason":reason}
-        self.trade_counter+=1; trade_id=f"PAPER-{self.trade_counter:04d}"
-        position={"trade_id":trade_id,"symbol":validated["symbol"],"stock":validated["symbol"],"signal":validated["signal"],"buy_sell":validated["signal"],"entry_time":validated["entry_time"],"entry":validated["entry"],"stop_loss":validated["stop_loss"],"target":validated["target"],"quantity":validated["quantity"],"risk":validated["risk"],"reward":validated["reward"],"rr":validated["rr"],"mae":0.0,"mfe":0.0,"last_processed_candle":self._candle_key(validated["entry_time"]),"status":"OPEN","exit_time":None,"exit_price":None,"exit_reason":None,"pnl":None}
-        ignored={"approved","reasons","min_rr_ratio","min_required_risk","max_risk","capital","trade_count"}
+        self.trade_counter+=1; trade_id=f"PAPER-{self.trade_counter:04d}"; position={"trade_id":trade_id,"symbol":validated["symbol"],"stock":validated["symbol"],"signal":validated["signal"],"buy_sell":validated["signal"],"entry_time":validated["entry_time"],"entry":validated["entry"],"stop_loss":validated["stop_loss"],"target":validated["target"],"quantity":validated["quantity"],"risk":validated["risk"],"reward":validated["reward"],"rr":validated["rr"],"mae":0.0,"mfe":0.0,"last_processed_candle":self._candle_key(validated["entry_time"]),"status":"OPEN","exit_time":None,"exit_price":None,"exit_reason":None,"pnl":None}; ignored={"approved","reasons","min_rr_ratio","min_required_risk","max_risk","capital","trade_count"}
         for field,value in trade.items():
             if field not in ignored and field not in position and value is not None:position[field]=value
-        position["risk_per_share"]=round(abs(validated["entry"]-validated["stop_loss"]),4); position["actual_risk"]=validated["risk"]; position["position_value"]=validated["position_value"]
-        self.open_positions[validated["symbol"]]=position; self.used_capital=round(self.used_capital+validated["position_value"],2); self.available_capital=round(self.total_capital-self.used_capital,2); self._save_state()
-        return {"opened":True,"trade_id":trade_id,"position":position.copy()}
+        position["risk_per_share"]=round(abs(validated["entry"]-validated["stop_loss"]),4); position["actual_risk"]=validated["risk"]; position["position_value"]=validated["position_value"]; self.open_positions[validated["symbol"]]=position; self.used_capital=round(self.used_capital+validated["position_value"],2); self.available_capital=round(self.total_capital-self.used_capital,2); self._save_state(); return {"opened":True,"trade_id":trade_id,"position":position.copy()}
     @staticmethod
     def calculate_pnl(signal,entry,exit_price,quantity):
         if signal=="BUY":return round((exit_price-entry)*quantity,2)
@@ -149,8 +144,7 @@ class PaperTradeEngine:
         if not self.has_open_position(symbol):return None
         exit_price=self._number(exit_price)
         if exit_price is None or exit_price<=0:return None
-        position=self.open_positions[symbol]; pnl=self.calculate_pnl(position["signal"],position["entry"],exit_price,position["quantity"]); position.update({"status":"CLOSED","exit_time":exit_time,"exit_price":round(exit_price,4),"exit_reason":reason,"pnl":pnl})
-        closed=position.copy(); self.closed_positions.append(closed); position_value=round(float(position["entry"])*int(position["quantity"]),2); self.used_capital=round(max(0.0,self.used_capital-position_value),2); self.available_capital=round(self.total_capital-self.used_capital,2); del self.open_positions[symbol]; self._save_state(); return closed
+        position=self.open_positions[symbol]; pnl=self.calculate_pnl(position["signal"],position["entry"],exit_price,position["quantity"]); position.update({"status":"CLOSED","exit_time":exit_time,"exit_price":round(exit_price,4),"exit_reason":reason,"pnl":pnl}); closed=position.copy(); self.closed_positions.append(closed); position_value=round(float(position["entry"])*int(position["quantity"]),2); self.used_capital=round(max(0.0,self.used_capital-position_value),2); self.available_capital=round(self.total_capital-self.used_capital,2); del self.open_positions[symbol]; self._save_state(); return closed
     def process_candle(self,symbol,candle):
         symbol=str(symbol).strip().upper()
         if not self.has_open_position(symbol):return None
@@ -170,5 +164,4 @@ class PaperTradeEngine:
         if target_hit:return self.close_position(symbol,target,candle_time,"TARGET")
         self._save_state(); return None
     def summary(self):
-        pnl_values=[self._number(t.get("pnl")) or 0.0 for t in self.closed_positions]
-        return {"open_positions":len(self.open_positions),"closed_positions":len(self.closed_positions),"winning_trades":sum(1 for pnl in pnl_values if pnl>0),"losing_trades":sum(1 for pnl in pnl_values if pnl<0),"total_pnl":round(sum(pnl_values),2),"total_capital":self.total_capital,"available_capital":round(self.available_capital,2),"used_capital":round(self.used_capital,2)}
+        pnl_values=[self._number(t.get("pnl")) or 0.0 for t in self.closed_positions]; return {"open_positions":len(self.open_positions),"closed_positions":len(self.closed_positions),"winning_trades":sum(1 for pnl in pnl_values if pnl>0),"losing_trades":sum(1 for pnl in pnl_values if pnl<0),"total_pnl":round(sum(pnl_values),2),"total_capital":self.total_capital,"available_capital":round(self.available_capital,2),"used_capital":round(self.used_capital,2)}
