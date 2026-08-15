@@ -14,7 +14,7 @@ MASTER_STOCK = OUTPUT / "MASTER_DAILY_STOCK_DATA.csv"
 MASTER_TRADES = OUTPUT / "MASTER_TRADES.csv"
 MASTER_NEWS = OUTPUT / "MASTER_NEWS_ANALYSIS.csv"
 MASTER_DAILY = OUTPUT / "MASTER_DAILY_SUMMARY.csv"
-NEWS_FIELDS = ["TradeDate", "timestamp", "candidate_id", "symbol", "signal", "candidate_state", "approved", "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_source", "news_checked_at", "nifty500_change_pct", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk", "atr_pct", "rvol", "beta", "traded_value", "priority_rank", "setup_type", "gap_percent", "reason"]
+NEWS_FIELDS = ["TradeDate", "timestamp", "candidate_id", "symbol", "signal", "candidate_state", "approved", "news_sentiment", "news_confidence", "news_headline", "news_reason", "news_source", "news_checked_at", "nifty500_change_pct", "entry", "stop_loss", "target", "quantity", "risk_per_share", "actual_risk", "atr_pct", "priority_rank", "setup_type", "gap_percent", "reason"]
 
 def _read(path):
     try: return pd.read_csv(path) if path.exists() else pd.DataFrame()
