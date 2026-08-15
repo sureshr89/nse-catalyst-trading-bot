@@ -51,6 +51,12 @@ class PaperTradeEngine:
             else:parsed=parsed.tz_convert(INDIA_TZ)
             return parsed.date()
         except Exception:return None
+    def _valid_open_position(self,key,position):
+        if not isinstance(position,dict):return False
+        symbol=str(position.get("symbol",key)).strip().upper()
+        signal=str(position.get("signal","")).strip().upper()
+        entry=self._number(position.get("entry")); stop=self._number(position.get("stop_loss")); target=self._number(position.get("target")); quantity=self._number(position.get("quantity"))
+        return bool(symbol and symbol==str(key).strip().upper() and signal in {"BUY","SELL"} and entry and entry>0 and stop and stop>0 and target and target>0 and quantity and quantity>0 and int(quantity)==quantity and position.get("trade_id"))
     def _restore_state(self):
         path=self._state_path()
         try:
@@ -60,12 +66,11 @@ class PaperTradeEngine:
             if not isinstance(state,dict):raise ValueError("Persisted paper state must be an object")
             if int(state.get("state_version",0) or 0)!=STATE_VERSION:
                 print("Legacy paper state detected; starting clean."); self._reset_state_file(path); return
-            restored_open=state.get("open_positions",{})
-            restored_closed=state.get("closed_positions",[])
+            restored_open=state.get("open_positions",{}); restored_closed=state.get("closed_positions",[])
             if not isinstance(restored_open,dict) or not isinstance(restored_closed,list):
                 print("Invalid persisted paper state collections detected; starting clean."); self._reset_state_file(path); return
-            self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if isinstance(position,dict)}
-            self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
+            self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if self._valid_open_position(symbol,position)}
+            self.closed_positions=[position for position in restored_closed if isinstance(position,dict) and position.get("trade_id")]
             saved_date=self._session_date(state.get("session_date") or state.get("saved_at")); today=datetime.now(INDIA_TZ).date()
             if saved_date is not None and saved_date != today:
                 print(f"Stale paper session state ({saved_date}) detected; clearing old open positions for {today}."); self.open_positions={}
