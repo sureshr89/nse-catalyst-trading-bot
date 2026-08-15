@@ -74,33 +74,14 @@ except Exception as error:
 now = datetime.now(INDIA_TZ)
 clock = now.strftime("%H:%M")
 market_change = float(diag.get("nifty500_change_pct", 0) or 0) if isinstance(diag, dict) else 0.0
-
-if market_change >= NIFTY_THRESHOLD:
-    permission = "🟢 BUY"
-    permission_note = "NIFTY 500 supports BUY setups"
-elif market_change <= -NIFTY_THRESHOLD:
-    permission = "🔴 SELL"
-    permission_note = "NIFTY 500 supports SELL setups"
-else:
-    permission = "⚪ WAIT"
-    permission_note = "NIFTY 500 filter not satisfied"
-
-if clock < ENTRY_START:
-    window = "PREPARE"
-elif clock <= ENTRY_END:
-    window = "ACTIVE"
-else:
-    window = "CLOSED"
+permission = "🟢 BUY" if market_change >= NIFTY_THRESHOLD else "🔴 SELL" if market_change <= -NIFTY_THRESHOLD else "⚪ WAIT"
+permission_note = "NIFTY 500 supports long setups" if permission == "🟢 BUY" else "NIFTY 500 supports short setups" if permission == "🔴 SELL" else "NIFTY 500 filter not satisfied"
+window = "PREPARE" if clock < ENTRY_START else "ACTIVE" if clock <= ENTRY_END else "CLOSED"
 
 st.title("🎯 Current Trading")
-st.caption("Live strategy command center • only actionable information for today's entries")
+st.caption("Live strategy command center • actionable information for today's entries")
 
-cards([
-    ("NIFTY 500", pct(market_change)),
-    ("Market Permission", permission),
-    ("Entry Window", window),
-    ("Open Positions", len(positions)),
-])
+cards([("NIFTY 500", pct(market_change)), ("Market Permission", permission), ("Entry Window", window), ("Open Positions", len(positions))])
 st.caption(f"{permission_note} • {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
 
 if status.get("error"):
@@ -109,11 +90,11 @@ if status.get("error"):
 st.subheader("⚡ Live Strategy State")
 strategy_rows = [
     ("Universe", "NIFTY 500"),
+    ("BUY", "Today's Open > PDH → price moves below PDH → return through Today's Open"),
+    ("SELL", "Today's Open < PDL → price moves above PDL → return through Today's Open"),
     ("Market filter", "BUY ≥ +0.25% • SELL ≤ −0.25%"),
-    ("BUY setup", "Today's Open > PDH → price moves below PDH → later returns above Today's Open"),
-    ("SELL setup", "Today's Open < PDL → price moves above PDL → later returns below Today's Open"),
-    ("Entry window", "09:45–14:00 IST"),
-    ("Risk", "Configured risk and target from the bot settings"),
+    ("Alignment", "NIFTY 500 + Industry/Sector + Stock must support the same direction"),
+    ("Risk", "BUY SL = PDH • SELL SL = PDL • Target = 1.25 × entry-to-SL risk"),
 ]
 st.dataframe(pd.DataFrame(strategy_rows, columns=["Condition", "Current Rule"]), width="stretch", hide_index=True)
 
@@ -123,19 +104,17 @@ if not gaps.empty and "GapType" in gaps.columns:
     for col in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercent"]:
         if col in board.columns:
             board[col] = pd.to_numeric(board[col], errors="coerce")
-
     ups = board[board["GapType"].eq("GAP_UP")].sort_values("GapPercent", ascending=False)
     downs = board[board["GapType"].eq("GAP_DOWN")].sort_values("GapPercent")
     cards([("BUY Candidates", len(ups)), ("SELL Candidates", len(downs)), ("Total", len(ups) + len(downs))])
-
     c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown("### 🟢 BUY WATCHLIST")
-        st.caption("Today's Open above PDH — monitor the required PDH-to-Open price sequence")
+        st.caption("Today's Open above PDH — candidates requiring the remaining strategy and alignment checks")
         if ups.empty:
             st.info("No BUY candidates currently.")
         else:
-            cols = [c for c in ["Symbol", "TodayOpen", "PDH", "GapPercent"] if c in ups.columns]
+            cols = [c for c in ["Symbol", "Industry", "TodayOpen", "PDH", "GapPercent"] if c in ups.columns]
             view = ups[cols].head(30).copy()
             for col in ["TodayOpen", "PDH"]:
                 if col in view.columns:
@@ -143,14 +122,13 @@ if not gaps.empty and "GapType" in gaps.columns:
             if "GapPercent" in view.columns:
                 view["GapPercent"] = view["GapPercent"].map(pct)
             st.dataframe(view, width="stretch", hide_index=True, height=360)
-
     with c2:
         st.markdown("### 🔴 SELL WATCHLIST")
-        st.caption("Today's Open below PDL — monitor the required PDL-to-Open price sequence")
+        st.caption("Today's Open below PDL — candidates requiring the remaining strategy and alignment checks")
         if downs.empty:
             st.info("No SELL candidates currently.")
         else:
-            cols = [c for c in ["Symbol", "TodayOpen", "PDL", "GapPercent"] if c in downs.columns]
+            cols = [c for c in ["Symbol", "Industry", "TodayOpen", "PDL", "GapPercent"] if c in downs.columns]
             view = downs[cols].head(30).copy()
             for col in ["TodayOpen", "PDL"]:
                 if col in view.columns:
@@ -171,7 +149,7 @@ if not trades.empty:
     else:
         st.info("No displayable signals yet.")
 else:
-    st.info("No qualifying signals yet. A stock will appear here only after the configured strategy conditions are satisfied.")
+    st.info("No qualifying signals yet. The bot will show a stock here only after every configured condition is satisfied.")
 
 st.subheader("📍 Open Positions")
 if positions:
@@ -192,16 +170,7 @@ if positions:
                 pnl = (float(ltp) - float(entry)) * qty if side == "BUY" else (float(entry) - float(ltp)) * qty
         except Exception:
             pass
-        rows.append({
-            "Stock": symbol,
-            "Side": side,
-            "Entry": price(entry),
-            "LTP": price(ltp),
-            "Live P&L": price(pnl),
-            "SL": price(position.get("stop_loss")),
-            "Target": price(position.get("target")),
-            "Qty": position.get("quantity", "—"),
-        })
+        rows.append({"Stock": symbol, "Side": side, "Entry": price(entry), "LTP": price(ltp), "Live P&L": price(pnl), "SL": price(position.get("stop_loss")), "Target": price(position.get("target")), "Qty": position.get("quantity", "—")})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 else:
     st.info("No open paper positions.")
