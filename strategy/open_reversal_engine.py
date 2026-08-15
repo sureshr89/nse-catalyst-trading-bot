@@ -17,6 +17,7 @@ class OpenReversalEngine:
         self.start = self._time(trading_start)
         self.end = self._time(last_entry_time)
         self.rr = float(rr)
+        self._finalized_triggers = {}
 
     @staticmethod
     def _time(value):
@@ -98,6 +99,15 @@ class OpenReversalEngine:
         age = (datetime.now(INDIA_TZ) - trigger["Datetime"]).total_seconds() / 60.0
         return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES)
 
+    @staticmethod
+    def _trigger_key(symbol, trigger, side):
+        stamp = pd.Timestamp(trigger["Datetime"])
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize(INDIA_TZ)
+        else:
+            stamp = stamp.tz_convert(INDIA_TZ)
+        return (str(symbol).upper(), stamp.isoformat(), str(side).upper())
+
     def build(self, symbol, candles, pdh, pdl, today_open=None, nifty_direction="UNKNOWN", nifty_candle=None):
         data = self._clean(candles)
         if data.empty or pdh is None or pdl is None:
@@ -125,8 +135,14 @@ class OpenReversalEngine:
         return None
 
     def finalize_trigger(self, symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, side):
-        """Finalize an already-identified trigger without rescanning for another trigger."""
-        if trigger is None or not self._fresh(trigger):
+        """Finalize a trigger once; repeated calls for the same trigger return the cached signal."""
+        if trigger is None:
+            return None
+        key = self._trigger_key(symbol, trigger, side)
+        cached = self._finalized_triggers.get(key)
+        if cached is not None:
+            return cached.copy()
+        if not self._fresh(trigger):
             return None
         data = self._clean(today_data)
         if data.empty:
@@ -135,11 +151,13 @@ class OpenReversalEngine:
         if setup_data.empty:
             return None
         stock_direction = self._candle_direction(pd.DataFrame([trigger]))
-        return self._trade(
+        signal = self._trade(
             side, symbol, trigger, float(today_open), float(pdh), float(pdl),
             float(setup_data["Low"].min()), float(setup_data["High"].max()),
             nifty_direction, stock_direction,
         )
+        self._finalized_triggers[key] = signal.copy()
+        return signal
 
     def _trade(self, side, symbol, candle, today_open, pdh, pdl, today_low, today_high, nifty_direction, stock_direction):
         trigger_close = float(candle["Close"])
