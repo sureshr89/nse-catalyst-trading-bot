@@ -18,7 +18,7 @@ class TradingBot:
     def __init__(self):
         if LIVE_TRADING: raise RuntimeError("LIVE_TRADING must be False. This application is paper trading only.")
         if not PAPER_TRADING: raise RuntimeError("PAPER_TRADING must be True.")
-        self.scanner=ScannerEngine();self.risk_engine=RiskEngine();self.price_data=PriceData();self.paper_engine=PaperTradeEngine();self.journal=TradeJournal();self.missed_capital=MissedCapitalTracker(self.journal,self.price_data);self.running=True;self.processed_signals=set();self.daily_pnl=self._restore_daily_pnl();self.cooldown_until=self._restore_cooldown();self.square_off_done=False
+        self.scanner=ScannerEngine();self.risk_engine=RiskEngine();self.price_data=PriceData();self.paper_engine=PaperTradeEngine();self.journal=TradeJournal();self._restore_risk_counts_from_paper_state();self.missed_capital=MissedCapitalTracker(self.journal,self.price_data);self.running=True;self.processed_signals=set();self.daily_pnl=self._restore_daily_pnl();self.cooldown_until=self._restore_cooldown();self.square_off_done=False
     @staticmethod
     def _now():return datetime.now(INDIA_TZ)
     @staticmethod
@@ -31,6 +31,18 @@ class TradingBot:
         except Exception:return pd.NaT
     def _journal_dates_ist(self,series):return series.map(self._journal_ist)
     def current_time(self):return self._now().strftime("%H:%M")
+    def _restore_risk_counts_from_paper_state(self):
+        """Reconcile today's persisted paper trades into RiskEngine after a crash/restart."""
+        today=self._now().date()
+        try:
+            for trade in list(self.paper_engine.open_positions.values())+list(self.paper_engine.closed_positions):
+                if not isinstance(trade,dict):continue
+                entry_dt=self._journal_ist(trade.get("entry_time"))
+                if pd.isna(entry_dt) or entry_dt.date()!=today:continue
+                symbol=str(trade.get("symbol","")).strip().upper()
+                if not symbol:continue
+                if self.risk_engine.get_trade_count(symbol)<self.risk_engine.max_trades_per_stock:self.risk_engine.register_trade(symbol)
+        except Exception as error:print("Paper-state risk-count recovery skipped:",error)
     def _today_closed_trades(self):
         """Return today's CLOSED trades from journal + persisted paper state, deduplicated by trade_id."""
         today=self._now().date();merged={}
@@ -42,23 +54,19 @@ class TradingBot:
                 for idx,row in df[status.eq("CLOSED")].iterrows():
                     exit_dt=exits.loc[idx] if idx in exits.index else pd.NaT
                     if pd.notna(exit_dt) and exit_dt.date()==today:
-                        trade=dict(row);trade_id=str(trade.get("trade_id","")).strip()
-                        key=trade_id or f"journal:{idx}"
-                        merged[key]=trade
+                        trade=dict(row);trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"journal:{idx}";merged[key]=trade
         except Exception as error:print("Journal closed-trade recovery skipped:",error)
         try:
             for trade in self.paper_engine.closed_positions:
                 if not isinstance(trade,dict) or str(trade.get("status","")).upper()!="CLOSED":continue
                 exit_dt=self._journal_ist(trade.get("exit_time"))
                 if pd.notna(exit_dt) and exit_dt.date()==today:
-                    trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"paper:{trade.get('symbol','')}:{trade.get('exit_time','')}"
-                    merged[key]=dict(trade)
+                    trade_id=str(trade.get("trade_id","")).strip();key=trade_id or f"paper:{trade.get('symbol','')}:{trade.get('exit_time','')}";merged[key]=dict(trade)
         except Exception as error:print("Paper-state closed-trade recovery skipped:",error)
         return list(merged.values())
     def _restore_daily_pnl(self):
         try:
-            trades=self._today_closed_trades()
-            return round(sum(float(pd.to_numeric(pd.Series([trade.get("pnl",0)]),errors="coerce").fillna(0).iloc[0]) for trade in trades),2)
+            trades=self._today_closed_trades();return round(sum(float(pd.to_numeric(pd.Series([trade.get("pnl",0)]),errors="coerce").fillna(0).iloc[0]) for trade in trades),2)
         except Exception as error:print("Daily P&L restore skipped:",error);return 0.0
     def _restore_cooldown(self):
         try:
@@ -68,9 +76,7 @@ class TradingBot:
                     exit_dt=self._journal_ist(trade.get("exit_time"))
                     if pd.notna(exit_dt):stop_times.append(exit_dt)
             if not stop_times:return None
-            end=max(stop_times).to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES)
-            now=self._now()
-            return end.replace(tzinfo=None) if end>now.replace(tzinfo=None) else None
+            end=max(stop_times).to_pydatetime()+timedelta(minutes=COOLDOWN_MINUTES);now=self._now();return end.replace(tzinfo=None) if end>now.replace(tzinfo=None) else None
         except Exception:return None
     def signal_key(self,signal):return (str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("trigger_entry_time",signal.get("entry_time",""))),str(signal.get("open_cross_level","")))
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
@@ -96,11 +102,7 @@ class TradingBot:
     def _rollback_open_position(self,symbol):
         try:
             if self.paper_engine.has_open_position(symbol):
-                position=self.paper_engine.open_positions.pop(symbol)
-                position_value=float(position.get("position_value",float(position.get("entry",0) or 0)*int(float(position.get("quantity",0) or 0))))
-                self.paper_engine.used_capital=round(max(0.0,self.paper_engine.used_capital-position_value),2)
-                self.paper_engine.available_capital=round(self.paper_engine.total_capital-self.paper_engine.used_capital,2)
-                self.paper_engine._save_state()
+                position=self.paper_engine.open_positions.pop(symbol);position_value=float(position.get("position_value",float(position.get("entry",0) or 0)*int(float(position.get("quantity",0) or 0))));self.paper_engine.used_capital=round(max(0.0,self.paper_engine.used_capital-position_value),2);self.paper_engine.available_capital=round(self.paper_engine.total_capital-self.paper_engine.used_capital,2);self.paper_engine._save_state()
         except Exception as error:print(f"Paper position rollback failed for {symbol}: {type(error).__name__}: {error}")
     def _persist_closed_trade(self,trade):
         """Persist a CLOSED trade with short retries; journal writes upsert by trade_id."""
@@ -177,8 +179,7 @@ class TradingBot:
         return None,None
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
-            position=self.paper_engine.open_positions.get(symbol,{})
-            price,exit_time=self._square_off_price(symbol,position)
+            position=self.paper_engine.open_positions.get(symbol,{});price,exit_time=self._square_off_price(symbol,position)
             if price is None:print(f"15:00 square-off price unavailable for {symbol}; position remains open until a valid market price is available");continue
             closed=self.paper_engine.close_position(symbol,price,exit_time,"SQUARE_OFF")
             if closed is not None:self.daily_pnl=round(self.daily_pnl+float(closed.get("pnl",0) or 0),2)
