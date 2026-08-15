@@ -84,7 +84,6 @@ class RiskEngine:
                 seen_ids.add(unique_key)
                 self.trade_counts[symbol] = self.trade_counts.get(symbol, 0) + 1
             except Exception:
-                # Ignore only the malformed row; preserve counts restored from all valid rows.
                 continue
 
     def get_trade_count(self, symbol):
@@ -168,4 +167,10 @@ class RiskEngine:
         risk_per_share = abs(entry - stop_loss)
         risk_qty = int(self.max_risk_per_trade // risk_per_share)
         capital = self.total_capital if available_capital is None else float(available_capital)
-        return max(0, min(risk_qty, int(capital // entry)))
+        quantity = max(0, min(risk_qty, int(capital // entry)))
+        if quantity <= 0:
+            return 0
+        actual_risk = round(risk_per_share * quantity, 2)
+        if actual_risk < self.min_required_risk or actual_risk > self.max_risk_per_trade:
+            return 0
+        return quantity
