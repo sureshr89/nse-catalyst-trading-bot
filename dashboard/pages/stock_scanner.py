@@ -87,6 +87,16 @@ for col in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercent"]:
     if col in board.columns:
         board[col] = pd.to_numeric(board[col], errors="coerce")
 
+# Only today's signal records can affect today's stock status.
+if not signals.empty:
+    date_col = "entry_time" if "entry_time" in signals.columns else "timestamp" if "timestamp" in signals.columns else None
+    if date_col:
+        dates = pd.to_datetime(signals[date_col], errors="coerce")
+        if dates.notna().any():
+            if getattr(dates.dt, "tz", None) is not None:
+                dates = dates.dt.tz_convert(INDIA_TZ)
+            signals = signals.loc[dates.dt.date.eq(now.date())].copy()
+
 position_symbols = {str(s).upper() for s in positions.keys()}
 latest_signal = {}
 if not signals.empty and "symbol" in signals.columns:
@@ -98,8 +108,7 @@ if not signals.empty and "symbol" in signals.columns:
 
 approved_symbols = set()
 for symbol, record in latest_signal.items():
-    approved = str(record.get("approved", "")).lower() in {"true", "1", "yes"}
-    if approved:
+    if str(record.get("approved", "")).lower() in {"true", "1", "yes"}:
         approved_symbols.add(symbol)
 
 
@@ -187,12 +196,7 @@ st.dataframe(display, width="stretch", hide_index=True, height=620)
 
 st.subheader("💰 Capital & Entry Status")
 available_cash = state.get("available_cash") if isinstance(state, dict) else None
-capital_items = [
-    ("Configured Capital", money(250000)),
-    ("Available Cash", money(available_cash) if available_cash is not None else "Not reported"),
-    ("Open Positions", len(positions)),
-    ("Max Positions", 2),
-]
+capital_items = [("Configured Capital", money(250000)), ("Available Cash", money(available_cash) if available_cash is not None else "Not reported"), ("Open Positions", len(positions)), ("Max Positions", 2)]
 cap_cols = st.columns(len(capital_items))
 for col, (label, value) in zip(cap_cols, capital_items):
     col.metric(label, value)
