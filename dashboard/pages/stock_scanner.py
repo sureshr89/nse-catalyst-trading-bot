@@ -27,40 +27,29 @@ def pct(v):
     try:return f"{float(v):+.2f}%"
     except Exception:return "—"
 def metric_cards(items):
-    html="<div class='metric-grid'>"+"".join(f"<div class='metric-card'><small>{label}</small><b>{value}</b></div>" for label,value in items)+"</div>"
-    st.markdown(html,unsafe_allow_html=True)
+    html="<div class='metric-grid'>"+"".join(f"<div class='metric-card'><small>{label}</small><b>{value}</b></div>" for label,value in items)+"</div>";st.markdown(html,unsafe_allow_html=True)
 
-gaps=read_csv(ROOT/"outputs/gap_analysis.csv");waiting=read_json(ROOT/"outputs/waiting_candidates.json");signals=read_csv(ROOT/"outputs/signals.csv");trades=read_csv(ROOT/"outputs/trades.csv");state=read_json(ROOT/"outputs/paper_engine_state.json");diag=read_json(ROOT/"outputs/scanner_diagnostics.json")
+gaps=read_csv(ROOT/"outputs/gap_analysis.csv");waiting=read_json(ROOT/"outputs/waiting_candidates.json");signals=read_csv(ROOT/"outputs/signals.csv");trades=read_csv(ROOT/"outputs/trades.csv");state=read_json(ROOT/"outputs/paper_engine_state.json");diag=read_json(ROOT/"outputs/scanner_diagnostics.json");news=read_csv(ROOT/"outputs/MASTER_NEWS_ANALYSIS.csv")
 try:ensure_bot_running()
 except Exception:pass
-positions=state.get("open_positions",{}) if isinstance(state,dict) else {};market_change=float(diag.get("nifty500_change_pct",0) or 0);now=datetime.now(INDIA_TZ)
-waiting_data=waiting.get("waiting",{}) if isinstance(waiting,dict) else {};qualified_data=waiting.get("qualified",{}) if isinstance(waiting,dict) else {}
+positions=state.get("open_positions",{}) if isinstance(state,dict) else {};market_change=float(diag.get("nifty500_change_pct",0) or 0);now=datetime.now(INDIA_TZ);waiting_data=waiting.get("waiting",{}) if isinstance(waiting,dict) else {};qualified_data=waiting.get("qualified",{}) if isinstance(waiting,dict) else {}
 
-st.title("🔎 NIFTY 500 Stock Scanner");st.caption("Complete stock-by-stock view • live waiting states • qualified candidates • entry priority")
-
-# Keep the four workflow KPIs in a true 2×2 layout on both desktop and mobile.
-metric_cards([
-    ("BUY waiting",len((waiting_data or {}).get("BUY",{}))),
-    ("SELL waiting",len((waiting_data or {}).get("SELL",{}))),
-    ("BUY qualified",len((qualified_data or {}).get("BUY",{}))),
-    ("SELL qualified",len((qualified_data or {}).get("SELL",{}))),
-])
+st.title("🔎 NIFTY 500 Stock Scanner");st.caption("Complete stock-by-stock view • live waiting states • qualified candidates • entry priority • news confirmation")
+metric_cards([("BUY waiting",len((waiting_data or {}).get("BUY",{}))), ("SELL waiting",len((waiting_data or {}).get("SELL",{}))), ("BUY qualified",len((qualified_data or {}).get("BUY",{}))), ("SELL qualified",len((qualified_data or {}).get("SELL",{})))])
 st.markdown(f"<div class='dashboard-info-card'><div class='session-row'><span>POSITIONS</span><b>{len(positions)}</b></div></div>",unsafe_allow_html=True)
 st.caption(f"NIFTY 500 {market_change:+.2f}% • Control cycle 30s • 1-minute setup data • Updated {now.strftime('%H:%M:%S')} IST")
 
 st.subheader("⏳ Waiting Stocks")
 waiting_rows=[]
 for side in ("BUY","SELL"):
-    for symbol,item in ((waiting_data or {}).get(side,{}) or {}).items():
-        waiting_rows.append({"Side":side,"Symbol":symbol,"State":item.get("state","WAITING"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl")),"Created":item.get("created_at","—")})
+    for symbol,item in ((waiting_data or {}).get(side,{}) or {}).items():waiting_rows.append({"Side":side,"Symbol":symbol,"State":item.get("state","WAITING"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl")),"Created":item.get("created_at","—")})
 if waiting_rows:st.dataframe(pd.DataFrame(waiting_rows),width="stretch",hide_index=True,height=360)
 else:st.info("No stocks are currently waiting for a PDH/PDL breach or Today's Open return.")
 
 st.subheader("🏆 Qualified Candidate Priority")
 qualified_rows=[]
 for side in ("BUY","SELL"):
-    for symbol,item in ((qualified_data or {}).get(side,{}) or {}).items():
-        qualified_rows.append({"Side":side,"Symbol":symbol,"Qualified":item.get("qualified_at","—"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl"))})
+    for symbol,item in ((qualified_data or {}).get(side,{}) or {}).items():qualified_rows.append({"Side":side,"Symbol":symbol,"Qualified":item.get("qualified_at","—"),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl"))})
 if qualified_rows:st.dataframe(pd.DataFrame(qualified_rows),width="stretch",hide_index=True)
 else:st.info("No qualified candidates yet. Once a stock returns to Today's Open after the PDH/PDL breach, it enters the ranking stage.")
 
@@ -69,6 +58,14 @@ ranks=diag.get("ranking",[]) if isinstance(diag,dict) else []
 if ranks:
     rank_df=pd.DataFrame(ranks);rank_df.insert(0,"Priority",range(1,len(rank_df)+1));st.dataframe(rank_df,width="stretch",hide_index=True)
 else:st.info("ATR%, RVOL, Beta and traded value appear after candidates qualify.")
+
+st.subheader("📰 News Confirmation")
+if not news.empty:
+    today_str=now.strftime("%Y-%m-%d");today_news=news[news.get("TradeDate",pd.Series(dtype=str)).astype(str).eq(today_str)].copy() if "TradeDate" in news.columns else news.iloc[0:0]
+    cols=[c for c in ["timestamp","symbol","signal","news_sentiment","news_confidence","news_headline","news_reason","approved"] if c in today_news.columns]
+    if not today_news.empty and cols:st.dataframe(today_news[cols].tail(20).iloc[::-1],width="stretch",hide_index=True,height=320)
+    else:st.info("No news decisions recorded today.")
+else:st.info("News confirmation appears after a candidate reaches the final news gate.")
 
 st.subheader("📋 Gap / Opening Board")
 if gaps.empty:st.info("Gap board will appear when the 1-minute market feed populates it.")
