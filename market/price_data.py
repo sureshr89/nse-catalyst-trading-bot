@@ -82,39 +82,26 @@ class PriceData:
         if interval not in self.valid_intervals:
             raise ValueError(f"Unsupported interval: {interval}")
         try:
-            data = self._clean_data(yf.download(
-                tickers=self.yahoo_symbol(symbol), period=period, interval=interval,
-                auto_adjust=False, progress=False, threads=False, prepost=False,
-                timeout=self.download_timeout,
-            ))
+            data = self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol), period=period, interval=interval, auto_adjust=False, progress=False, threads=False, prepost=False, timeout=self.download_timeout))
             return self._completed_1m(data) if interval == "1m" else data
         except Exception as error:
             print(f"Price download failed for {symbol}: {error}")
             return pd.DataFrame()
 
-    def get_1m(self, symbol):
-        return self.get_candles(symbol, "1m", "1d")
+    def get_1m(self, symbol): return self.get_candles(symbol, "1m", "1d")
 
     def _today_intraday(self, data):
         """Return only today's IST candles; never fall back to a previous session."""
-        if data is None or data.empty or "Datetime" not in data.columns:
-            return pd.DataFrame()
-        result = data.copy()
-        result["Datetime"] = self._to_ist(result["Datetime"])
-        result = result.dropna(subset=["Datetime"])
-        if result.empty:
-            return pd.DataFrame()
+        if data is None or data.empty or "Datetime" not in data.columns: return pd.DataFrame()
+        result = data.copy(); result["Datetime"] = self._to_ist(result["Datetime"]); result = result.dropna(subset=["Datetime"])
+        if result.empty: return pd.DataFrame()
         today = datetime.now(INDIA_TZ).date()
         return result[result["Datetime"].dt.date == today].sort_values("Datetime").reset_index(drop=True)
 
     def get_latest_available_1m(self, symbol):
         """Return the latest completed 1-minute candle from today's IST session only."""
         try:
-            data = self._clean_data(yf.download(
-                tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
-                auto_adjust=False, progress=False, threads=False, prepost=False,
-                timeout=self.download_timeout,
-            ))
+            data = self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol), period="1d", interval="1m", auto_adjust=False, progress=False, threads=False, prepost=False, timeout=self.download_timeout))
             data = self._completed_1m(self._today_intraday(data))
             return None if data.empty else data.iloc[-1].to_dict()
         except Exception as error:
@@ -122,124 +109,84 @@ class PriceData:
             return None
 
     def get_latest_market_price(self, symbol):
-        """Return a fresh current quote for 15:00 paper square-off; never masquerade an old candle as current."""
+        """Return only a timestamp-validated recent 1-minute price for square-off."""
         ticker = self.yahoo_symbol(symbol)
         now = datetime.now(INDIA_TZ)
         try:
-            fast_info = yf.Ticker(ticker).fast_info
-            last_price = fast_info.get("last_price") if hasattr(fast_info, "get") else None
-            if last_price is not None and float(last_price) > 0:
-                return {"Close": float(last_price), "Datetime": now, "price_source": "fast_info"}
-        except Exception as error:
-            print(f"Fast market price failed for {symbol}: {error}")
-
-        try:
-            raw = self._clean_data(yf.download(
-                tickers=ticker, period="1d", interval="1m", auto_adjust=False,
-                progress=False, threads=False, prepost=False, timeout=self.download_timeout,
-            ))
-            today = self._today_intraday(raw)
+            raw = self._clean_data(yf.download(tickers=ticker, period="1d", interval="1m", auto_adjust=False, progress=False, threads=False, prepost=False, timeout=self.download_timeout))
+            today = self._completed_1m(self._today_intraday(raw))
             if not today.empty:
                 latest = today.iloc[-1]
                 candle_time = pd.Timestamp(latest["Datetime"])
-                if candle_time.tzinfo is None:
-                    candle_time = candle_time.tz_localize(INDIA_TZ)
-                else:
-                    candle_time = candle_time.tz_convert(INDIA_TZ)
+                if candle_time.tzinfo is None: candle_time = candle_time.tz_localize(INDIA_TZ)
+                else: candle_time = candle_time.tz_convert(INDIA_TZ)
                 age_seconds = (now - candle_time.to_pydatetime()).total_seconds()
                 if 0 <= age_seconds <= 120:
                     return {"Close": float(latest["Close"]), "Datetime": candle_time.to_pydatetime(), "price_source": "recent_1m"}
                 print(f"Current quote for {symbol} is stale ({age_seconds:.0f}s); square-off will retry")
         except Exception as error:
-            print(f"Intraday market price fallback failed for {symbol}: {error}")
+            print(f"Intraday market price failed for {symbol}: {type(error).__name__}: {error}")
         return None
 
-    def get_5m(self, symbol):
-        return self.get_candles(symbol, "5m", "1d")
-
-    def get_daily(self, symbol, period="10d"):
-        return self.get_candles(symbol, "1d", period)
+    def get_5m(self, symbol): return self.get_candles(symbol, "5m", "1d")
+    def get_daily(self, symbol, period="10d"): return self.get_candles(symbol, "1d", period)
 
     @staticmethod
     def _chunks(items, size):
-        for i in range(0, len(items), size):
-            yield items[i:i + size]
+        for i in range(0, len(items), size): yield items[i:i + size]
 
     def _download_multi_batch(self, tickers, interval="1m", period="1d"):
         try:
-            return yf.download(
-                tickers=tickers, period=period, interval=interval,
-                auto_adjust=False, progress=False, threads=False,
-                prepost=False, group_by="ticker", timeout=self.download_timeout,
-            )
+            return yf.download(tickers=tickers, period=period, interval=interval, auto_adjust=False, progress=False, threads=False, prepost=False, group_by="ticker", timeout=self.download_timeout)
         except Exception as error:
-            print(f"Yahoo batch failed ({len(tickers)} tickers): {error}")
-            return pd.DataFrame()
+            print(f"Yahoo batch failed ({len(tickers)} tickers): {error}"); return pd.DataFrame()
 
     def _extract_batch(self, batch, raw):
-        result = {}
-        tickers = [f"{s}.NS" for s in batch]
-        if raw is None or raw.empty:
-            return result
+        result = {}; tickers = [f"{s}.NS" for s in batch]
+        if raw is None or raw.empty: return result
         if isinstance(raw.columns, pd.MultiIndex):
-            level0 = set(raw.columns.get_level_values(0)); level1 = set(raw.columns.get_level_values(1))
-            for symbol, ticker in zip(batch, tickers):
+            level0=set(raw.columns.get_level_values(0)); level1=set(raw.columns.get_level_values(1))
+            for symbol,ticker in zip(batch,tickers):
                 try:
-                    if ticker in level0: data = raw[ticker]
-                    elif ticker in level1: data = raw.xs(ticker, axis=1, level=1)
-                    else: data = pd.DataFrame()
-                    cleaned = self._completed_1m(self._today_intraday(self._clean_data(data)))
-                    if not cleaned.empty: result[symbol] = cleaned
+                    if ticker in level0: data=raw[ticker]
+                    elif ticker in level1: data=raw.xs(ticker,axis=1,level=1)
+                    else: data=pd.DataFrame()
+                    cleaned=self._completed_1m(self._today_intraday(self._clean_data(data)))
+                    if not cleaned.empty: result[symbol]=cleaned
                 except Exception: continue
-        elif len(batch) == 1:
-            cleaned = self._completed_1m(self._today_intraday(self._clean_data(raw)))
-            if not cleaned.empty: result[batch[0]] = cleaned
+        elif len(batch)==1:
+            cleaned=self._completed_1m(self._today_intraday(self._clean_data(raw)))
+            if not cleaned.empty: result[batch[0]]=cleaned
         return result
 
     def get_multi_1m(self, symbols):
-        symbols = [str(s).upper().replace(".NS", "") for s in symbols]
-        symbols = list(dict.fromkeys(s for s in symbols if s))
-        if not symbols: return {}
-        batches = list(self._chunks(symbols, self.batch_size)); result = {}
+        symbols=[str(s).upper().replace(".NS","") for s in symbols]; symbols=list(dict.fromkeys(s for s in symbols if s))
+        if not symbols:return {}
+        batches=list(self._chunks(symbols,self.batch_size)); result={}
         def download_with_retry(batch):
-            tickers = [f"{s}.NS" for s in batch]
-            raw = self._download_multi_batch(tickers, "1m", "1d")
-            extracted = self._extract_batch(batch, raw); missing = [s for s in batch if s not in extracted]
-            if missing:
-                retry_raw = self._download_multi_batch([f"{s}.NS" for s in missing], "1m", "1d")
-                extracted.update(self._extract_batch(missing, retry_raw))
+            tickers=[f"{s}.NS" for s in batch]; raw=self._download_multi_batch(tickers,"1m","1d"); extracted=self._extract_batch(batch,raw); missing=[s for s in batch if s not in extracted]
+            if missing: extracted.update(self._extract_batch(missing,self._download_multi_batch([f"{s}.NS" for s in missing],"1m","1d")))
             return extracted
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(download_with_retry, batch): batch for batch in batches}
+            futures={executor.submit(download_with_retry,batch):batch for batch in batches}
             for future in as_completed(futures):
                 try: result.update(future.result())
-                except Exception as error: print("Yahoo batch worker failed:", error)
-        for symbol in symbols: result.setdefault(symbol, pd.DataFrame())
+                except Exception as error: print("Yahoo batch worker failed:",error)
+        for symbol in symbols: result.setdefault(symbol,pd.DataFrame())
         return result
 
     def get_index_1m(self, ticker="^NSEI"):
         try:
-            data = self._clean_data(yf.download(
-                tickers=ticker, period="1d", interval="1m", auto_adjust=False,
-                progress=False, threads=False, prepost=False, timeout=self.download_timeout,
-            ))
-            return self._completed_1m(self._today_intraday(data))
+            data=self._clean_data(yf.download(tickers=ticker,period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout)); return self._completed_1m(self._today_intraday(data))
         except Exception as error:
-            print("NIFTY market-index data failed:", error)
-            return pd.DataFrame()
+            print("NIFTY market-index data failed:",error); return pd.DataFrame()
 
     def today_only(self, df):
         """Return only today's IST rows; never select the latest available historical date."""
-        if df is None or df.empty or "Datetime" not in df.columns:
-            return pd.DataFrame()
-        result = df.copy()
-        result["Datetime"] = self._to_ist(result["Datetime"])
-        result = result.dropna(subset=["Datetime"])
-        if result.empty:
-            return pd.DataFrame()
-        today = datetime.now(INDIA_TZ).date()
-        return result[result["Datetime"].dt.date == today].sort_values("Datetime").reset_index(drop=True)
+        if df is None or df.empty or "Datetime" not in df.columns:return pd.DataFrame()
+        result=df.copy(); result["Datetime"]=self._to_ist(result["Datetime"]); result=result.dropna(subset=["Datetime"])
+        if result.empty:return pd.DataFrame()
+        today=datetime.now(INDIA_TZ).date(); return result[result["Datetime"].dt.date==today].sort_values("Datetime").reset_index(drop=True)
 
     def latest_candle(self, symbol, interval="1m"):
-        df = self.today_only(self.get_candles(symbol, interval, "1d"))
-        return None if df.empty else df.iloc[-1].to_dict()
+        df=self.today_only(self.get_candles(symbol,interval,"1d")); return None if df.empty else df.iloc[-1].to_dict()
