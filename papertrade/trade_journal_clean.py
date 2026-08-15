@@ -26,7 +26,6 @@ class TradeJournal:
             try:
                 df=pd.read_csv(path)
                 legacy=self.LEGACY_COLUMNS.intersection(set(df.columns))
-                # Preserve existing records while migrating obsolete schemas.
                 if legacy:df=df.drop(columns=list(legacy),errors="ignore")
                 for column in columns:
                     if column not in df.columns:df[column]=""
@@ -82,9 +81,9 @@ class TradeJournal:
         try:
             entry=pd.to_datetime(trade.get("entry_time"),errors="coerce")
             if not pd.isna(entry):
+                if getattr(entry,"tzinfo",None) is not None:entry=entry.tz_convert(INDIA_TZ)
                 minute=entry.hour*60+entry.minute
-                if 585<=minute<=615:score+=10;reasons.append("09:45–10:15 entry")
-                elif 615<minute<=660:score+=5;reasons.append("10:15–11:00 entry")
+                if 585<=minute<=840:score+=10;reasons.append("09:45–14:00 entry window")
         except Exception:pass
         return score," • ".join(reasons) or "Recorded setup context only"
     def upsert_trade(self,trade):
