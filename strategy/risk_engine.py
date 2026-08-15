@@ -49,18 +49,21 @@ class RiskEngine:
             return None
 
     def restore_today_trade_counts(self):
-        """Restore unique today's trades, not every journal row for the same trade."""
+        """Restore today's unique trades without letting one malformed journal row erase valid counts."""
         self.trade_counts = {}
         path = Path(TRADE_LOG_FILE)
         if not path.exists():
             return
         try:
             df = pd.read_csv(path)
-            if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
-                return
-            today = self._today_ist()
-            seen_ids = set()
-            for row in df.itertuples(index=False):
+        except Exception:
+            return
+        if df.empty or "symbol" not in df.columns or "entry_time" not in df.columns:
+            return
+        today = self._today_ist()
+        seen_ids = set()
+        for row in df.itertuples(index=False):
+            try:
                 if self._entry_date_ist(getattr(row, "entry_time", "")) != today:
                     continue
                 status = str(getattr(row, "status", "")).strip().upper()
@@ -72,21 +75,17 @@ class RiskEngine:
                 trade_id = str(getattr(row, "trade_id", "")).strip()
                 if trade_id:
                     unique_key = (symbol, trade_id)
-                    if unique_key in seen_ids:
-                        continue
-                    seen_ids.add(unique_key)
                 else:
-                    # Older journal rows may have no trade_id. Use the entry identity
-                    # so an OPEN row and its CLOSED update are counted once.
                     signal = str(getattr(row, "signal", "")).strip().upper()
                     entry = str(getattr(row, "entry", "")).strip()
                     unique_key = (symbol, signal, str(getattr(row, "entry_time", "")).strip(), entry)
-                    if unique_key in seen_ids:
-                        continue
-                    seen_ids.add(unique_key)
+                if unique_key in seen_ids:
+                    continue
+                seen_ids.add(unique_key)
                 self.trade_counts[symbol] = self.trade_counts.get(symbol, 0) + 1
-        except Exception:
-            self.trade_counts = {}
+            except Exception:
+                # Ignore only the malformed row; preserve counts restored from all valid rows.
+                continue
 
     def get_trade_count(self, symbol):
         return self.trade_counts.get(str(symbol).strip().upper(), 0)
