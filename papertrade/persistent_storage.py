@@ -21,6 +21,7 @@ ALLOW_PUBLIC_DATA = os.getenv("GITHUB_ALLOW_PUBLIC_DATA", "false").strip().lower
 API_ROOT = f"https://api.github.com/repos/{REPO}/contents"
 _REPO_PRIVATE = None
 _LAST_SIGNAL_SYNC = 0.0
+_MAX_SYNC_RETRIES = 3
 
 
 def _repo_is_private():
@@ -76,8 +77,19 @@ def restore(local_path, repo_path):
         return False
 
 
+def _current_sha(url):
+    """Return the current blob SHA, or None when the data file does not exist."""
+    try:
+        current = _request(f"{url}?ref={BRANCH}")
+        return current.get("sha")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
 def sync(local_path, repo_path, message):
-    """Push local data to the dedicated data branch when explicitly allowed."""
+    """Push local data to the dedicated data branch with conflict-safe retries."""
     global _LAST_SIGNAL_SYNC
     if not enabled():
         return False
@@ -92,19 +104,23 @@ def sync(local_path, repo_path, message):
     try:
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         url = f"{API_ROOT}/{repo_path}"
-        try:
-            current = _request(f"{url}?ref={BRANCH}")
-            sha = current.get("sha")
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                sha = None
-            else:
+        for attempt in range(_MAX_SYNC_RETRIES):
+            sha = _current_sha(url)
+            payload = {"message": message, "content": encoded, "branch": BRANCH}
+            if sha:
+                payload["sha"] = sha
+            try:
+                _request(url, method="PUT", payload=payload)
+                return True
+            except urllib.error.HTTPError as error:
+                # Another worker may have updated the same data file between
+                # GET and PUT. Refresh the SHA and retry rather than dropping
+                # the newest local state or reporting a false success.
+                if error.code == 409 and attempt < _MAX_SYNC_RETRIES - 1:
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
                 raise
-        payload = {"message": message, "content": encoded, "branch": BRANCH}
-        if sha:
-            payload["sha"] = sha
-        _request(url, method="PUT", payload=payload)
-        return True
+        return False
     except Exception as error:
         print(f"Persistent sync skipped for {repo_path}: {error}")
         return False
