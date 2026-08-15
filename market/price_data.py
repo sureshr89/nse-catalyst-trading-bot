@@ -96,7 +96,7 @@ class PriceData:
         return self.get_candles(symbol, "1m", "1d")
 
     def get_latest_available_1m(self, symbol):
-        """Return the latest completed 1-minute candle, never the live candle."""
+        """Return the latest completed 1-minute candle for strategy processing."""
         try:
             data = self._clean_data(yf.download(
                 tickers=self.yahoo_symbol(symbol), period="1d", interval="1m",
@@ -106,8 +106,31 @@ class PriceData:
             data = self._completed_1m(self.today_only(data))
             return None if data.empty else data.iloc[-1].to_dict()
         except Exception as error:
-            print(f"Latest available price failed for {symbol}: {error}")
+            print(f"Latest completed price failed for {symbol}: {error}")
             return None
+
+    def get_latest_market_price(self, symbol):
+        """Return the freshest Yahoo market price for 15:00 paper square-off."""
+        ticker = self.yahoo_symbol(symbol)
+        try:
+            fast_info = yf.Ticker(ticker).fast_info
+            last_price = fast_info.get("last_price") if hasattr(fast_info, "get") else None
+            if last_price is not None and float(last_price) > 0:
+                return {"Close": float(last_price), "Datetime": datetime.now(INDIA_TZ)}
+        except Exception as error:
+            print(f"Fast market price failed for {symbol}: {error}")
+        try:
+            raw = self._clean_data(yf.download(
+                tickers=ticker, period="1d", interval="1m", auto_adjust=False,
+                progress=False, threads=False, prepost=False, timeout=self.download_timeout,
+            ))
+            today = self.today_only(raw)
+            if not today.empty:
+                latest = today.iloc[-1]
+                return {"Close": float(latest["Close"]), "Datetime": latest["Datetime"]}
+        except Exception as error:
+            print(f"Intraday market price fallback failed for {symbol}: {error}")
+        return None
 
     def get_5m(self, symbol):
         return self.get_candles(symbol, "5m", "1d")
