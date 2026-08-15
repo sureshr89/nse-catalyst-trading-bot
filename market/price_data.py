@@ -36,6 +36,7 @@ class PriceData:
 
     @staticmethod
     def _completed_1m(df):
+        """Return only valid, completed 1-minute candles; fail closed on bad timestamps."""
         if df is None or df.empty or "Datetime" not in df.columns:
             return df
         data = df.copy()
@@ -45,10 +46,15 @@ class PriceData:
                 timestamps = timestamps.dt.tz_localize(INDIA_TZ)
             else:
                 timestamps = timestamps.dt.tz_convert(INDIA_TZ)
+            valid = timestamps.notna()
             current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
-            return data[timestamps < current_minute].reset_index(drop=True)
-        except Exception:
-            return data
+            # A candle stamped at the current minute is still forming. Never let
+            # malformed/unparseable timestamps bypass this completed-candle gate.
+            valid &= timestamps < current_minute
+            return data.loc[valid].copy().reset_index(drop=True)
+        except Exception as error:
+            print(f"1-minute completion validation failed: {type(error).__name__}: {error}")
+            return pd.DataFrame()
 
     def _clean_data(self, df):
         if df is None or df.empty:
