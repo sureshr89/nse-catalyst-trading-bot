@@ -61,12 +61,28 @@ class OpenReversalEngine:
         closing = float(data.iloc[-1]["Close"])
         return "BULLISH" if closing > opening else "BEARISH" if closing < opening else "NEUTRAL"
 
+    @staticmethod
+    def _is_completed_candle(candle):
+        if candle is None:
+            return False
+        try:
+            stamp = pd.Timestamp(candle["Datetime"])
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize(INDIA_TZ)
+            else:
+                stamp = stamp.tz_convert(INDIA_TZ)
+            now = datetime.now(INDIA_TZ)
+            current_minute = now.replace(second=0, microsecond=0)
+            return stamp.date() == now.date() and stamp < current_minute
+        except Exception:
+            return False
+
     def _trigger_candle(self, today_data, today_open, pdh, pdl, side):
         data = self._clean(today_data)
         if len(data) < 2:
             return None
         current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
-        completed = data[data["Datetime"] < current_minute].copy()
+        completed = data[(data["Datetime"] < current_minute) & (data["Datetime"].dt.date == current_minute.date())].copy()
         if completed.empty:
             return None
 
@@ -78,29 +94,28 @@ class OpenReversalEngine:
             if candle_time > self.end:
                 break
             if side == "BUY":
-                # Every later PDH touch resets the setup window. The trigger must
-                # occur after the latest touch, not merely after the first touch.
                 if float(candle["Low"]) <= pdh:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
                 if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) < today_open and float(candle["Close"]) > today_open:
-                        latest_trigger = candle
+                        if self._is_completed_candle(candle):
+                            latest_trigger = candle
             else:
-                # Every later PDL touch resets the setup window.
                 if float(candle["High"]) >= pdl:
                     level_reached = True
                     level_reached_time = candle["Datetime"]
                     continue
                 if level_reached and candle_time >= self.start and candle["Datetime"] > level_reached_time:
                     if float(candle["Open"]) > today_open and float(candle["Close"]) < today_open:
-                        latest_trigger = candle
+                        if self._is_completed_candle(candle):
+                            latest_trigger = candle
         return latest_trigger
 
     def _fresh(self, trigger):
         age = (datetime.now(INDIA_TZ) - trigger["Datetime"]).total_seconds() / 60.0
-        return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES)
+        return 0 <= age <= float(MAX_TRIGGER_AGE_MINUTES) and self._is_completed_candle(trigger)
 
     @staticmethod
     def _trigger_key(symbol, trigger, side, nifty_direction="UNKNOWN"):
@@ -113,7 +128,6 @@ class OpenReversalEngine:
 
     @staticmethod
     def _setup_window(data, trigger, pdh, pdl, side):
-        """Return candles from the latest PDH/PDL touch through the trigger candle."""
         if data is None or data.empty or trigger is None:
             return pd.DataFrame()
         completed = data[data["Datetime"] <= trigger["Datetime"]].copy()
@@ -155,7 +169,6 @@ class OpenReversalEngine:
         return None
 
     def finalize_trigger(self, symbol, today_data, trigger, today_open, pdh, pdl, nifty_direction, side):
-        """Finalize a trigger once per market-direction context; repeated calls reuse the cached signal."""
         if trigger is None:
             return None
         direction = str(nifty_direction or "UNKNOWN").upper()
@@ -172,11 +185,7 @@ class OpenReversalEngine:
         if setup_data.empty:
             return None
         stock_direction = self._candle_direction(pd.DataFrame([trigger]))
-        signal = self._trade(
-            side, symbol, trigger, float(today_open), float(pdh), float(pdl),
-            float(setup_data["Low"].min()), float(setup_data["High"].max()),
-            direction, stock_direction,
-        )
+        signal = self._trade(side, symbol, trigger, float(today_open), float(pdh), float(pdl), float(setup_data["Low"].min()), float(setup_data["High"].max()), direction, stock_direction)
         self._finalized_triggers[key] = signal.copy()
         return signal
 
@@ -185,12 +194,4 @@ class OpenReversalEngine:
         stop = today_high if side == "SELL" else today_low
         reward_distance = abs(trigger_close - stop) * self.rr
         target = trigger_close + reward_distance if side == "BUY" else trigger_close - reward_distance
-        return {
-            "symbol": symbol, "signal": side, "entry_time": candle["Datetime"], "entry": round(trigger_close, 2),
-            "open_cross_level": round(today_open, 4), "stop_loss": round(stop, 4), "target": round(target, 2),
-            "risk_reward": self.rr, "pdh": round(pdh, 4), "pdl": round(pdl, 4), "today_open": round(today_open, 4),
-            "today_low": round(today_low, 4), "today_high": round(today_high, 4), "market_direction": nifty_direction,
-            "stock_direction": stock_direction, "stock_today_direction": stock_direction,
-            "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL", "trigger_candle_open": round(float(candle["Open"]), 4),
-            "trigger_candle_close": round(trigger_close, 4), "trigger_close": round(trigger_close, 4), "pdh_pdl_reached": True,
-        }
+        return {"symbol": symbol, "signal": side, "entry_time": candle["Datetime"], "entry": round(trigger_close, 2), "open_cross_level": round(today_open, 4), "stop_loss": round(stop, 4), "target": round(target, 2), "risk_reward": self.rr, "pdh": round(pdh, 4), "pdl": round(pdl, 4), "today_open": round(today_open, 4), "today_low": round(today_low, 4), "today_high": round(today_high, 4), "market_direction": nifty_direction, "stock_direction": stock_direction, "stock_today_direction": stock_direction, "setup_type": "NIFTY_500_PDH_PDL_OPEN_REVERSAL", "trigger_candle_open": round(float(candle["Open"]), 4), "trigger_candle_close": round(trigger_close, 4), "trigger_close": round(trigger_close, 4), "pdh_pdl_reached": True}
