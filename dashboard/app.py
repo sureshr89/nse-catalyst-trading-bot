@@ -14,7 +14,7 @@ from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running,get_status
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
 
-st.set_page_config(page_title="NSE Catalyst | NIFTY 500 Bot",page_icon="📈",layout="wide",initial_sidebar_state="collapsed")
+st.set_page_config(page_title="NSE Catalyst | NIFTY 500 Bot",page_icon=str(ROOT / "favicon.png"),layout="wide",initial_sidebar_state="collapsed")
 st.markdown(load_css(),unsafe_allow_html=True);st_autorefresh(interval=5000,key="live")
 try:ensure_bot_running()
 except Exception as exc:st.error(f"Paper bot startup error: {type(exc).__name__}: {exc}")
