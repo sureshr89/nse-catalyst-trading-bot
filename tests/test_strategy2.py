@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 
@@ -8,12 +8,15 @@ IST = ZoneInfo("Asia/Kolkata")
 
 
 def _data(closes, highs=None, lows=None):
-    now = datetime.now(IST).replace(second=0, microsecond=0)
+    # Strategy 2 correctly stops accepting NEW entries at 14:00 IST.
+    # Keep synthetic trigger candles before that cutoff so tests are independent
+    # of the CI runner's wall-clock time.
+    base = datetime.now(IST).replace(hour=13, minute=55, second=0, microsecond=0)
     highs = highs or closes
     lows = lows or [min(c, h) for c, h in zip(closes, highs)]
     rows = []
     for i, (close, high, low) in enumerate(zip(closes, highs, lows), 1):
-        stamp = now - pd.Timedelta(minutes=len(closes) - i + 1)
+        stamp = base + pd.Timedelta(minutes=i - 1)
         rows.append({"Datetime": stamp, "Open": close, "High": high, "Low": low, "Close": close})
     return pd.DataFrame(rows)
 
