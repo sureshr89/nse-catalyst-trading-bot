@@ -38,7 +38,7 @@ def pct(v):
     except Exception:return "—"
 def cards(items):
     st.markdown("<div class='metric-grid'>"+"".join(f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a,b in items)+"</div>",unsafe_allow_html=True)
-status=read(ROOT/"outputs/bot_status.json"); state=read(ROOT/"outputs/paper_engine_state.json"); diag=read(ROOT/"outputs/scanner_diagnostics.json"); gaps=read(ROOT/"outputs/gap_analysis.csv","csv"); signals=read(ROOT/"outputs/signals.csv","csv"); waiting=read(ROOT/"outputs/waiting_candidates.json"); news=read(ROOT/"outputs/MASTER_NEWS_ANALYSIS.csv","csv")
+status=read(ROOT/"outputs/bot_status.json"); state=read(ROOT/"outputs/paper_engine_state.json"); diag=read(ROOT/"outputs/scanner_diagnostics.json"); gaps=read(ROOT/"outputs/gap_analysis.csv","csv"); signals=read(ROOT/"outputs/signals.csv","csv"); waiting=read(ROOT/"outputs/waiting_candidates.json")
 try:
     live=ensure_bot_running()
     if isinstance(live,dict):status.update(live)
@@ -79,13 +79,6 @@ st.caption(f"Scanner: {status.get('scanner_status','—')} • Last scan: {statu
 
 st.subheader("⚡ Strategy State")
 st.dataframe(pd.DataFrame([("BUY","Open > PDH → completed 1m close below PDH → later completed 1m close back to Today's Open"),("SELL","Open < PDL → completed 1m close above PDL → later completed 1m close back to Today's Open"),("Entry","Final NIFTY confirmation + stock at/above Open for BUY or at/below Open for SELL → current market price"),("Priority","Largest qualifying absolute Gap % first"),("Stop loss","BUY = PDH • SELL = PDL"),("Risk","₹1,400–₹1,500 per trade • Target 1.25R • Max 2")],columns=["Condition","Current Rule"]),width="stretch",hide_index=True)
-
-st.subheader("📰 News Gate")
-if not news.empty:
-    today_news=news[news["TradeDate"].astype(str).eq(now.strftime("%Y-%m-%d"))].copy() if "TradeDate" in news.columns else news.iloc[0:0]; sentiment=today_news.get("news_sentiment",pd.Series(dtype=str)).astype(str).str.upper(); a,b,c,dcol=st.columns(4); a.metric("Decisions",len(today_news)); b.metric("🟢 Positive",int(sentiment.eq("POSITIVE").sum())); c.metric("🔴 Negative",int(sentiment.eq("NEGATIVE").sum())); dcol.metric("⚪ Neutral",int(sentiment.eq("NEUTRAL").sum())); cols=[c for c in ["timestamp","symbol","signal","news_sentiment","news_confidence","news_headline","news_reason","approved"] if c in today_news.columns]
-    if cols and not today_news.empty:st.dataframe(today_news[cols].tail(12).iloc[::-1],width="stretch",hide_index=True,height=260)
-    else:st.info("No news decisions today.")
-else:st.info("News analysis will appear when qualified candidates reach the final news gate.")
 
 st.subheader("⏳ Live Waiting Stocks")
 wc=waiting.get("waiting",{}) if isinstance(waiting,dict) else {}; rows=[]
@@ -128,7 +121,7 @@ if not signals.empty:
         if dates.notna().any():dates=dates.dt.tz_convert(INDIA_TZ) if getattr(dates.dt,"tz",None) is not None else dates.dt.tz_localize(INDIA_TZ);signals=signals.loc[dates.dt.date.eq(now.date())].copy()
     approved=signals.copy()
     if "approved" in approved.columns:approved=approved[approved["approved"].astype(str).str.lower().isin(["true","1","yes"])]
-    cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","gap_percent","priority_rank","news_sentiment","news_confidence","news_headline"] if c in approved.columns]
+    cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","gap_percent","priority_rank"] if c in approved.columns]
     if not approved.empty and cols:st.dataframe(approved[cols].tail(20).iloc[::-1],width="stretch",hide_index=True,height=300)
     else:st.info("No approved signals today.")
 else:st.info("No approved signals today.")
@@ -142,7 +135,7 @@ if positions:
         entry=position.get("entry");side=str(position.get("signal","")).upper();pnl=None
         try:qty=float(position.get("quantity",0) or 0);pnl=((float(ltp)-float(entry))*qty if side=="BUY" else (float(entry)-float(ltp))*qty) if ltp is not None and entry is not None else None
         except Exception:pass
-        rows.append({"Stock":symbol,"Side":side,"Entry":price(entry),"LTP":price(ltp),"Live P&L":price(pnl),"SL":price(position.get("stop_loss")),"Target":price(position.get("target")),"Qty":position.get("quantity","—"),"Gap %":pct(position.get("gap_percent")),"News":position.get("news_sentiment","—")})
+        rows.append({"Stock":symbol,"Side":side,"Entry":price(entry),"LTP":price(ltp),"Live P&L":price(pnl),"SL":price(position.get("stop_loss")),"Target":price(position.get("target")),"Qty":position.get("quantity","—"),"Gap %":pct(position.get("gap_percent"))})
     st.dataframe(pd.DataFrame(rows).astype(str),width="stretch",hide_index=True)
 else:st.info("No open paper positions.")
 st.caption("Auto-refresh 5s • control cycle 30s • completed market data 1m • Paper trading only")
