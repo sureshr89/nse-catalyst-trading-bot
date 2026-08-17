@@ -1,4 +1,12 @@
-"""ATR-only candidate ranking for the NIFTY 500 paper strategy."""
+"""Candidate ranking metrics for the NIFTY 500 paper strategy.
+
+Priority rule:
+1. Larger opening gap versus PDH/PDL first.
+2. Higher ATR% second.
+
+These metrics rank candidates only after the complete price-action setup has
+qualified; they do not create a trade by themselves.
+"""
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
@@ -41,13 +49,21 @@ def atr_pct(intraday, period=14):
 
 
 def metrics(price_data, symbol, intraday):
-    """Calculate only the stock movement metric used for candidate ranking."""
+    """Calculate the secondary movement metric used after gap qualification."""
     return {
         "atr_pct": atr_pct(intraday),
         "metrics_calculated_at": datetime.now(INDIA_TZ).isoformat(timespec="seconds"),
     }
 
 
+def gap_priority_pct(row):
+    """Return opening-gap magnitude; larger gaps always receive higher priority."""
+    try:
+        return abs(float(row.get("gap_percent", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def sort_key(row):
-    """Higher ATR% gets higher priority after a candidate is fully qualified."""
-    return float(row.get("atr_pct", 0) or 0)
+    """Primary: larger gap. Secondary: higher ATR%."""
+    return (gap_priority_pct(row), float(row.get("atr_pct", 0) or 0))
