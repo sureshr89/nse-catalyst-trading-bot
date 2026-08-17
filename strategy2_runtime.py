@@ -47,8 +47,7 @@ class Strategy2Runtime:
         path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
     def _news_gate(self, signal):
-        symbol = signal["symbol"]
-        analysis = analyze_yahoo_news(symbol)
+        analysis = analyze_yahoo_news(signal["symbol"])
         signal.update({
             "news_sentiment": analysis.get("sentiment", "NEUTRAL"),
             "news_confidence": analysis.get("confidence", 0.0),
@@ -62,9 +61,13 @@ class Strategy2Runtime:
     def _open_signal(self, signal, rank):
         candidate_id = f"S2|{self._now().date().isoformat()}|{signal['symbol']}|{signal['trigger_time']}"
         signal["candidate_id"] = candidate_id
+        signal["entry_time"] = signal["trigger_time"]
+        signal["open_cross_level"] = signal["today_open"]
+        signal["today_high"] = signal["stop_loss"]
         signal["priority_rank"] = rank
         signal["candidate_state"] = "QUALIFIED"
         signal["nifty500_universe"] = True
+        signal["pdh_pdl_reached"] = False
         if candidate_id in self.processed:
             return False
         if self.daily_pnl <= -DAILY_MAX_LOSS or self.daily_pnl >= DAILY_PROFIT_TARGET:
@@ -81,7 +84,7 @@ class Strategy2Runtime:
             self.processed.add(candidate_id)
             return False
         risk = self.risk_engine.approve_trade(signal, available_capital=self.paper_engine.available_capital)
-        self.journal.log_signal({**signal, **risk, "approved": bool(risk.get("approved")), "reason": "; ".join(map(str, risk.get("reasons", [])))} )
+        self.journal.log_signal({**signal, **risk, "approved": bool(risk.get("approved")), "reason": "; ".join(map(str, risk.get("reasons", [])))})
         if not risk.get("approved"):
             self.diagnostics["rejections"]["risk"] = self.diagnostics["rejections"].get("risk", 0) + 1
             if "CAPITAL" not in " ".join(map(str, risk.get("reasons", []))).upper():
@@ -113,7 +116,6 @@ class Strategy2Runtime:
             data = self.scanner.universe_market_data
         rows = []
         for _, row in candidates.iterrows():
-            # Strategy 2 is only for genuine gap-ups above PDH.
             if str(row.get("OpeningSetup", "")) != "OPEN_ABOVE_PDH":
                 continue
             symbol = str(row["Symbol"]).upper()
@@ -156,8 +158,7 @@ class Strategy2Runtime:
             candle = self.scanner.price_data.get_latest_available_1m(symbol)
             if candle is None:
                 continue
-            close = float(candle["Close"])
-            closed = self.paper_engine.close_position(symbol, close, candle["Datetime"], "SQUARE_OFF")
+            closed = self.paper_engine.close_position(symbol, float(candle["Close"]), candle["Datetime"], "SQUARE_OFF")
             if closed:
                 self.daily_pnl = round(self.daily_pnl + float(closed.get("pnl", 0) or 0), 2)
                 self.journal.log_trade(closed)
