@@ -33,11 +33,11 @@ try:
 except Exception as error:status.setdefault("error",f"Worker launcher: {type(error).__name__}: {error}")
 positions=state.get("open_positions",{}) if isinstance(state,dict) else {};market_change=float(diag.get("nifty500_change_pct",0) or 0);now=datetime.now(INDIA_TZ);clock=now.strftime("%H:%M")
 permission="🟢 BUY" if market_change>=NIFTY_THRESHOLD else "🔴 SELL" if market_change<=-NIFTY_THRESHOLD else "⚪ WAIT";window="PREPARE" if clock<ENTRY_START else "ACTIVE" if clock<=ENTRY_END else "CLOSED"
-st.title("🎯 Current Trading");st.caption("Live strategy command center • waiting stocks, qualified candidates, ATR priority, news gate and open positions")
+st.title("🎯 Current Trading");st.caption("Live strategy command center • highest qualifying GAP first • ATR secondary • news gate • risk validation")
 cards([("NIFTY 500",pct(market_change)),("Market Permission",permission),("Entry Window",window),("Open Positions",len(positions))]);st.caption(f"Control cycle 30s • 1m data • Entries {ENTRY_START}–{ENTRY_END} IST • Updated {now.strftime('%H:%M:%S')} IST")
 if status.get("error"):st.warning(str(status["error"]))
 st.subheader("⚡ Strategy State")
-st.dataframe(pd.DataFrame([("BUY","Open > PDH → 1m close below PDH → wait for 1m close back to Today's Open"),("SELL","Open < PDL → 1m close above PDL → wait for 1m close back to Today's Open"),("Entry","Final NIFTY confirmation + stock at/above Open for BUY or at/below Open for SELL → current market price"),("Priority","ATR% highest first after qualification"),("News","Yahoo Finance recent headline → POSITIVE for BUY / NEGATIVE for SELL; NEUTRAL or unusable news rejects"),("Risk","₹1,400–₹1,500 per trade • SL PDH/PDL • Target 1.25R • Max 2")],columns=["Condition","Current Rule"]),width="stretch",hide_index=True)
+st.dataframe(pd.DataFrame([("BUY","Open > PDH → 1m close below PDH → wait for 1m close back to Today's Open"),("SELL","Open < PDL → 1m close above PDL → wait for 1m close back to Today's Open"),("Entry","Final NIFTY confirmation + stock at/above Open for BUY or at/below Open for SELL → current market price"),("Priority","Highest qualifying Gap % first → ATR% second"),("News","Yahoo Finance recent headline → POSITIVE for BUY / NEGATIVE for SELL; NEUTRAL or unusable news rejects"),("Risk","₹1,400–₹1,500 per trade • SL PDH/PDL • Target 1.25R • Max 2")],columns=["Condition","Current Rule"]),width="stretch",hide_index=True)
 
 st.subheader("📰 News Gate")
 if not news.empty:
@@ -54,15 +54,17 @@ else:st.info("News analysis will appear when qualified candidates reach the fina
 st.subheader("⏳ Live Waiting Stocks")
 wc=waiting.get("waiting",{}) if isinstance(waiting,dict) else {};rows=[]
 for side in ("BUY","SELL"):
-    for symbol,item in (wc.get(side,{}) or {}).items():rows.append({"Side":side,"Stock":symbol,"State":item.get("state","WAITING"),"Today's Open":price(item.get("today_open")),"PDH":price(item.get("pdh")),"PDL":price(item.get("pdl"))})
-if rows:st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True,height=300)
+    for symbol,item in (wc.get(side,{}) or {}).items():rows.append({"Side":side,"Stock":symbol,"State":item.get("state","WAITING"),"Gap %":item.get("gap_percent",0),"Today's Open":price(item.get("today_open")),"PDH":price(item.get("pdh")),"PDL":price(item.get("pdl"))})
+if rows:
+    wdf=pd.DataFrame(rows);wdf["Gap %"]=pd.to_numeric(wdf["Gap %"],errors="coerce");wdf=wdf.sort_values("Gap %",key=lambda s:s.abs(),ascending=False);st.dataframe(wdf,width="stretch",hide_index=True,height=300)
 else:st.info("No stocks currently waiting for a PDH/PDL breach or Today's Open return.")
 
-st.subheader("🏆 Qualified & ATR Priority")
+st.subheader("🏆 Qualified Priority")
 qc=waiting.get("qualified",{}) if isinstance(waiting,dict) else {};qrows=[]
 for side in ("BUY","SELL"):
-    for symbol,item in (qc.get(side,{}) or {}).items():qrows.append({"Side":side,"Stock":symbol,"Qualified":item.get("qualified_at","—"),"Today's Open":price(item.get("today_open")),"PDH":price(item.get("pdh")),"PDL":price(item.get("pdl"))})
-if qrows:st.dataframe(pd.DataFrame(qrows),width="stretch",hide_index=True)
+    for symbol,item in (qc.get(side,{}) or {}).items():qrows.append({"Side":side,"Stock":symbol,"Qualified":item.get("qualified_at","—"),"Gap %":item.get("gap_percent",0),"Today's Open":price(item.get("today_open")),"PDH":price(item.get("pdh")),"PDL":price(item.get("pdl"))})
+if qrows:
+    qdf=pd.DataFrame(qrows);qdf["Gap %"]=pd.to_numeric(qdf["Gap %"],errors="coerce");qdf=qdf.sort_values("Gap %",key=lambda s:s.abs(),ascending=False);st.dataframe(qdf,width="stretch",hide_index=True)
 else:st.info("No qualified candidates yet.")
 
 st.subheader("🎯 Gap Candidates")
@@ -70,10 +72,11 @@ if not gaps.empty and "GapType" in gaps.columns:
     board=gaps.copy()
     for c in ["TodayOpen","PDH","PDL","Gap","GapPercent"]:
         if c in board.columns:board[c]=pd.to_numeric(board[c],errors="coerce")
-    ups=board[board["GapType"].eq("GAP_UP")].sort_values("GapPercent",ascending=False);downs=board[board["GapType"].eq("GAP_DOWN")].sort_values("GapPercent")
+    if "GapPercent" in board.columns:board["GapPriority"]=board["GapPercent"].abs()
+    ups=board[board["GapType"].eq("GAP_UP")].sort_values("GapPriority",ascending=False);downs=board[board["GapType"].eq("GAP_DOWN")].sort_values("GapPriority",ascending=False)
     cards([("Gap Up",len(ups)),("Gap Down",len(downs)),("Total Candidates",len(ups)+len(downs))]);c1,c2=st.columns(2,gap="large")
     with c1:
-        st.markdown("### 🟢 BUY WATCHLIST");view=ups[[c for c in ["Symbol","TodayOpen","PDH","GapPercent"] if c in ups.columns]].head(30).copy()
+        st.markdown("### 🟢 BUY WATCHLIST — LARGEST GAP FIRST");view=ups[[c for c in ["Symbol","TodayOpen","PDH","GapPercent"] if c in ups.columns]].head(30).copy()
         if view.empty:st.info("No gap-up candidates.")
         else:
             for c in ["TodayOpen","PDH"]:
@@ -81,7 +84,7 @@ if not gaps.empty and "GapType" in gaps.columns:
             if "GapPercent" in view.columns:view["GapPercent"]=view["GapPercent"].map(pct)
             st.dataframe(view,width="stretch",hide_index=True,height=300)
     with c2:
-        st.markdown("### 🔴 SELL WATCHLIST");view=downs[[c for c in ["Symbol","TodayOpen","PDL","GapPercent"] if c in downs.columns]].head(30).copy()
+        st.markdown("### 🔴 SELL WATCHLIST — LARGEST GAP FIRST");view=downs[[c for c in ["Symbol","TodayOpen","PDL","GapPercent"] if c in downs.columns]].head(30).copy()
         if view.empty:st.info("No gap-down candidates.")
         else:
             for c in ["TodayOpen","PDL"]:
@@ -98,7 +101,7 @@ if not signals.empty:
         if dates.notna().any():dates=dates.dt.tz_convert(INDIA_TZ) if getattr(dates.dt,"tz",None) is not None else dates.dt.tz_localize(INDIA_TZ);signals=signals.loc[dates.dt.date.eq(now.date())].copy()
     approved=signals.copy()
     if "approved" in approved.columns:approved=approved[approved["approved"].astype(str).str.lower().isin(["true","1","yes"])]
-    cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","atr_pct","priority_rank","news_sentiment","news_confidence","news_headline"] if c in approved.columns]
+    cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","gap_percent","atr_pct","priority_rank","news_sentiment","news_confidence","news_headline"] if c in approved.columns]
     if not approved.empty and cols:st.dataframe(approved[cols].tail(20).iloc[::-1],width="stretch",hide_index=True,height=300)
     else:st.info("No approved signals today.")
 else:st.info("No approved signals today.")
@@ -113,7 +116,7 @@ if positions:
         try:
             qty=float(pos.get("quantity",0) or 0);pnl=((float(ltp)-float(entry))*qty if side=="BUY" else (float(entry)-float(ltp))*qty) if ltp is not None and entry is not None else None
         except Exception:pass
-        rows.append({"Stock":symbol,"Side":side,"Entry":price(entry),"LTP":price(ltp),"Live P&L":price(pnl),"SL":price(pos.get("stop_loss")),"Target":price(pos.get("target")),"Qty":pos.get("quantity","—"),"News":pos.get("news_sentiment","—")})
+        rows.append({"Stock":symbol,"Side":side,"Entry":price(entry),"LTP":price(ltp),"Live P&L":price(pnl),"SL":price(pos.get("stop_loss")),"Target":price(pos.get("target")),"Qty":pos.get("quantity","—"),"Gap %":pct(pos.get("gap_percent")),"ATR %":pct(pos.get("atr_pct")),"News":pos.get("news_sentiment","—")})
     st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
 else:st.info("No open paper positions.")
 st.caption("Auto-refresh 5s • control cycle 30s • market data 1m • Paper trading only");render_daily_footer()
