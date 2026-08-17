@@ -12,6 +12,7 @@ Rules:
 """
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
+import pandas as pd
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -32,7 +33,8 @@ class GapExtensionReversalEngine:
         if data is None or data.empty or "Datetime" not in data.columns:
             return data
         result = data.copy()
-        result["Datetime"] = __import__("pandas").to_datetime(result["Datetime"], errors="coerce")
+        result["Datetime"] = pd.to_datetime(result["Datetime"], errors="coerce")
+        result = result.dropna(subset=["Datetime"])
         if result["Datetime"].dt.tz is None:
             result["Datetime"] = result["Datetime"].dt.tz_localize(INDIA_TZ)
         else:
@@ -52,18 +54,19 @@ class GapExtensionReversalEngine:
         today = data[data["Datetime"].dt.date == datetime.now(INDIA_TZ).date()].copy()
         if today.empty:
             return None
-        # The stock must actually extend upward after the entry window begins.
-        after_start = today[today["Datetime"].dt.time >= self.start]
+        after_start = today[today["Datetime"].dt.time >= self.start].copy()
         if after_start.empty:
             return None
-        extension = after_start[after_start["High"].astype(float) > open_price]
-        if extension.empty:
-            return None
-        high_to_entry = float(extension["High"].max())
+        extended = False
+        day_high = open_price
         for _, candle in after_start.iterrows():
+            high = float(candle["High"])
             close = float(candle["Close"])
-            if close < open_price:
-                stop = high_to_entry
+            day_high = max(day_high, high)
+            if high > open_price:
+                extended = True
+            if extended and close < open_price:
+                stop = day_high
                 risk = stop - close
                 reward = close - pdh
                 if risk <= 0 or reward <= 0:
