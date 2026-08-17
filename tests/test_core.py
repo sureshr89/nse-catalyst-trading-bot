@@ -1,12 +1,11 @@
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from config.settings import MAX_RISK_PER_TRADE, MIN_REQUIRED_RISK, MIN_RR_RATIO
-from master_data import _prune_to_last_six_months
 from papertrade.paper_trade_engine import PaperTradeEngine
+from strategy.candidate_metrics import sort_key
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.risk_engine import RiskEngine
 
@@ -15,13 +14,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 def test_risk_engine_approves_target_risk_trade():
     engine = RiskEngine()
-    result = engine.validate({
-        "symbol": "TEST",
-        "signal": "BUY",
-        "entry": 100.0,
-        "stop_loss": 98.0,
-        "target": 102.5,
-    }, check_trade_count=False)
+    result = engine.validate({"symbol":"TEST","signal":"BUY","entry":100.0,"stop_loss":98.0,"target":102.5}, check_trade_count=False)
     assert result["approved"] is True
     assert result["actual_risk"] == MAX_RISK_PER_TRADE
     assert result["rr"] >= MIN_RR_RATIO
@@ -30,40 +23,57 @@ def test_risk_engine_approves_target_risk_trade():
 
 def test_risk_engine_rejects_wrong_side_stop():
     engine = RiskEngine()
-    result = engine.validate({
-        "symbol": "TEST",
-        "signal": "SELL",
-        "entry": 100.0,
-        "stop_loss": 99.0,
-        "target": 98.0,
-    }, check_trade_count=False)
+    result = engine.validate({"symbol":"TEST","signal":"SELL","entry":100.0,"stop_loss":99.0,"target":98.0}, check_trade_count=False)
     assert result["approved"] is False
     assert any("SELL stop loss" in reason for reason in result["reasons"])
 
 
-def test_strategy_target_and_trigger_stop_are_consistent():
+def test_buy_state_requires_breach_then_return_to_open():
     engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    candle_time = datetime(2026, 8, 14, 10, 0, tzinfo=IST)
-    trade = engine._trade(
-        "SELL", "TEST", {
-            "Datetime": candle_time,
-            "Open": 105.0,
-            "High": 106.0,
-            "Low": 99.0,
-            "Close": 100.0,
-        },
-        today_open=102.0,
-        pdh=104.0,
-        pdl=95.0,
-        today_low=99.0,
-        today_high=106.0,
-        sector_direction="BEARISH",
-        nifty_direction="BEARISH",
-        stock_direction="BEARISH",
-    )
-    assert trade["stop_loss"] == 106.0
-    assert trade["target"] == 92.5
-    assert trade["risk_reward"] == 1.25
+    state = {"side":"BUY","pdh_breached":False,"open_returned":False}
+    state = engine.update_state(state, 105.0, 100.0, 95.0, 99.5)
+    assert state["pdh_breached"] is True
+    assert state.get("open_returned", False) is False
+    state = engine.update_state(state, 105.0, 100.0, 95.0, 105.0)
+    assert state["open_returned"] is True
+
+
+def test_sell_state_requires_breach_then_return_to_open():
+    engine = OpenReversalEngine("09:45", "14:00", 1.25)
+    state = {"side":"SELL","pdl_breached":False,"open_returned":False}
+    state = engine.update_state(state, 95.0, 100.0, 90.0, 90.5)
+    assert state["pdl_breached"] is True
+    assert state.get("open_returned", False) is False
+    state = engine.update_state(state, 95.0, 100.0, 90.0, 95.0)
+    assert state["open_returned"] is True
+
+
+def test_build_signal_buy_target_and_stop():
+    engine = OpenReversalEngine("09:45", "14:00", 1.25)
+    signal = engine.build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5)
+    assert signal["stop_loss"] == 100.0
+    assert signal["target"] == 111.25
+    assert signal["risk_reward"] == 1.25
+
+
+def test_build_signal_sell_target_and_stop():
+    engine = OpenReversalEngine("09:45", "14:00", 1.25)
+    signal = engine.build_signal("TEST", "SELL", 95.0, 95.0, 105.0, 90.0, -0.5)
+    assert signal["stop_loss"] == 90.0
+    assert signal["target"] == 101.25
+    assert signal["risk_reward"] == 1.25
+
+
+def test_gap_is_primary_priority_and_atr_is_secondary():
+    high_gap_low_atr = {"gap_percent":4.0,"atr_pct":0.2}
+    lower_gap_high_atr = {"gap_percent":2.0,"atr_pct":5.0}
+    assert sort_key(high_gap_low_atr) > sort_key(lower_gap_high_atr)
+
+
+def test_gap_priority_uses_magnitude_for_sell():
+    larger_sell_gap = {"gap_percent":-5.0,"atr_pct":0.1}
+    smaller_sell_gap = {"gap_percent":-2.0,"atr_pct":10.0}
+    assert sort_key(larger_sell_gap) > sort_key(smaller_sell_gap)
 
 
 def test_paper_pnl_buy_and_sell():
@@ -71,15 +81,16 @@ def test_paper_pnl_buy_and_sell():
     assert PaperTradeEngine.calculate_pnl("SELL", 100, 97.5, 10) == 25.0
 
 
-def test_six_month_retention_keeps_current_and_previous_five(tmp_path):
-    path = Path(tmp_path) / "master.csv"
-    current = datetime.now(IST).date().replace(day=1)
-    rows = []
-    for offset in range(9):
-        month = pd.Timestamp(current) - pd.DateOffset(months=offset)
-        rows.append({"TradeDate": month.strftime("%Y-%m-10"), "Value": offset})
-    pd.DataFrame(rows).to_csv(path, index=False)
-    _prune_to_last_six_months(path, ["TradeDate"])
-    result = pd.read_csv(path)
-    assert len(result) == 6
-    assert result["Value"].tolist() == [0, 1, 2, 3, 4, 5]
+def test_strategy_uses_completed_minute_close_not_forming_candle():
+    engine = OpenReversalEngine("09:45", "14:00", 1.25)
+    now = datetime.now(IST).replace(second=0, microsecond=0)
+    previous = now - pd.Timedelta(minutes=2)
+    last_completed = now - pd.Timedelta(minutes=1)
+    data = pd.DataFrame([
+        {"Datetime":previous,"Open":105,"High":106,"Low":99,"Close":99.5},
+        {"Datetime":last_completed,"Open":99.5,"High":106,"Low":99,"Close":105},
+        {"Datetime":now,"Open":105,"High":110,"Low":104,"Close":110},
+    ])
+    completed = engine.latest_completed(data)
+    assert completed is not None
+    assert completed["Close"] == 105
