@@ -21,7 +21,7 @@ ensure_strategy2_running()
 render_nav()
 
 st.title("🔴 Strategy 2 — Gap-Up Extension Reversal SELL")
-st.caption("Dedicated Strategy 2 command center • ₹2,50,000 paper capital • NIFTY 500 • no ATR")
+st.caption("Dedicated command center • ₹2,50,000 paper capital • NIFTY 500 • no ATR")
 status = get_strategy2_status() or {}
 d = diagnostics()
 stt = state()
@@ -44,40 +44,22 @@ st.dataframe(pd.DataFrame([
     ("5. Stop", "Today's High at the trigger"),
     ("6. Target", "PDH"),
     ("7. Priority", "Largest opening GAP % from Previous Day Close first"),
-    ("8. Market/news", "NIFTY and news are protective confirmation filters; Strategy 2 remains independent"),
+    ("8. Market/news", "NIFTY and news are protective confirmation filters; not mixed with Strategy 1"),
     ("9. Risk", "₹1,400–₹1,500 intended risk • minimum 1.25R"),
 ], columns=["Step", "Rule"]), use_container_width=True, hide_index=True)
-
-# The Strategy 2 page uses the same 3+3 navigation pattern as Strategy 1.
-st.subheader("🔴 Strategy 2 Pages")
-st.caption("Same professional layout as Strategy 1 — but every page reads Strategy 2 data only.")
-
-rows = [
-    [("📌 CURRENT TRADING", "pages/strategy2_current.py"),
-     ("📊 COMPLETE ANALYSIS", "pages/strategy2_analysis.py"),
-     ("🔎 STOCK SCANNER", "pages/strategy2_scanner.py")],
-    [("📰 NEWS ANALYSIS", "pages/strategy2_news.py"),
-     ("⬇️ DOWNLOADS", "pages/strategy2_downloads.py"),
-     ("🔴 STRATEGY 2 HOME", "pages/strategy2.py")],
-]
-for row_index, row in enumerate(rows):
-    cols = st.columns(3, gap="small")
-    for col, (label, page) in zip(cols, row):
-        with col:
-            if st.button(label, key=f"strategy2_page_{row_index}_{label}", width="stretch"):
-                st.switch_page(page)
 
 st.divider()
 st.subheader("📡 Live Diagnostics")
 left, right = st.columns(2, gap="large")
 with left:
-    st.markdown("<div class='dashboard-info-card'>"
-                f"<div class='session-row'><span>Last scan</span><b>{status.get('last_scan') or 'Not scanned yet'}</b></div>"
-                f"<div class='session-row'><span>Signals</span><b>{int(status.get('last_signal_count', 0) or 0)}</b></div>"
-                f"<div class='session-row'><span>Candidates</span><b>{int(d.get('candidates', 0) or 0)}</b></div>"
-                f"<div class='session-row'><span>Qualified</span><b>{int(d.get('qualified', 0) or 0)}</b></div>"
-                f"<div class='session-row'><span>Approved</span><b>{int(d.get('signals', 0) or 0)}</b></div>"
-                "</div>", unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame([
+        ("Last scan", status.get("last_scan") or "Not scanned yet"),
+        ("Signals in last scan", int(status.get("last_signal_count", 0) or 0)),
+        ("Opening GAP candidates", int(d.get("candidates", 0) or 0)),
+        ("Qualified reversals", int(d.get("qualified", 0) or 0)),
+        ("Approved signals", int(d.get("signals", 0) or 0)),
+        ("Open positions", len(stt.get("open_positions", {}) or {})),
+    ], columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
 with right:
     rejection_rows = [{"Reason": k, "Count": v} for k, v in (d.get("rejections", {}) or {}).items()]
     if rejection_rows:
@@ -87,12 +69,12 @@ with right:
 
 st.subheader("🔒 Strategy Separation")
 st.dataframe(pd.DataFrame([
-    ("Capital", "Strategy 2 ₹2,50,000", "Strategy 1 capital never used", "SEPARATE"),
-    ("Positions", "Strategy 2 positions only", "Strategy 1 positions never used", "SEPARATE"),
-    ("Signals", "strategy2_signals.csv", "Strategy 1 signals.csv", "SEPARATE"),
-    ("Trades", "strategy2_trades.csv", "Strategy 1 trades.csv", "SEPARATE"),
+    ("Capital", "₹2,50,000 — Strategy 2", "Strategy 1 capital", "SEPARATE"),
+    ("Positions", "Strategy 2 positions", "Strategy 1 positions", "SEPARATE"),
+    ("Signals", "Strategy 2 signals", "Strategy 1 signals", "SEPARATE"),
+    ("Trades", "Strategy 2 trades", "Strategy 1 trades", "SEPARATE"),
     ("Logic", "Gap-Up Extension Reversal SELL", "PDH/PDL Return", "DIFFERENT"),
 ], columns=["Data", "Strategy 2", "Strategy 1", "Status"]), use_container_width=True, hide_index=True)
 
-st.caption("Paper trading only. Strategy 2 cannot use Strategy 1's capital, positions, journal, trade counts or risk state.")
+st.caption("Paper trading only • Strategy 2 cannot use Strategy 1's capital, positions, journal, trade counts or risk state.")
 render_daily_footer()
