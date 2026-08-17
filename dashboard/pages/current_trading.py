@@ -22,10 +22,13 @@ render_nav()
 def read(path, kind="json"):
     try: return json.loads(path.read_text()) if kind == "json" else pd.read_csv(path)
     except Exception: return {} if kind == "json" else pd.DataFrame()
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def live_nifty500():
     try:
-        pdx=PriceData(); candles=pdx.get_index_1m("^CRSLDX"); value=None if candles.empty else float(candles.iloc[-1]["Close"]); change=pdx.get_index_change_pct("^CRSLDX"); return value, None if change is None else float(change)
+        pdx=PriceData(); candles=pdx.get_index_1m("^CRSLDX")
+        value=None if candles.empty else float(candles.iloc[-1]["Close"])
+        change=pdx.get_index_change_pct("^CRSLDX")
+        return value, None if change is None else float(change)
     except Exception: return None,None
 def price(v):
     try:return f"₹{float(v):,.2f}"
@@ -60,13 +63,17 @@ metric_rows=[
     ("Market alignment passed",d.get("market_alignment_passed",0)),("Strategy setup passed",d.get("strategy_setup_passed",0)),("Final signals",d.get("final_signals",0)),
     ("BUY waiting",d.get("buy_waiting",0)),("SELL waiting",d.get("sell_waiting",0)),("BUY qualified",d.get("buy_qualified",0)),("SELL qualified",d.get("sell_qualified",0)),
 ]
-st.dataframe(pd.DataFrame(metric_rows,columns=["Stage","Count"]),width="stretch",hide_index=True)
-reason_rows=[(str(k).replace("_"," ").title(),v) for k,v in rejections.items()]
-if reason_rows: st.dataframe(pd.DataFrame(reason_rows,columns=["Rejection reason","Count"]),width="stretch",hide_index=True)
+metric_df=pd.DataFrame(metric_rows,columns=["Stage","Count"]); metric_df["Stage"]=metric_df["Stage"].astype(str); metric_df["Count"]=pd.to_numeric(metric_df["Count"],errors="coerce").fillna(0).astype(int)
+st.dataframe(metric_df,width="stretch",hide_index=True)
+reason_rows=[(str(k).replace("_"," ").title(),pd.to_numeric(pd.Series([v]),errors="coerce").fillna(0).iloc[0]) for k,v in rejections.items()]
+if reason_rows:
+    reason_df=pd.DataFrame(reason_rows,columns=["Rejection reason","Count"]);reason_df["Rejection reason"]=reason_df["Rejection reason"].astype(str);reason_df["Count"]=pd.to_numeric(reason_df["Count"],errors="coerce").fillna(0).astype(int);st.dataframe(reason_df,width="stretch",hide_index=True)
 rank=d.get("ranking",[]) if isinstance(d.get("ranking",[]),list) else []
 if rank:
     st.markdown("**Current highest-GAP qualified priority:**")
-    st.dataframe(pd.DataFrame(rank[:15]),width="stretch",hide_index=True)
+    rank_df=pd.DataFrame(rank[:15]);
+    for col in rank_df.columns: rank_df[col]=rank_df[col].map(lambda x: "" if pd.isna(x) else str(x))
+    st.dataframe(rank_df,width="stretch",hide_index=True)
 else: st.info("No final qualified signal has reached the entry gate yet. The counters above show exactly where candidates are stopping.")
 st.caption(f"Scanner: {status.get('scanner_status','—')} • Last scan: {status.get('last_scan_completed','—')} • Last error: {status.get('last_scan_error') or 'None'}")
 
@@ -136,7 +143,7 @@ if positions:
         try:qty=float(position.get("quantity",0) or 0);pnl=((float(ltp)-float(entry))*qty if side=="BUY" else (float(entry)-float(ltp))*qty) if ltp is not None and entry is not None else None
         except Exception:pass
         rows.append({"Stock":symbol,"Side":side,"Entry":price(entry),"LTP":price(ltp),"Live P&L":price(pnl),"SL":price(position.get("stop_loss")),"Target":price(position.get("target")),"Qty":position.get("quantity","—"),"Gap %":pct(position.get("gap_percent")),"News":position.get("news_sentiment","—")})
-    st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
+    st.dataframe(pd.DataFrame(rows).astype(str),width="stretch",hide_index=True)
 else:st.info("No open paper positions.")
 st.caption("Auto-refresh 5s • control cycle 30s • completed market data 1m • Paper trading only")
 render_daily_footer()
