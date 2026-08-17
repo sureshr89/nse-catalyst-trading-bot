@@ -19,7 +19,7 @@ class ScannerEngine:
     """Maintain BUY/SELL waiting states across 30-second control cycles."""
     def __init__(self):
         self.universe_engine=StockUniverse(); self.universe=self.universe_engine.get_dataframe(refresh=False); self.price_data=PriceData(); self.strategy=OpenReversalEngine(TRADING_START,LAST_ENTRY_TIME,RISK_REWARD_RATIO)
-        self.references=pd.DataFrame(); self.opening_candidates=pd.DataFrame(); self.gap_analysis=pd.DataFrame(); self.universe_market_data={}; self.nifty500_market_data=pd.DataFrame(); self._prepared_date=None; self._data_cache_at=None; self._nifty_cache_at=None; self._nifty_change=0.0
+        self.references=pd.DataFrame(); self.opening_candidates=pd.DataFrame(); self.gap_analysis=pd.DataFrame(); self.universe_market_data={}; self.nifty500_market_data=pd.DataFrame(); self._prepared_date=None; self._data_cache_at=None; self._daily_cache_at=None; self._nifty_cache_at=None; self._nifty_change=0.0; self.daily_open_data={}
         self._activated={"BUY":False,"SELL":False}; self._activated_at={"BUY":None,"SELL":None}; self.waiting={"BUY":{},"SELL":{}}; self.qualified={"BUY":{},"SELL":{}}; self.metrics_cache={}; self._load_waiting(); self.diagnostics=self._empty_diagnostics()
     @staticmethod
     def _empty_diagnostics():
@@ -65,20 +65,36 @@ class ScannerEngine:
         now=datetime.now(INDIA_TZ)
         if self._data_cache_at is not None and (now-self._data_cache_at).total_seconds()<55 and self.universe_market_data:return self.universe_market_data
         data=self.price_data.get_multi_1m(symbols); self.universe_market_data=data; self._data_cache_at=now; return data
+    def _daily_open_snapshot(self,symbols):
+        now=datetime.now(INDIA_TZ)
+        if self._daily_cache_at is not None and (now-self._daily_cache_at).total_seconds()<55 and self.daily_open_data:return self.daily_open_data
+        self.daily_open_data=self.price_data.get_multi_daily(symbols,period="5d"); self._daily_cache_at=now; return self.daily_open_data
     def _nifty_snapshot(self):
         now=datetime.now(INDIA_TZ)
         if self._nifty_cache_at is not None and (now-self._nifty_cache_at).total_seconds()<25:return self._nifty_change
         self.nifty500_market_data=self.price_data.get_index_1m("^CRSLDX"); change=self.price_data.get_index_change_pct("^CRSLDX")
         if change is None:return None
         self._nifty_change=float(change); self._nifty_cache_at=now; return self._nifty_change
-    def _build_gap_board(self,references,market_data):
-        rows=[]; gaps=[]
+    def _build_gap_board(self,references,market_data,daily_open_data=None):
+        rows=[]; gaps=[]; daily_open_data=daily_open_data or {}
         for _,ref in references.iterrows():
-            symbol=str(ref["Symbol"]).upper(); data=market_data.get(symbol)
-            if data is None or data.empty: continue
-            today=self.price_data.today_only(data)
-            if today.empty: continue
-            try: op=float(today.iloc[0]["Open"]); pdc=float(ref["PreviousDayClose"]); pdh=float(ref["PDH"]); pdl=float(ref["PDL"])
+            symbol=str(ref["Symbol"]).upper(); op=None
+            data=market_data.get(symbol) if isinstance(market_data,dict) else None
+            if data is not None and not data.empty:
+                today=self.price_data.today_only(data)
+                if not today.empty:
+                    try: op=float(today.iloc[0]["Open"])
+                    except (TypeError,ValueError): op=None
+            if op is None:
+                daily=daily_open_data.get(symbol)
+                if isinstance(daily,dict):
+                    try: op=float(daily.get("Open"))
+                    except (TypeError,ValueError): op=None
+                elif isinstance(daily,pd.DataFrame) and not daily.empty:
+                    try: op=float(daily.iloc[0]["Open"])
+                    except (TypeError,ValueError): op=None
+            if op is None: continue
+            try: pdc=float(ref["PreviousDayClose"]); pdh=float(ref["PDH"]); pdl=float(ref["PDL"])
             except (TypeError,ValueError): continue
             industry=self._industry_for_symbol(symbol)
             if op>pdh: gap_type,setup,level="GAP_UP","OPEN_ABOVE_PDH",pdh
@@ -92,7 +108,7 @@ class ScannerEngine:
     def prepare_opening_candidates(self,force=False):
         refs=self.prepare_reference_data(force=force)
         if refs.empty:return pd.DataFrame()
-        symbols=refs["Symbol"].astype(str).str.upper().drop_duplicates().tolist(); return self._build_gap_board(refs,self._market_snapshot(symbols))
+        symbols=refs["Symbol"].astype(str).str.upper().drop_duplicates().tolist(); market=self._market_snapshot(symbols); daily=self._daily_open_snapshot(symbols); return self._build_gap_board(refs,market,daily)
     def _activate_side(self,side,change):
         active=change>=NIFTY500_MIN_CHANGE_PCT if side=="BUY" else change<=-NIFTY500_MIN_CHANGE_PCT
         if active and not self._activated[side]: self._activated[side]=True; self._activated_at[side]=datetime.now(INDIA_TZ).isoformat(timespec="seconds")
@@ -143,15 +159,13 @@ class ScannerEngine:
         if refs.empty:
             self.diagnostics["rejections"]["missing_data"]="REFERENCE_DATA_UNAVAILABLE"; return self._finish([])
         symbols=refs["Symbol"].astype(str).str.upper().drop_duplicates().tolist(); self.diagnostics["stocks_scanned"]=len(symbols); data=self._market_snapshot(symbols); self.universe_market_data=data
-        available=sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"]=round(available/len(symbols),4) if symbols else 0.0
-        self.diagnostics["coverage_required"]=MIN_MARKET_DATA_COVERAGE
-        if available<max(1,int(len(symbols)*MIN_MARKET_DATA_COVERAGE)):
-            self.diagnostics["rejections"]["missing_data"]=len(symbols)-available; self._write_diagnostics(); return self._finish([])
+        available=sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"]=round(available/len(symbols),4) if symbols else 0.0; self.diagnostics["coverage_required"]=MIN_MARKET_DATA_COVERAGE
+        daily=self._daily_open_snapshot(symbols); opening=self._build_gap_board(self.references,data,daily); self.diagnostics["opening_setup_passed"]=len(opening)
+        if available==0: self.diagnostics["rejections"]["missing_data"]=len(symbols); self._write_diagnostics(); return self._finish([])
         change=self._nifty_snapshot()
         if change is None:
             self.diagnostics["rejections"]["missing_data"]="NIFTY500_INDEX_UNAVAILABLE"; return self._finish([])
         self.diagnostics["nifty500_change_pct"]=round(change,4); self.diagnostics["nifty500_direction"]="BULLISH" if change>=NIFTY500_MIN_CHANGE_PCT else "BEARISH" if change<=-NIFTY500_MIN_CHANGE_PCT else "NEUTRAL"; self.diagnostics["nifty500_bullish"]=int(change>=NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_bearish"]=int(change<=-NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_neutral"]=int(abs(change)<NIFTY500_MIN_CHANGE_PCT)
-        opening=self._build_gap_board(self.references,data); self.diagnostics["opening_setup_passed"]=len(opening)
         self._seed_and_update("BUY",change,data); self._seed_and_update("SELL",change,data)
         self.diagnostics["market_alignment_passed"]=sum(1 for side in ("BUY","SELL") if self.strategy.market_aligned(side,change)); self.diagnostics["strategy_setup_passed"]=len(self.qualified["BUY"])+len(self.qualified["SELL"])
         signals=self._final_signals(change,data); self.diagnostics["final_signals"]=len(signals); self._save_waiting(); return self._finish(signals)
