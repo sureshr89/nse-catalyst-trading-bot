@@ -12,7 +12,7 @@ from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from strategy2_worker import ensure_strategy2_running, get_strategy2_status
-from dashboard.strategy2_data import status, diagnostics, state, signals, gaps, format_price, format_pct, today_signals, approved_today
+from dashboard.strategy2_data import status, diagnostics, state, format_price, format_pct, today_signals
 
 st.set_page_config(page_title="NSE Catalyst | Strategy 2 Current", page_icon="🔴", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
@@ -44,19 +44,18 @@ st.dataframe(pd.DataFrame([
     ("Target", "PDH"),
     ("Priority", "Largest opening GAP % from Previous Day Close first"),
     ("NIFTY", "Only clearly bullish NIFTY 500 (> +0.25%) blocks the short"),
-    ("Risk", "Same ₹1,400–₹1,500 intended risk / 1.25R gate as Strategy 1"),
+    ("Risk", "₹1,400–₹1,500 intended risk / minimum 1.25R"),
 ], columns=["Condition", "Rule"]), use_container_width=True, hide_index=True)
 
 st.subheader("📡 Live Scan State")
-last_scan = s.get("last_scan") or "Not scanned yet"
-st.write({
-    "last_scan": last_scan,
-    "signals_in_last_scan": int(s.get("last_signal_count", 0) or 0),
-    "opening_gap_candidates": int(d.get("candidates", 0) or 0),
-    "qualified_reversals": int(d.get("qualified", 0) or 0),
-    "approved_signals": int(d.get("signals", 0) or 0),
-    "rejections": d.get("rejections", {}) or {},
-})
+scan_rows = [
+    ("Last scan", s.get("last_scan") or "Not scanned yet"),
+    ("Signals in last scan", int(s.get("last_signal_count", 0) or 0)),
+    ("Opening GAP candidates", int(d.get("candidates", 0) or 0)),
+    ("Qualified reversals", int(d.get("qualified", 0) or 0)),
+    ("Approved signals", int(d.get("signals", 0) or 0)),
+]
+st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
 
 st.subheader("🎯 Today's Qualified / Approved Signals")
 q = today_signals()
