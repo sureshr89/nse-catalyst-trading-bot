@@ -64,16 +64,20 @@ def test_build_signal_sell_target_and_stop():
     assert signal["risk_reward"] == 1.25
 
 
-def test_gap_is_primary_priority_and_atr_is_secondary():
-    high_gap_low_atr = {"gap_percent":4.0,"atr_pct":0.2}
-    lower_gap_high_atr = {"gap_percent":2.0,"atr_pct":5.0}
-    assert sort_key(high_gap_low_atr) > sort_key(lower_gap_high_atr)
+def test_highest_gap_is_always_first_regardless_of_other_metrics():
+    high_gap = {"gap_percent":4.0,"volume":1}
+    lower_gap = {"gap_percent":2.0,"volume":100}
+    assert sort_key(high_gap) > sort_key(lower_gap)
 
 
 def test_gap_priority_uses_magnitude_for_sell():
-    larger_sell_gap = {"gap_percent":-5.0,"atr_pct":0.1}
-    smaller_sell_gap = {"gap_percent":-2.0,"atr_pct":10.0}
+    larger_sell_gap = {"gap_percent":-5.0}
+    smaller_sell_gap = {"gap_percent":-2.0}
     assert sort_key(larger_sell_gap) > sort_key(smaller_sell_gap)
+
+
+def test_equal_gap_has_equal_priority():
+    assert sort_key({"gap_percent":3.0}) == sort_key({"gap_percent":-3.0})
 
 
 def test_paper_pnl_buy_and_sell():
