@@ -87,17 +87,23 @@ class OpenReversalEngine:
         pdh = float(pdh)
         pdl = float(pdl)
         if side == "BUY":
+            breached_now = False
             if not state.get("pdh_breached") and close < pdh:
                 state["pdh_breached"] = True
                 state["pdh_breach_time"] = stamp
-            if state.get("pdh_breached") and close >= open_price:
+                breached_now = True
+            # Breach and return must occur on separate completed observations.
+            if state.get("pdh_breached") and not breached_now and close >= open_price:
                 state["open_returned"] = True
                 state["qualified_time"] = stamp
         elif side == "SELL":
+            breached_now = False
             if not state.get("pdl_breached") and close > pdl:
                 state["pdl_breached"] = True
                 state["pdl_breach_time"] = stamp
-            if state.get("pdl_breached") and close <= open_price:
+                breached_now = True
+            # Breach and return must occur on separate completed observations.
+            if state.get("pdl_breached") and not breached_now and close <= open_price:
                 state["open_returned"] = True
                 state["qualified_time"] = stamp
         return state
