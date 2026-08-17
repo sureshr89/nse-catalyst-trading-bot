@@ -3,12 +3,17 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 from config.settings import ENABLE_LONG, ENABLE_SHORT, NIFTY500_MIN_CHANGE_PCT
+from strategy.contracts import STRATEGY_VERSION, STRATEGY_1_NAME
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class OpenReversalEngine:
     """State-based setup evaluator using completed 1-minute CLOSE data only."""
+
+    strategy_id = "STRATEGY_1"
+    strategy_name = STRATEGY_1_NAME
+    strategy_version = STRATEGY_VERSION
 
     def __init__(self, trading_start="09:45", last_entry_time="14:00", rr=1.25):
         self.start = self._time(trading_start)
@@ -61,9 +66,6 @@ class OpenReversalEngine:
 
     def update_state(self, state, today_open, pdh, pdl, completed_close, stamp=None):
         state = dict(state)
-        # A missing stamp is intentionally treated as a synthetic/test observation.
-        # Production scanner calls provide the actual candle timestamp, which is
-        # checked against the current minute so a forming candle can never qualify.
         if stamp is None:
             stamp = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
             validate_stamp = False
@@ -92,7 +94,6 @@ class OpenReversalEngine:
                 state["pdh_breached"] = True
                 state["pdh_breach_time"] = stamp
                 breached_now = True
-            # Breach and return must occur on separate completed observations.
             if state.get("pdh_breached") and not breached_now and close >= open_price:
                 state["open_returned"] = True
                 state["qualified_time"] = stamp
@@ -102,7 +103,6 @@ class OpenReversalEngine:
                 state["pdl_breached"] = True
                 state["pdl_breach_time"] = stamp
                 breached_now = True
-            # Breach and return must occur on separate completed observations.
             if state.get("pdl_breached") and not breached_now and close <= open_price:
                 state["open_returned"] = True
                 state["qualified_time"] = stamp
@@ -121,6 +121,9 @@ class OpenReversalEngine:
         target = entry + risk * self.rr if side == "BUY" else entry - risk * self.rr
         signal = {
             "symbol": str(symbol).upper(),
+            "strategy": self.strategy_id,
+            "strategy_name": self.strategy_name,
+            "strategy_version": self.strategy_version,
             "signal": side,
             "entry_time": datetime.now(INDIA_TZ).isoformat(timespec="seconds"),
             "entry": round(entry, 4),
