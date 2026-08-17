@@ -88,9 +88,12 @@ class ScannerEngine:
             if op>pdh: gap_type,setup,level="GAP_UP","OPEN_ABOVE_PDH",pdh
             elif op<pdl: gap_type,setup,level="GAP_DOWN","OPEN_BELOW_PDL",pdl
             else: gap_type,setup,level="INSIDE_PDH_PDL","NO_GAP_SETUP",None
-            gap=op-level if level is not None else 0.0; gap_pct=gap/level*100 if level else 0.0; close_gap=op-pdc; close_gap_pct=close_gap/pdc*100 if pdc else 0.0
-            gaps.append({"Symbol":symbol,"Industry":industry,"PreviousClose":round(pdc,4),"TodayOpen":round(op,4),"Gap":round(gap,4),"GapPercent":round(gap_pct,3),"GapFromPreviousClose":round(close_gap,4),"GapPercentFromPreviousClose":round(close_gap_pct,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
-            if setup!="NO_GAP_SETUP": rows.append({"Symbol":symbol,"Industry":industry,"PDH":pdh,"PDL":pdl,"TodayOpen":op,"PreviousDayClose":pdc,"Gap":gap,"GapPercent":gap_pct,"GapFromPreviousClose":close_gap,"GapPercentFromPreviousClose":close_gap_pct,"GapType":gap_type,"OpeningSetup":setup})
+            # "Gap" for priority means today's opening gap versus previous-day close.
+            # PDH/PDL is used only to decide whether the opening setup qualifies.
+            gap_from_close=op-pdc; gap_pct_from_close=gap_from_close/pdc*100 if pdc else 0.0
+            setup_gap=op-level if level is not None else 0.0; setup_gap_pct=setup_gap/level*100 if level else 0.0
+            gaps.append({"Symbol":symbol,"Industry":industry,"PreviousClose":round(pdc,4),"TodayOpen":round(op,4),"Gap":round(gap_from_close,4),"GapPercent":round(gap_pct_from_close,3),"GapFromPDH_PDL":round(setup_gap,4),"GapPercentFromPDH_PDL":round(setup_gap_pct,3),"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_from_close,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
+            if setup!="NO_GAP_SETUP": rows.append({"Symbol":symbol,"Industry":industry,"PDH":pdh,"PDL":pdl,"TodayOpen":op,"PreviousDayClose":pdc,"Gap":gap_from_close,"GapPercent":gap_pct_from_close,"GapFromPDH_PDL":setup_gap,"GapPercentFromPDH_PDL":setup_gap_pct,"GapFromPreviousClose":gap_from_close,"GapPercentFromPreviousClose":gap_pct_from_close,"GapType":gap_type,"OpeningSetup":setup})
         self.gap_analysis=pd.DataFrame(gaps).drop_duplicates("Symbol") if gaps else pd.DataFrame(); self.opening_candidates=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame(); self._write_gap_analysis(gaps)
         self.diagnostics["gap_data_count"]=len(self.gap_analysis); self.diagnostics["gap_up_count"]=int((self.gap_analysis.get("GapType",pd.Series(dtype=str))=="GAP_UP").sum()); self.diagnostics["gap_down_count"]=int((self.gap_analysis.get("GapType",pd.Series(dtype=str))=="GAP_DOWN").sum()); self.diagnostics["opening_setup_passed"]=len(self.opening_candidates); return self.opening_candidates
     def prepare_opening_candidates(self,force=False):
