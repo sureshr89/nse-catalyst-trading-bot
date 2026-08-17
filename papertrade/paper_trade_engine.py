@@ -56,29 +56,13 @@ class PaperTradeEngine:
         symbol=str(position.get("symbol",key)).strip().upper(); signal=str(position.get("signal","")).strip().upper(); entry=self._number(position.get("entry")); stop=self._number(position.get("stop_loss")); target=self._number(position.get("target")); quantity=self._number(position.get("quantity"))
         return bool(symbol and symbol==str(key).strip().upper() and signal in {"BUY","SELL"} and entry and entry>0 and stop and stop>0 and target and target>0 and quantity and quantity>0 and int(quantity)==quantity and position.get("trade_id"))
     def _quarantine_state_file(self,path):
-        """Preserve a state created by a newer incompatible bot version instead of deleting it."""
         try:
-            stamp=datetime.now(INDIA_TZ).strftime("%Y%m%d_%H%M%S")
-            target=f"{path}.future_{stamp}"
-            os.replace(path,target)
-            print(f"Future paper state preserved at {target}; starting without loading it.")
-        except OSError as error:
-            print(f"Future paper state could not be quarantined: {type(error).__name__}: {error}")
+            stamp=datetime.now(INDIA_TZ).strftime("%Y%m%d_%H%M%S"); target=f"{path}.future_{stamp}"; os.replace(path,target); print(f"Future paper state preserved at {target}; starting without loading it.")
+        except OSError as error: print(f"Future paper state could not be quarantined: {type(error).__name__}: {error}")
     def _migrate_state(self,state,version):
-        """Migrate known older schemas by filling fields that current recovery expects."""
-        migrated=dict(state)
-        migrated.setdefault("strategy","NIFTY_500_PDH_PDL_OPEN_RETURN")
-        migrated.setdefault("open_positions",{})
-        migrated.setdefault("closed_positions",[])
-        migrated.setdefault("trade_counter",0)
-        migrated.setdefault("total_capital",TOTAL_CAPITAL)
-        migrated.setdefault("available_capital",migrated.get("total_capital",TOTAL_CAPITAL))
-        migrated.setdefault("used_capital",0.0)
-        migrated.setdefault("session_date",migrated.get("saved_at"))
-        if not isinstance(migrated.get("open_positions"),dict) or not isinstance(migrated.get("closed_positions"),list):
-            raise ValueError(f"Unsupported paper state collections in legacy version {version}")
-        migrated["state_version"]=STATE_VERSION
-        return migrated
+        migrated=dict(state); migrated.setdefault("strategy","NIFTY_500_PDH_PDL_OPEN_RETURN"); migrated.setdefault("open_positions",{}); migrated.setdefault("closed_positions",[]); migrated.setdefault("trade_counter",0); migrated.setdefault("total_capital",TOTAL_CAPITAL); migrated.setdefault("available_capital",migrated.get("total_capital",TOTAL_CAPITAL)); migrated.setdefault("used_capital",0.0); migrated.setdefault("session_date",migrated.get("saved_at"))
+        if not isinstance(migrated.get("open_positions"),dict) or not isinstance(migrated.get("closed_positions"),list): raise ValueError(f"Unsupported paper state collections in legacy version {version}")
+        migrated["state_version"]=STATE_VERSION; return migrated
     def _restore_state(self):
         path=self._state_path()
         try:
@@ -93,25 +77,20 @@ class PaperTradeEngine:
             migrated=version<STATE_VERSION
             if migrated:state=self._migrate_state(state,version)
             restored_open=state.get("open_positions",{}); restored_closed=state.get("closed_positions",[])
-            if not isinstance(restored_open,dict) or not isinstance(restored_closed,list):
-                raise ValueError("Invalid persisted paper state collections")
-            self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if self._valid_open_position(symbol,position)}
-            self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
+            if not isinstance(restored_open,dict) or not isinstance(restored_closed,list):raise ValueError("Invalid persisted paper state collections")
+            self.open_positions={str(symbol).strip().upper():position for symbol,position in restored_open.items() if self._valid_open_position(symbol,position)}; self.closed_positions=[position for position in restored_closed if isinstance(position,dict)]
             saved_date=self._session_date(state.get("session_date") or state.get("saved_at")); today=datetime.now(INDIA_TZ).date()
             if saved_date is not None and saved_date != today:
                 print(f"Stale paper session state ({saved_date}) detected; clearing old session results for {today}."); self.open_positions={}; self.closed_positions=[]
-            for position in self.open_positions.values():
-                position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("last_processed_candle",self._candle_key(position.get("entry_time")))
-            for position in self.closed_positions:
-                position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("exit_reason","")
+            for position in self.open_positions.values():position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("last_processed_candle",self._candle_key(position.get("entry_time")))
+            for position in self.closed_positions:position.setdefault("mae",0.0); position.setdefault("mfe",0.0); position.setdefault("exit_reason","")
             self.total_capital=float(state.get("total_capital",TOTAL_CAPITAL) or TOTAL_CAPITAL)
             counters=[self._trade_number(p.get("trade_id")) for p in self.open_positions.values()]+[self._trade_number(p.get("trade_id")) for p in self.closed_positions]; counter=int(state.get("trade_counter",0) or 0)
             try:
                 journal=pd.read_csv(TRADE_LOG_FILE)
                 if "trade_id" in journal.columns:counters.extend(journal["trade_id"].map(self._trade_number).tolist())
             except Exception:pass
-            self.trade_counter=max([counter,*counters],default=0)
-            self.used_capital=round(sum(float(p.get("entry",0) or 0)*int(float(p.get("quantity",0) or 0)) for p in self.open_positions.values()),2); self.available_capital=round(self.total_capital-self.used_capital,2)
+            self.trade_counter=max([counter,*counters],default=0); self.used_capital=round(sum(float(p.get("entry",0) or 0)*int(float(p.get("quantity",0) or 0)) for p in self.open_positions.values()),2); self.available_capital=round(self.total_capital-self.used_capital,2)
             if self.available_capital<0:raise ValueError("Persisted open positions exceed total capital")
             if migrated:self._save_state()
         except Exception as error:print(f"Paper state restore skipped: {type(error).__name__}: {error}")
@@ -187,7 +166,10 @@ class PaperTradeEngine:
         now=datetime.now(INDIA_TZ)
         session_start=time(9,15); session_end=time(15,30)
         if parsed.date()!=now.date():return None
-        if parsed.to_pydatetime()>now:return None
+        # A candle stamped at the current minute is still forming. Only a candle
+        # whose timestamp is strictly before the current minute may trigger SL/TP.
+        current_minute=now.replace(second=0,microsecond=0)
+        if parsed.to_pydatetime()>=current_minute:return None
         if not (session_start<=parsed.time()<=session_end):return None
         key=self._candle_key(parsed); exit_timestamp=key; position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
         if key and last and key<=last:return None
