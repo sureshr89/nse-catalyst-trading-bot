@@ -2,24 +2,21 @@ import streamlit as st
 
 
 def _link(label, page):
-    # st.page_link does not support a key parameter.
+    """Version-safe Streamlit navigation link."""
     st.page_link(page, label=label)
 
 
 def _row(left, right):
-    with st.container(
-        horizontal=True,
-        horizontal_alignment="distribute",
-        vertical_alignment="center",
-        gap="small",
-        width="stretch",
-    ):
+    """Stable 2-column navigation compatible with older/newer Streamlit versions."""
+    cols = st.columns(2)
+    with cols[0]:
         _link(left[0], left[1])
+    with cols[1]:
         _link(right[0], right[1])
 
 
 def render_nav(top_offset=0):
-    """Clean 2x2 native Streamlit navigation. News is intentionally absent."""
+    """Clean mobile-friendly 2x2 navigation. News is intentionally absent."""
     offset = max(0, int(top_offset or 0))
     if offset:
         st.write("")
@@ -40,12 +37,16 @@ def render_nav(top_offset=0):
         .nse-nav-title.s2 { color: #FF9292; }
         [data-testid="stPageLink"] a {
             min-height: 52px !important;
+            width: 100% !important;
             border: 1px solid #303A4B !important;
             border-radius: 12px !important;
             background: #151B26 !important;
-            padding: 8px 10px !important;
+            padding: 8px 6px !important;
             box-sizing: border-box !important;
             justify-content: center !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
         }
         [data-testid="stPageLink"] a:hover {
             border-color: #59769F !important;
@@ -53,9 +54,9 @@ def render_nav(top_offset=0):
         }
         @media (max-width: 600px) {
             [data-testid="stPageLink"] a {
-                min-height: 50px !important;
-                padding: 7px 5px !important;
-                font-size: .76rem !important;
+                min-height: 48px !important;
+                padding: 6px 3px !important;
+                font-size: .72rem !important;
             }
         }
         </style>
