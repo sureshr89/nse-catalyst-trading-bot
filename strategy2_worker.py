@@ -56,8 +56,9 @@ def _run():
                     try:
                         scanner.prepare_reference_data()
                         scanner.prepare_opening_candidates()
+                        scanner._nifty_snapshot()
                         prepared = True
-                        _write(status="WAITING", message="Strategy 2 opening-gap candidates prepared.", worker_alive=True)
+                        _write(status="WAITING", message="Strategy 2 opening-gap candidates and NIFTY 500 data prepared.", worker_alive=True)
                     except Exception as error:
                         _write(status="ERROR", message=f"Preparation error: {type(error).__name__}: {error}", worker_alive=True)
                 time.sleep(10)
@@ -65,8 +66,9 @@ def _run():
             if hhmm < SQUARE_OFF_TIME:
                 started = _now()
                 try:
+                    scanner._nifty_snapshot()
                     signals = _runtime.run_cycle()
-                    _write(status="RUNNING", message="Strategy 2 is scanning every 30 seconds.", worker_alive=True, last_scan=started.isoformat(timespec="seconds"), last_signal_count=len(signals or []), diagnostics=_runtime.diagnostics, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl)
+                    _write(status="RUNNING", message="Strategy 2 is scanning every 30 seconds.", worker_alive=True, last_scan=started.isoformat(timespec="seconds"), last_signal_count=len(signals or []), diagnostics=_runtime.diagnostics, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl, nifty500_change_pct=scanner._nifty_change)
                 except Exception as error:
                     _write(status="ERROR", message=f"Strategy 2 scan error: {type(error).__name__}: {error}", worker_alive=True)
                 time.sleep(SCAN_INTERVAL_SECONDS)
