@@ -3,23 +3,34 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import threading
+import time
 import pandas as pd
 import yfinance as yf
 
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
+_REF_LOCK=threading.RLock(); _LAST_CALL=0.0
+
 class ReferenceStore:
     def __init__(self,universe_df):
-        self.universe=universe_df.copy();self.folder=Path("outputs")/"open_reversal_references";self.folder.mkdir(parents=True,exist_ok=True);self.batch_size=25;self.max_workers=4;self.minimum_coverage=0.60
+        self.universe=universe_df.copy(); self.folder=Path("outputs")/"open_reversal_references"; self.folder.mkdir(parents=True,exist_ok=True)
+        self.batch_size=50; self.max_workers=2; self.minimum_coverage=0.60
     @property
     def date_key(self):return datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
     @property
     def path(self):return self.folder/f"nifty500_open_reversal_{self.date_key}.csv"
     @staticmethod
     def _ticker(symbol):
-        symbol=str(symbol).strip().upper();return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
+        symbol=str(symbol).strip().upper(); return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
     def _download_batch(self,tickers):
+        global _LAST_CALL
+        with _REF_LOCK:
+            wait=0.25-(time.monotonic()-_LAST_CALL)
+            if wait>0:time.sleep(wait)
+            _LAST_CALL=time.monotonic()
         try:return yf.download(tickers=tickers,period="10d",interval="1d",auto_adjust=False,progress=False,threads=False,group_by="ticker",timeout=10)
-        except Exception:return pd.DataFrame()
+        except Exception as error:
+            print(f"Reference batch failed: {type(error).__name__}: {error}"); return pd.DataFrame()
     def _coverage_ok(self,df):
         if df is None or df.empty or self.universe.empty:return False
         required=max(1,int(len(self.universe)*self.minimum_coverage));u=set(self.universe["Symbol"].astype(str).str.upper());s=set(df["Symbol"].astype(str).str.upper()) if "Symbol" in df.columns else set();return len(u&s)>=required
@@ -35,7 +46,7 @@ class ReferenceStore:
                 saved=pd.read_csv(self.path)
                 if self._cached_file_is_valid(saved):return saved
             except Exception:pass
-        symbols=self.universe["Symbol"].astype(str).str.upper().tolist();tickers=[self._ticker(s) for s in symbols];today=datetime.now(INDIA_TZ).date();rows=[]
+        symbols=self.universe["Symbol"].astype(str).str.upper().drop_duplicates().tolist();tickers=[self._ticker(s) for s in symbols];today=datetime.now(INDIA_TZ).date();rows=[]
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures={executor.submit(self._download_batch,tickers[i:i+self.batch_size]):tickers[i:i+self.batch_size] for i in range(0,len(tickers),self.batch_size)}
             for future in as_completed(futures):
