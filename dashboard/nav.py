@@ -2,7 +2,7 @@ import streamlit as st
 
 
 def render_nav(top_offset=0):
-    """Shared 2x2 navigation for the dashboard pages."""
+    """Shared dashboard navigation for Strategy 1 and Strategy 2."""
     offset = max(0, int(top_offset or 0))
     st.markdown(f'''<style>
 .st-key-global_nav{{position:relative!important;margin:{offset}px 0 12px!important;padding:0!important;width:100%!important}}
@@ -19,19 +19,26 @@ def render_nav(top_offset=0):
             if st.button("🟢 BOT STATUS", key="global_nav_bot", width="stretch"):
                 st.switch_page("app.py")
         with r2:
-            if st.button("📌 CURRENT TRADING", key="global_nav_current", width="stretch"):
-                st.switch_page("pages/current_trading.py")
+            if st.button("🔴 STRATEGY 2", key="global_nav_s2", width="stretch"):
+                st.switch_page("pages/strategy2.py")
         r3, r4 = st.columns(2, gap="small")
         with r3:
+            if st.button("📌 CURRENT TRADING", key="global_nav_current", width="stretch"):
+                st.switch_page("pages/current_trading.py")
+        with r4:
             if st.button("📊 ANALYSIS", key="global_nav_analysis", width="stretch"):
                 st.switch_page("pages/analysis.py")
-        with r4:
-            if st.button("🔎 STOCK SCANNER", key="global_nav_scanner", width="stretch"):
-                st.switch_page("pages/stock_scanner.py")
         r5, r6 = st.columns(2, gap="small")
         with r5:
+            if st.button("🔎 STOCK SCANNER", key="global_nav_scanner", width="stretch"):
+                st.switch_page("pages/stock_scanner.py")
+        with r6:
             if st.button("📰 NEWS ANALYSIS", key="global_nav_news", width="stretch"):
                 st.switch_page("pages/news_analysis.py")
-        with r6:
+        r7, r8 = st.columns(2, gap="small")
+        with r7:
             if st.button("⬇️ DOWNLOADS", key="global_nav_downloads", width="stretch"):
                 st.switch_page("pages/downloads.py")
+        with r8:
+            if st.button("🟢 STRATEGY 1", key="global_nav_s1", width="stretch"):
+                st.switch_page("pages/current_trading.py")
