@@ -135,3 +135,6 @@ def test_user_facing_dashboard_has_no_legacy_volatility_labels():
         source = path.read_text(encoding="utf-8").lower()
         for label in forbidden:
             assert label not in source, f"Legacy volatility label '{label}' remains in {path}"
+
+
+# Regression suite is intentionally kept aligned with the production completed-candle guard.
