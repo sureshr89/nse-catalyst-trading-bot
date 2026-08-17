@@ -30,12 +30,12 @@ def pct(v):
 def metric_cards(items):
     html="<div class='metric-grid'>"+"".join(f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a,b in items)+"</div>"
     st.markdown(html, unsafe_allow_html=True)
-gaps=read_csv(ROOT/"outputs/gap_analysis.csv"); waiting=read_json(ROOT/"outputs/waiting_candidates.json"); state=read_json(ROOT/"outputs/paper_engine_state.json"); diag=read_json(ROOT/"outputs/scanner_diagnostics.json"); news=read_csv(ROOT/"outputs/MASTER_NEWS_ANALYSIS.csv")
+gaps=read_csv(ROOT/"outputs/gap_analysis.csv"); waiting=read_json(ROOT/"outputs/waiting_candidates.json"); state=read_json(ROOT/"outputs/paper_engine_state.json"); diag=read_json(ROOT/"outputs/scanner_diagnostics.json")
 try: ensure_bot_running()
 except Exception: pass
 positions=state.get("open_positions",{}) if isinstance(state,dict) else {}; market_change=float(diag.get("nifty500_change_pct",0) or 0); now=datetime.now(INDIA_TZ); waiting_data=waiting.get("waiting",{}) if isinstance(waiting,dict) else {}; qualified_data=waiting.get("qualified",{}) if isinstance(waiting,dict) else {}
 st.title("🔎 NIFTY 500 Stock Scanner")
-st.caption("Workflow: highest qualifying GAP first → strategy/risk/news validation → paper entry")
+st.caption("Workflow: highest qualifying GAP first → strategy/risk validation → paper entry")
 metric_cards([("BUY waiting",len(waiting_data.get("BUY",{}))), ("SELL waiting",len(waiting_data.get("SELL",{}))), ("BUY qualified",len(qualified_data.get("BUY",{}))), ("SELL qualified",len(qualified_data.get("SELL",{})))])
 st.caption(f"NIFTY 500 {market_change:+.2f}% • 1-minute completed-candle logic • Updated {now.strftime('%H:%M:%S')} IST")
 st.subheader("🏆 Priority Ranking — Highest Gap First")
@@ -68,11 +68,5 @@ else:
     for c in ["GapPercent","GapPercentFromPreviousClose"]:
         if c in view.columns: view[c]=view[c].map(pct)
     st.dataframe(view,width="stretch",hide_index=True,height=520)
-st.subheader("📰 Final News Decisions")
-if not news.empty:
-    cols=[c for c in ["timestamp","symbol","signal","news_sentiment","news_confidence","news_headline","news_reason","approved"] if c in news.columns]
-    if cols: st.dataframe(news[cols].tail(30).iloc[::-1],width="stretch",hide_index=True,height=320)
-    else: st.info("No news decision columns available.")
-else: st.info("No news decisions recorded yet.")
 st.caption("Strategy: qualifying gap → PDH/PDL breach → return to Today's Open using completed 1-minute CLOSE → current-price/risk validation. Industry/Sector is informational only. Paper trading only.")
 render_daily_footer()
