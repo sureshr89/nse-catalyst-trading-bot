@@ -58,7 +58,7 @@ def render_nav(top_offset=0):
             with c:
                 st.empty()
 
-        st.markdown("<div class='nav-title nav-s2'>🔴 STRATEGY 2 — GAP-UP EXTENSION SELL</div>", unsafe_allow_html=True)
+        st.markdown("<div class='nav-title nav-s2'>🔴 STRATEGY 2 — GAP EXTENSION REVERSAL BUY + SELL</div>", unsafe_allow_html=True)
         with st.container(key="nav_s2_row"):
             a, b, c = st.columns(3, gap="small")
             with a:
