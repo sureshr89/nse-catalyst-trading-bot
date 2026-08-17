@@ -38,7 +38,7 @@ st.dataframe(__import__("pandas").DataFrame([
     ("BUY", "Open < PDL → price extends below Open after 09:45 → first completed 1m CLOSE above Open → BUY"),
     ("BUY risk", "SL = Today's Low at trigger • Target = PDL"),
     ("Priority", "Largest absolute opening GAP % versus Previous Day Close first"),
-    ("Market", "NIFTY confirmation is the only market-level filter; no news filter or news analysis"),
+    ("Market", "NIFTY confirmation is the only market-level filter"),
     ("Capital", "Separate ₹2,50,000 paper account; never mixed with Strategy 1"),
     ("Timing", "30-second control cycle • completed 1-minute strategy candles"),
 ], columns=["Item", "Rule"]), use_container_width=True, hide_index=True)
