@@ -34,10 +34,25 @@ def test_strategy2_enters_on_first_completed_close_below_open():
     assert result["stop_loss"] == 104.5
 
 
+def test_strategy2_first_close_is_only_trigger():
+    engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
+    data = _data([104.5, 102.9, 101.5], [104.5, 103.4, 102.0])
+    # First close below open has insufficient RR, so the later lower close
+    # must not create a second opportunity.
+    assert engine.evaluate("TEST", data, 103, 100, 100, -0.2) is None
+
+
+def test_strategy2_small_positive_nifty_is_allowed():
+    engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
+    data = _data([104, 104.5, 102.5], [104.2, 104.5, 103.5])
+    result = engine.evaluate("TEST", data, 103, 100, 100, 0.1)
+    assert result is not None
+
+
 def test_strategy2_rejects_clearly_bullish_nifty():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
     data = _data([104, 104.5, 102.5], [104.2, 104.5, 103.5])
-    assert engine.evaluate("TEST", data, 103, 100, 100, 0.1) is None
+    assert engine.evaluate("TEST", data, 103, 100, 100, 0.3) is None
 
 
 def test_strategy2_has_no_atr_dependency():
