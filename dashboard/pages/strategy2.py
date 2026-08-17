@@ -1,84 +1,73 @@
 from pathlib import Path
 import sys
-import json
-import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 
 from dashboard.nav import render_nav
 from dashboard.style import load_css
+from dashboard.daily_footer import render_daily_footer
 from strategy2_worker import ensure_strategy2_running, get_strategy2_status
+from dashboard.strategy2_data import diagnostics, state, format_price, format_pct
 
-st.set_page_config(page_title="NSE Catalyst | Strategy 2", page_icon=str(ROOT / "favicon.png"), layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="NSE Catalyst | Strategy 2", page_icon="🔴", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
-st_autorefresh(interval=5000, key="strategy2_live")
+st_autorefresh(interval=5000, key="strategy2_home_live")
 ensure_strategy2_running()
 render_nav()
 
 st.title("🔴 Strategy 2 — Gap-Up Extension Reversal SELL")
-st.caption("Separate ₹2,50,000 paper capital • Highest opening GAP priority • No ATR")
-status = get_strategy2_status()
+st.caption("Complete separate dashboard • ₹2,50,000 paper capital • NIFTY 500 • no ATR")
+status = get_strategy2_status() or {}
+d = diagnostics()
+stt = state()
 
-cards = st.columns(4)
-cards[0].metric("Status", status.get("status", "STARTING"))
-cards[1].metric("Capital", f"₹{float(status.get('available_capital', 250000) or 0):,.0f}")
+cards = st.columns(5)
+cards[0].metric("Worker", status.get("status", "STARTING"))
+cards[1].metric("Available Capital", format_price(status.get("available_capital", 250000)))
 cards[2].metric("Open Positions", int(status.get("open_positions", 0) or 0))
-cards[3].metric("Daily P&L", f"₹{float(status.get('daily_pnl', 0) or 0):,.0f}")
-if status.get("message"):
-    st.info(str(status["message"]))
+cards[3].metric("Daily P&L", format_price(status.get("daily_pnl", 0)))
+cards[4].metric("Last Scan", status.get("last_scan") or "—")
+if status.get("message"): st.info(str(status["message"]))
 
-st.markdown("### Exact Strategy")
-st.markdown("**Today's Open > PDH → stock moves up → after 09:45 → first completed 1-minute CLOSE below Today's Open → SELL → SL Today's High → Target PDH.**")
-st.caption("Priority is the largest opening GAP % from Previous Day Close. NIFTY/news are practical protective filters, not rigid multi-indicator gates.")
+st.subheader("⚡ Exact Strategy")
+st.dataframe(__import__("pandas").DataFrame([
+    ("1. Opening setup", "Today's Open > PDH"),
+    ("2. Extension", "After 09:45, price trades above Today's Open"),
+    ("3. Trigger", "First completed 1-minute CLOSE below Today's Open"),
+    ("4. Entry", "SELL at the completed candle close"),
+    ("5. Stop", "Today's High at the trigger"),
+    ("6. Target", "PDH"),
+    ("7. Priority", "Largest opening GAP % from Previous Day Close first"),
+    ("8. NIFTY filter", "Only clearly bullish NIFTY 500 (> +0.25%) blocks the short"),
+    ("9. Risk", "₹1,400–₹1,500 intended risk • minimum 1.25R"),
+], columns=["Step", "Rule"]), use_container_width=True, hide_index=True)
 
-tab_current, tab_analysis, tab_scanner, tab_news, tab_downloads = st.tabs(["📌 Current Trading", "📊 Analysis", "🔎 Stock Scanner", "📰 News", "⬇️ Downloads"])
+st.subheader("📚 Strategy 2 Pages")
+links = [
+    ("📌 Current Trading", "pages/strategy2_current.py", "Live worker, positions, signals and rejection audit"),
+    ("📊 Complete Analysis", "pages/strategy2_analysis.py", "P&L, setup, stock, GAP, risk and timing analysis"),
+    ("🔎 Stock Scanner", "pages/strategy2_scanner.py", "Opening GAP priority and reversal candidates"),
+    ("📰 News Analysis", "pages/strategy2_news.py", "Every news decision and approval/rejection"),
+    ("⬇️ Downloads", "pages/strategy2_downloads.py", "Trades, signals, diagnostics and paper state"),
+]
+for label, page, description in links:
+    c1, c2 = st.columns([1, 3])
+    with c1: st.page_link(page, label=label, use_container_width=True)
+    with c2: st.caption(description)
 
-with tab_current:
-    diagnostics = status.get("diagnostics", {}) or {}
-    st.subheader("Live Strategy 2 State")
-    st.write({"last_scan": status.get("last_scan"), "last_signal_count": status.get("last_signal_count", 0), "candidates": diagnostics.get("candidates", 0), "qualified": diagnostics.get("qualified", 0), "signals": diagnostics.get("signals", 0)})
-    rejections = diagnostics.get("rejections", {}) or {}
-    if rejections:
-        st.subheader("Rejections")
-        st.dataframe(pd.DataFrame([{"Reason": k, "Count": v} for k, v in rejections.items()]), use_container_width=True, hide_index=True)
+st.subheader("📡 Live Diagnostics")
+st.write({
+    "last_scan": status.get("last_scan"),
+    "signals_in_last_scan": status.get("last_signal_count", 0),
+    "opening_candidates": d.get("candidates", 0),
+    "qualified_reversals": d.get("qualified", 0),
+    "approved_signals": d.get("signals", 0),
+    "rejections": d.get("rejections", {}),
+    "open_positions": len(stt.get("open_positions", {}) or {}),
+})
 
-with tab_analysis:
-    path = ROOT / "outputs" / "strategy2_diagnostics.json"
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        st.subheader("Strategy 2 Analysis")
-        st.json(data)
-    else:
-        st.info("Strategy 2 analysis will appear after the first scan.")
-
-with tab_scanner:
-    path = ROOT / "outputs" / "gap_analysis.csv"
-    if path.exists():
-        df = pd.read_csv(path)
-        if "GapPercentFromPreviousClose" in df.columns:
-            df = df.sort_values("GapPercentFromPreviousClose", key=lambda s: s.abs(), ascending=False)
-        st.subheader("Opening GAP Priority Board")
-        st.dataframe(df.head(100), use_container_width=True, hide_index=True)
-    else:
-        st.info("Gap analysis will appear after market-data preparation.")
-
-with tab_news:
-    path = ROOT / "outputs" / "strategy2_signals.csv"
-    if path.exists():
-        df = pd.read_csv(path)
-        cols = [c for c in ["timestamp", "symbol", "gap_percent", "news_sentiment", "news_confidence", "news_headline", "approved", "reason"] if c in df.columns]
-        st.dataframe(df[cols].tail(100), use_container_width=True, hide_index=True)
-    else:
-        st.info("Strategy 2 news decisions will appear after signals are evaluated.")
-
-with tab_downloads:
-    for filename, label in [("strategy2_trades.csv", "Strategy 2 Trades"), ("strategy2_signals.csv", "Strategy 2 Signals")]:
-        path = ROOT / "outputs" / filename
-        if path.exists():
-            st.download_button(f"Download {label}", path.read_bytes(), file_name=filename, mime="text/csv")
-        else:
-            st.caption(f"{label}: no data yet.")
+st.caption("Paper trading only. Strategy 2 cannot use Strategy 1's capital, positions, journal, trade counts or risk state.")
+render_daily_footer()
