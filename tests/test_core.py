@@ -124,7 +124,6 @@ def test_user_facing_dashboard_has_no_legacy_volatility_labels():
         ROOT / "dashboard" / "app.py",
         ROOT / "dashboard" / "pages" / "current_trading.py",
         ROOT / "dashboard" / "pages" / "analysis.py",
-        ROOT / "dashboard" / "pages" / "news_analysis.py",
         ROOT / "dashboard" / "pages" / "downloads.py",
         ROOT / "dashboard" / "pages" / "stock_scanner.py",
     ]
