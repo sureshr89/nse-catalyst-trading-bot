@@ -25,18 +25,18 @@ def test_strategy2_requires_open_above_pdh_and_post_945_extension():
 
 def test_strategy2_enters_on_first_completed_close_below_open():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
-    data = _data([104, 106, 105.5, 102], [104.5, 107, 106, 105.8])
+    data = _data([104, 104.5, 102.5], [104.2, 104.5, 103.5])
     result = engine.evaluate("TEST", data, 103, 100, 100, -0.2)
     assert result is not None
     assert result["signal"] == "SELL"
-    assert result["entry"] == 102.0
+    assert result["entry"] == 102.5
     assert result["target"] == 100.0
-    assert result["stop_loss"] == 107.0
+    assert result["stop_loss"] == 104.5
 
 
 def test_strategy2_rejects_clearly_bullish_nifty():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
-    data = _data([104, 106, 102], [105, 107, 104])
+    data = _data([104, 104.5, 102.5], [104.2, 104.5, 103.5])
     assert engine.evaluate("TEST", data, 103, 100, 100, 0.1) is None
 
 
