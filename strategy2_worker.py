@@ -42,7 +42,16 @@ def _run():
     try:
         scanner = ScannerEngine()
         _runtime = Strategy2Runtime(scanner)
-        _write(status="RUNNING", message="Strategy 2 paper worker is running.", worker_alive=True, capital=250000)
+        _write(
+            status="PREPARING",
+            message="Strategy 2 worker started; preparing NIFTY 500 reference and opening-gap data.",
+            worker_alive=True,
+            total_capital=250000,
+            available_capital=_runtime.paper_engine.available_capital,
+            open_positions=len(_runtime.paper_engine.open_positions),
+            daily_pnl=_runtime.daily_pnl,
+            diagnostics=_runtime.diagnostics,
+        )
         prepared = False
         session_date = _now().date()
         while _now().date() == session_date:
@@ -54,35 +63,61 @@ def _run():
             if hhmm < TRADING_START:
                 if not prepared:
                     try:
+                        _write(status="PREPARING", message="Preparing Strategy 2 opening-gap candidates and NIFTY 500 data.", worker_alive=True)
                         scanner.prepare_reference_data()
                         scanner.prepare_opening_candidates()
                         scanner._nifty_snapshot()
                         prepared = True
-                        _write(status="WAITING", message="Strategy 2 opening-gap candidates and NIFTY 500 data prepared.", worker_alive=True)
+                        _write(status="READY", message="Strategy 2 data prepared; waiting for the 09:45 entry window.", worker_alive=True)
                     except Exception as error:
-                        _write(status="ERROR", message=f"Preparation error: {type(error).__name__}: {error}", worker_alive=True)
+                        _write(status="ERROR", message=f"Preparation error: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}")
                 time.sleep(10)
                 continue
             if hhmm < SQUARE_OFF_TIME:
                 started = _now()
                 try:
+                    _write(status="SCANNING", message="Strategy 2 is scanning every 30 seconds.", worker_alive=True)
                     scanner._nifty_snapshot()
                     signals = _runtime.run_cycle()
-                    _write(status="RUNNING", message="Strategy 2 is scanning every 30 seconds.", worker_alive=True, last_scan=started.isoformat(timespec="seconds"), last_signal_count=len(signals or []), diagnostics=_runtime.diagnostics, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl, nifty500_change_pct=scanner._nifty_change)
+                    _write(
+                        status="RUNNING",
+                        message="Strategy 2 paper worker is running.",
+                        worker_alive=True,
+                        last_scan=started.isoformat(timespec="seconds"),
+                        last_signal_count=len(signals or []),
+                        diagnostics=_runtime.diagnostics,
+                        available_capital=_runtime.paper_engine.available_capital,
+                        open_positions=len(_runtime.paper_engine.open_positions),
+                        daily_pnl=_runtime.daily_pnl,
+                        nifty500_change_pct=scanner._nifty_change,
+                        last_error="",
+                    )
                 except Exception as error:
-                    _write(status="ERROR", message=f"Strategy 2 scan error: {type(error).__name__}: {error}", worker_alive=True)
+                    _write(
+                        status="ERROR",
+                        message=f"Strategy 2 scan error: {type(error).__name__}: {error}",
+                        worker_alive=True,
+                        last_error=f"{type(error).__name__}: {error}",
+                    )
                 time.sleep(SCAN_INTERVAL_SECONDS)
                 continue
             try:
                 _runtime.square_off_all()
             except Exception as error:
-                _write(status="ERROR", message=f"Strategy 2 square-off error: {type(error).__name__}: {error}", worker_alive=True)
+                _write(status="ERROR", message=f"Strategy 2 square-off error: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}")
                 time.sleep(10)
                 continue
-            _write(status="WAITING", message="Strategy 2 session complete; positions squared off.", worker_alive=True, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl)
+            _write(
+                status="WAITING",
+                message="Strategy 2 session complete; positions squared off.",
+                worker_alive=True,
+                available_capital=_runtime.paper_engine.available_capital,
+                open_positions=len(_runtime.paper_engine.open_positions),
+                daily_pnl=_runtime.daily_pnl,
+            )
             return
     except Exception as error:
-        _write(status="ERROR", message=f"Strategy 2 worker stopped: {type(error).__name__}: {error}", worker_alive=False)
+        _write(status="ERROR", message=f"Strategy 2 worker stopped: {type(error).__name__}: {error}", worker_alive=False, last_error=f"{type(error).__name__}: {error}")
     finally:
         with _lock:
             global _thread
@@ -102,4 +137,4 @@ def get_strategy2_status():
     try:
         return json.loads(STATUS.read_text(encoding="utf-8"))
     except Exception:
-        return {"status": "STARTING", "message": "Strategy 2 worker is starting.", "worker_alive": False}
+        return {"status": "STARTING", "message": "Strategy 2 worker is starting.", "worker_alive": False, "total_capital": 250000, "available_capital": 250000, "open_positions": 0, "daily_pnl": 0}
