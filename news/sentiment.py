@@ -48,5 +48,12 @@ def analyze_yahoo_news(symbol:str,limit:int=10)->dict[str,Any]:
     return {"sentiment":NEUTRAL,"confidence":0.0,"reason":"No recent directional Yahoo Finance headline","headline":"","symbol":symbol,"source":"Yahoo Finance"}
 
 def news_allows_trade(side:str,analysis:dict[str,Any])->bool:
+    """Use news as a protective gate: neutral is allowed; only opposite news blocks."""
     s=str(analysis.get("sentiment",NEUTRAL)).upper(); side=side.upper()
-    return (side=="BUY" and s==POSITIVE) or (side=="SELL" and s==NEGATIVE)
+    if s==NEUTRAL:
+        return True
+    if side=="BUY":
+        return s!=NEGATIVE
+    if side=="SELL":
+        return s!=POSITIVE
+    return False
