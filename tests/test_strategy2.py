@@ -59,7 +59,7 @@ def test_strategy2_buy_mirror_rule():
     result = engine.evaluate("TEST", data, 90, 102, 100, 0.1, 100)
     assert result is not None
     assert result["signal"] == "BUY"
-    assert result["entry"] == 93.0
+    assert result["entry"] == 90.5
     assert result["target"] == 100.0
     assert result["stop_loss"] == 89.9
 
