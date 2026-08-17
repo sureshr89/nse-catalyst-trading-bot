@@ -28,80 +28,55 @@ class GapExtensionReversalEngine:
 
     @staticmethod
     def _completed(data):
-        if data is None or data.empty or "Datetime" not in data.columns:
-            return data
-        result = data.copy()
-        result["Datetime"] = pd.to_datetime(result["Datetime"], errors="coerce")
-        result = result.dropna(subset=["Datetime"])
-        if result["Datetime"].dt.tz is None:
-            result["Datetime"] = result["Datetime"].dt.tz_localize(INDIA_TZ)
-        else:
-            result["Datetime"] = result["Datetime"].dt.tz_convert(INDIA_TZ)
+        if data is None or data.empty or "Datetime" not in data.columns: return data
+        result = data.copy(); result["Datetime"] = pd.to_datetime(result["Datetime"], errors="coerce"); result = result.dropna(subset=["Datetime"])
+        if result["Datetime"].dt.tz is None: result["Datetime"] = result["Datetime"].dt.tz_localize(INDIA_TZ)
+        else: result["Datetime"] = result["Datetime"].dt.tz_convert(INDIA_TZ)
         now = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
         return result[result["Datetime"] < now].copy()
 
     def _base(self, symbol, side, entry, open_price, pdc, pdh, pdl, stop, target, candle, nifty):
-        risk = abs(stop - entry)
-        reward = abs(entry - target)
-        if risk <= 0 or reward <= 0:
-            return None
+        risk = (stop - entry) if side == "SELL" else (entry - stop)
+        reward = (entry - target) if side == "SELL" else (target - entry)
+        if risk <= 0 or reward <= 0: return None
         rr = reward / risk
-        if rr < self.rr:
-            return None
+        if rr < self.rr: return None
         gap = (open_price - pdc) / pdc * 100 if pdc else 0.0
         return {
-            "symbol": str(symbol).upper(), "signal": side,
-            "entry": round(entry, 4), "today_open": round(open_price, 4),
+            "symbol": str(symbol).upper(), "signal": side, "entry": round(entry, 4), "today_open": round(open_price, 4),
             "previous_day_close": round(pdc, 4), "pdh": round(pdh, 4), "pdl": round(pdl, 4),
-            "today_high": round(stop, 4) if side == "SELL" else None,
-            "today_low": round(stop, 4) if side == "BUY" else None,
-            "stop_loss": round(stop, 4), "target": round(target, 4),
-            "risk_reward": round(rr, 4), "gap_percent": round(gap, 4),
+            "today_high": round(stop, 4) if side == "SELL" else None, "today_low": round(stop, 4) if side == "BUY" else None,
+            "stop_loss": round(stop, 4), "target": round(target, 4), "risk_reward": round(rr, 4), "gap_percent": round(gap, 4),
             "gap_type": "GAP_UP_EXTENSION_REVERSAL" if side == "SELL" else "GAP_DOWN_EXTENSION_REVERSAL",
             "setup_type": "GAP_UP_EXTENSION_REVERSAL_SELL" if side == "SELL" else "GAP_DOWN_EXTENSION_REVERSAL_BUY",
-            "trigger_close": round(entry, 4), "trigger_time": candle["Datetime"].isoformat(),
-            "nifty500_change_pct": round(float(nifty), 4),
+            "trigger_close": round(entry, 4), "trigger_time": candle["Datetime"].isoformat(), "nifty500_change_pct": round(float(nifty), 4),
         }
 
     def evaluate(self, symbol, today_data, today_open, pdh, pdc, nifty_change_pct, pdl=None):
         data = self._completed(today_data)
-        if data is None or data.empty:
-            return None
-        open_price, pdh, pdc = float(today_open), float(pdh), float(pdc)
-        pdl = float(pdl) if pdl is not None else None
+        if data is None or data.empty: return None
+        open_price, pdh, pdc = float(today_open), float(pdh), float(pdc); pdl = float(pdl) if pdl is not None else None
         today = data[data["Datetime"].dt.date == datetime.now(INDIA_TZ).date()].copy()
-        if today.empty:
-            return None
+        if today.empty: return None
         candles = today[(today["Datetime"].dt.time >= self.start) & (today["Datetime"].dt.time <= self.end)].copy()
-        if candles.empty:
-            return None
+        if candles.empty: return None
 
         if open_price > pdh and pdc < open_price:
-            extended = False
-            day_high = open_price
+            extended = False; day_high = open_price
             for _, candle in candles.iterrows():
-                high, close = float(candle["High"]), float(candle["Close"])
-                day_high = max(day_high, high)
-                if high > open_price:
-                    extended = True
-                if not extended or close >= open_price:
-                    continue
-                if float(nifty_change_pct) > NIFTY_BLOCK_PCT:
-                    return None
+                high, close = float(candle["High"]), float(candle["Close"]); day_high = max(day_high, high)
+                if high > open_price: extended = True
+                if not extended or close >= open_price: continue
+                if float(nifty_change_pct) > NIFTY_BLOCK_PCT: return None
                 return self._base(symbol, "SELL", close, open_price, pdc, pdh, pdl, day_high, pdh, candle, nifty_change_pct)
             return None
 
         if pdl is not None and open_price < pdl and pdc > open_price:
-            extended = False
-            day_low = open_price
+            extended = False; day_low = open_price
             for _, candle in candles.iterrows():
-                low, close = float(candle["Low"]), float(candle["Close"])
-                day_low = min(day_low, low)
-                if low < open_price:
-                    extended = True
-                if not extended or close <= open_price:
-                    continue
-                if float(nifty_change_pct) < -NIFTY_BLOCK_PCT:
-                    return None
+                low, close = float(candle["Low"]), float(candle["Close"]); day_low = min(day_low, low)
+                if low < open_price: extended = True
+                if not extended or close <= open_price: continue
+                if float(nifty_change_pct) < -NIFTY_BLOCK_PCT: return None
                 return self._base(symbol, "BUY", close, open_price, pdc, pdh, pdl, day_low, pdl, candle, nifty_change_pct)
         return None
