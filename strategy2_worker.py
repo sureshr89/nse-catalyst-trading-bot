@@ -16,6 +16,7 @@ from config.settings import PREMARKET_PREP_TIME, TRADING_START, SQUARE_OFF_TIME,
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 STATUS = Path("outputs/strategy2_status.json")
 S2_GAP_FILE = Path("outputs/strategy2_gap_analysis.csv")
+PREP_RETRY_SECONDS = 60
 _lock = threading.RLock(); _thread = None; _runtime = None
 
 
@@ -33,13 +34,17 @@ def _write(**updates):
 
 
 def _prepare(scanner):
-    """Prepare and validate daily NIFTY 500 reference/opening-gap data."""
+    """Prepare daily reference/opening data once, without a second forced reference download."""
     references = scanner.prepare_reference_data(force=True)
     if references is None or references.empty:
         raise RuntimeError("NIFTY 500 reference data is unavailable or below the required coverage.")
-    candidates = scanner.prepare_opening_candidates(force=True)
+
+    # prepare_opening_candidates(force=False) reuses the references prepared above.
+    # The previous code forced another complete NIFTY 500 reference download here.
+    candidates = scanner.prepare_opening_candidates(force=False)
     if candidates is None or candidates.empty:
         raise RuntimeError("NIFTY 500 opening-gap data is unavailable; no valid Open > PDH or Open < PDL candidates were prepared.")
+
     gap_board = scanner.gap_analysis.copy() if scanner.gap_analysis is not None else None
     if gap_board is None or gap_board.empty:
         raise RuntimeError("Strategy 2 gap board could not be created from the prepared market data.")
@@ -54,19 +59,25 @@ def _run():
     try:
         scanner = ScannerEngine(); _runtime = Strategy2Runtime(scanner)
         _write(status="PREPARING", message="Strategy 2 worker started; preparing NIFTY 500 reference and opening-gap data.", worker_alive=True, total_capital=250000, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl)
-        prepared = False; session_date = _now().date()
+        prepared = False; session_date = _now().date(); next_prep_retry = 0.0
         while _now().date() == session_date:
             hhmm = _now().strftime("%H:%M")
             if hhmm < PREMARKET_PREP_TIME:
                 _write(status="WAITING", message=f"Waiting for preparation at {PREMARKET_PREP_TIME} IST.", worker_alive=True); time.sleep(10); continue
+
             if not prepared:
+                now_mono = time.monotonic()
+                if now_mono < next_prep_retry:
+                    time.sleep(min(10, max(1, int(next_prep_retry - now_mono)))); continue
                 try:
                     _write(status="PREPARING", message="Preparing and validating Strategy 2 opening-gap candidates.", worker_alive=True)
                     ref_count, candidate_count = _prepare(scanner); prepared = True
                     _write(status="READY", message=f"Strategy 2 data ready: {ref_count} references, {candidate_count} opening-gap candidates.", worker_alive=True, reference_count=ref_count, opening_candidate_count=candidate_count, last_error="")
                 except Exception as error:
-                    _write(status="DATA_ERROR", message=f"Preparation failed: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}", reference_count=0, opening_candidate_count=0)
-                    time.sleep(30); continue
+                    next_prep_retry = time.monotonic() + PREP_RETRY_SECONDS
+                    _write(status="DATA_ERROR", message=f"Preparation failed; retrying in {PREP_RETRY_SECONDS}s: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}", reference_count=0, opening_candidate_count=0)
+                    time.sleep(10); continue
+
             if hhmm < TRADING_START:
                 time.sleep(10); continue
             if hhmm < SQUARE_OFF_TIME:
