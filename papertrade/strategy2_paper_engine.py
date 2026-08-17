@@ -35,16 +35,14 @@ class Strategy2PaperTradeEngine(PaperTradeEngine):
         self._restore_state()
 
     def _state_path(self):
-        path = Path("outputs") / "strategy2_paper_engine_state.json"
-        return str(path)
+        return str(Path("outputs") / "strategy2_paper_engine_state.json")
 
     def _save_state(self):
-        path = self._state_path()
-        path_obj = Path(path)
+        path_obj = Path(self._state_path())
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         state = {
-            "state_version": 1,
-            "strategy": "GAP_UP_EXTENSION_REVERSAL_SELL",
+            "state_version": 2,
+            "strategy": "GAP_EXTENSION_REVERSAL_BUY_SELL",
             "session_date": datetime.now(INDIA_TZ).date().isoformat(),
             "open_positions": self.open_positions,
             "closed_positions": self.closed_positions,
