@@ -61,12 +61,21 @@ class OpenReversalEngine:
 
     def update_state(self, state, today_open, pdh, pdl, completed_close, stamp=None):
         state = dict(state)
+        stamp = stamp or datetime.now(INDIA_TZ).isoformat(timespec="seconds")
+        stamp_dt = pd.to_datetime(stamp, errors="coerce")
+        if pd.notna(stamp_dt):
+            if stamp_dt.tzinfo is None:
+                stamp_dt = stamp_dt.tz_localize(INDIA_TZ)
+            else:
+                stamp_dt = stamp_dt.tz_convert(INDIA_TZ)
+            current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
+            if stamp_dt >= current_minute:
+                return state
         side = state.get("side")
         close = float(completed_close)
         open_price = float(today_open)
         pdh = float(pdh)
         pdl = float(pdl)
-        stamp = stamp or datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         if side == "BUY":
             if not state.get("pdh_breached") and close < pdh:
                 state["pdh_breached"] = True
