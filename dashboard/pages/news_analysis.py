@@ -34,19 +34,36 @@ except Exception as error:
 NEWS = ROOT / "outputs" / "MASTER_NEWS_ANALYSIS.csv"
 SIGNALS = ROOT / "outputs" / "signals.csv"
 
+
 def read_frame(path):
     try:
         return pd.read_csv(path) if path.exists() else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
-def chart(fig, key, height=320):
-    fig.update_layout(height=height, margin=dict(l=8,r=8,t=42,b=8), template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", size=12))
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=key)
 
-df = read_frame(NEWS)
+def clean_strategy_columns(frame):
+    if frame.empty:
+        return frame
+    blocked = [c for c in frame.columns if "atr" in str(c).lower() or "average_true_range" in str(c).lower()]
+    return frame.drop(columns=blocked, errors="ignore")
+
+
+def chart(fig, key, height=320):
+    fig.update_layout(
+        height=height,
+        margin=dict(l=8, r=8, t=42, b=8),
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", size=12),
+    )
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=key)
+
+
+df = clean_strategy_columns(read_frame(NEWS))
 if df.empty:
-    df = read_frame(SIGNALS)
+    df = clean_strategy_columns(read_frame(SIGNALS))
 
 st.title("📰 News Analysis")
 st.caption("Yahoo Finance headlines • deterministic sentiment • final BUY/SELL confirmation • retained for six-month research")
@@ -56,7 +73,7 @@ if df.empty:
     render_daily_footer()
     st.stop()
 
-for col in ["news_confidence", "atr_pct", "priority_rank", "nifty500_change_pct", "entry", "quantity", "actual_risk"]:
+for col in ["news_confidence", "priority_rank", "nifty500_change_pct", "entry", "quantity", "actual_risk"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -79,32 +96,27 @@ c2.metric("🟢 Positive", int((sentiment == "POSITIVE").sum()))
 c3.metric("🔴 Negative", int((sentiment == "NEGATIVE").sum()))
 c4.metric("⚪ Neutral", int((sentiment == "NEUTRAL").sum()))
 
-# Visual research dashboard
 st.subheader("📊 News Performance Overview")
 summary_sent = pd.DataFrame({"Sentiment": sentiment}).value_counts().reset_index(name="Decisions")
-summary_gate = pd.DataFrame({"Decision": df["ApprovedBool"].map({True:"PASSED",False:"REJECTED"})}).value_counts().reset_index(name="Decisions")
+summary_gate = pd.DataFrame({"Decision": df["ApprovedBool"].map({True: "PASSED", False: "REJECTED"})}).value_counts().reset_index(name="Decisions")
 a, b = st.columns(2)
 with a:
     chart(px.bar(summary_sent, x="Sentiment", y="Decisions", text="Decisions", title="Sentiment Distribution"), "news_sentiment", 320)
 with b:
     chart(px.pie(summary_gate, names="Decision", values="Decisions", title="News Gate: Passed vs Rejected"), "news_gate", 320)
 
-chart_df = df.copy()
-if "TradeDate" in chart_df.columns:
-    daily = chart_df.groupby(["TradeDate", "news_sentiment"], as_index=False).size().rename(columns={"size":"Decisions"})
+if "TradeDate" in df.columns:
+    daily = df.groupby(["TradeDate", "news_sentiment"], as_index=False).size().rename(columns={"size": "Decisions"})
     if not daily.empty:
         chart(px.bar(daily, x="TradeDate", y="Decisions", color="news_sentiment", title="Daily News Decisions by Sentiment"), "daily_sentiment", 340)
 
 if "signal" in df.columns:
-    side_news = df.assign(Side=df["signal"].astype(str).str.upper()).groupby(["Side","news_sentiment"], as_index=False).size().rename(columns={"size":"Decisions"})
+    side_news = df.assign(Side=df["signal"].astype(str).str.upper()).groupby(["Side", "news_sentiment"], as_index=False).size().rename(columns={"size": "Decisions"})
     if not side_news.empty:
         chart(px.bar(side_news, x="Side", y="Decisions", color="news_sentiment", barmode="group", title="BUY vs SELL News Decisions"), "side_news", 340)
 
 if "news_confidence" in df.columns and df["news_confidence"].notna().any():
     chart(px.histogram(df.dropna(subset=["news_confidence"]), x="news_confidence", nbins=10, title="News Confidence Distribution"), "confidence", 320)
-
-if "atr_pct" in df.columns and df["atr_pct"].notna().any():
-    chart(px.histogram(df.dropna(subset=["atr_pct"]), x="atr_pct", nbins=12, title="ATR% of News-Checked Candidates"), "atr_news", 320)
 
 st.subheader("Today's News Gate")
 today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
@@ -113,7 +125,7 @@ if today_df.empty:
     st.info("No news decisions recorded today.")
 else:
     cols = [c for c in ["timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "ApprovedBool", "reason"] if c in today_df.columns]
-    st.dataframe(today_df[cols].sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True, height=430)
+    st.dataframe(today_df[cols].sort_values("timestamp", ascending=False), width="stretch", hide_index=True, height=430)
 
 st.subheader("Research / Backtest Record")
 st.caption("Every recorded candidate decision remains in MASTER_NEWS_ANALYSIS.csv. Filter this record later to evaluate whether the news gate improved the strategy.")
@@ -142,8 +154,8 @@ fc1.metric("Filtered Decisions", len(filtered))
 fc2.metric("Passed News Gate", len(approved))
 fc3.metric("Rejected / Not Approved", max(0, len(filtered) - len(approved)))
 
-cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "ApprovedBool", "candidate_id", "entry", "atr_pct", "priority_rank", "reason"] if c in filtered.columns]
-st.dataframe(filtered[cols].sort_values(["TradeDate", "timestamp"], ascending=False), use_container_width=True, hide_index=True, height=500)
+cols = [c for c in ["TradeDate", "timestamp", "symbol", "signal", "news_headline", "news_sentiment", "news_confidence", "news_reason", "ApprovedBool", "candidate_id", "entry", "priority_rank", "reason"] if c in filtered.columns]
+st.dataframe(filtered[cols].sort_values(["TradeDate", "timestamp"], ascending=False), width="stretch", hide_index=True, height=500)
 
 st.download_button("⬇️ DOWNLOAD NEWS MASTER CSV", data=filtered.to_csv(index=False).encode("utf-8"), file_name="nse_catalyst_news_analysis.csv", mime="text/csv", width="stretch")
 st.info("Backtest rule: use the recorded news decision at the candidate timestamp. Do not use later headlines when evaluating an earlier trade; this preserves the information available at the time of the decision.")
