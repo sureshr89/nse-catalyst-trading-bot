@@ -12,7 +12,6 @@ from papertrade.trade_journal_clean import TradeJournal
 from papertrade.missed_capital_tracker import MissedCapitalTracker
 from news.sentiment import analyze_yahoo_news, news_allows_trade
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
-
 class TradingBot:
     """Run one NIFTY 500 paper-trading session without live execution."""
     def __init__(self):
@@ -97,7 +96,7 @@ class TradingBot:
         try:self.journal.log_signal(row)
         except Exception as error:print("Signal journal save failed:",error)
     def _attach_trade_context(self,position,signal):
-        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","nifty500_universe","atr_pct","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type","news_sentiment","news_confidence","news_headline","news_reason","news_source")
+        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","nifty500_universe","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type","news_sentiment","news_confidence","news_headline","news_reason","news_source")
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
