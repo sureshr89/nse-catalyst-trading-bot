@@ -10,7 +10,7 @@ INDIA_TZ=ZoneInfo("Asia/Kolkata")
 
 class ReferenceStore:
     def __init__(self,universe_df):
-        self.universe=universe_df.copy(); self.folder=Path("outputs")/"open_reversal_references"; self.folder.mkdir(parents=True,exist_ok=True); self.batch_size=25; self.max_workers=4; self.minimum_coverage=0.80
+        self.universe=universe_df.copy(); self.folder=Path("outputs")/"open_reversal_references"; self.folder.mkdir(parents=True,exist_ok=True); self.batch_size=25; self.max_workers=4; self.minimum_coverage=0.60
     @property
     def date_key(self): return datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
     @property
