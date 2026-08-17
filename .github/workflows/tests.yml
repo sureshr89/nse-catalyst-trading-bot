@@ -22,4 +22,6 @@ jobs:
       - name: Compile Python files
         run: python -m compileall -q .
       - name: Run tests
-        run: pytest -q
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q
