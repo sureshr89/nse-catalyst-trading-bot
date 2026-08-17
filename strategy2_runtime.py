@@ -13,7 +13,6 @@ from strategy.gap_extension_reversal_engine import GapExtensionReversalEngine
 from strategy.strategy2_risk_engine import Strategy2RiskEngine
 from papertrade.strategy2_paper_engine import Strategy2PaperTradeEngine
 from papertrade.trade_journal_clean import TradeJournal
-from news.sentiment import analyze_yahoo_news, news_allows_trade
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 STRATEGY2_TRADES = Path("outputs/strategy2_trades.csv")
 MAX_TRIGGER_AGE_SECONDS = 120
@@ -61,8 +60,6 @@ class Strategy2Runtime:
         payload=dict(self.diagnostics);payload["timestamp"]=self._now().isoformat(timespec="seconds");payload["open_positions"]=len(self.paper_engine.open_positions);payload["available_capital"]=self.paper_engine.available_capital;payload["used_capital"]=self.paper_engine.used_capital;payload["total_capital"]=self.paper_engine.total_capital;payload["daily_pnl"]=self.daily_pnl;payload["cooldown_active"]=bool(self.cooldown_until and self._now().replace(tzinfo=None)<self.cooldown_until);path=Path("outputs/strategy2_diagnostics.json");path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(payload,indent=2,default=str),encoding="utf-8")
     def _reject(self,reason):
         key=str(reason).strip().lower().replace(" ","_");self.diagnostics["rejections"][key]=self.diagnostics["rejections"].get(key,0)+1
-    def _news_gate(self,signal):
-        side=str(signal.get("signal","SELL")).upper();analysis=analyze_yahoo_news(signal["symbol"]);signal.update({"news_sentiment":analysis.get("sentiment","NEUTRAL"),"news_confidence":analysis.get("confidence",0.0),"news_headline":analysis.get("headline",""),"news_reason":analysis.get("reason",""),"news_source":analysis.get("source","Yahoo Finance"),"news_checked_at":self._now().isoformat()});return news_allows_trade(side,analysis)
     def _open_signal(self,signal,rank):
         trigger=pd.to_datetime(signal.get("trigger_time"),errors="coerce")
         if pd.isna(trigger):self._reject("invalid_trigger_time");return False
@@ -74,7 +71,6 @@ class Strategy2Runtime:
         if self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET):self._reject("daily_limit");self.processed.add(candidate_id);return False
         if self.cooldown_until and self._now().replace(tzinfo=None)<self.cooldown_until:self._reject("cooldown");return False
         if len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:self._reject("position_limit");return False
-        if not self._news_gate(signal):self.journal.log_signal({**signal,"approved":False,"reason":"NEWS_REJECTED"});self._reject("news_rejected");self.processed.add(candidate_id);return False
         risk=self.risk_engine.approve_trade(signal,available_capital=self.paper_engine.available_capital);self.journal.log_signal({**signal,**risk,"approved":bool(risk.get("approved")),"reason":"; ".join(map(str,risk.get("reasons",[])))})
         if not risk.get("approved"):
             self._reject("risk")
@@ -89,8 +85,6 @@ class Strategy2Runtime:
         now=self._now().strftime("%H:%M")
         if now<TRADING_START or now>LAST_ENTRY_TIME:return []
         candidates=self.scanner.opening_candidates;data=self.scanner.universe_market_data;nifty_change=self.scanner._nifty_change
-        # Preparation is owned by strategy2_worker. Do not force a new NIFTY 500
-        # download on every 30-second cycle when the prepared board is empty.
         if candidates is None or candidates.empty:
             self.diagnostics["candidates"]=0;self.last_signals=[];self._write_diagnostics();return []
         rows=[]
