@@ -70,10 +70,7 @@ class GapExtensionReversalEngine:
             day_high = max(day_high, high)
             if high > open_price:
                 extended = True
-                continue
-            if not extended:
-                continue
-            if close >= open_price:
+            if not extended or close >= open_price:
                 continue
 
             # This is the first completed close below Today's Open. It is the
@@ -86,8 +83,7 @@ class GapExtensionReversalEngine:
             rr = reward / risk
             if rr < self.rr:
                 return None
-            # Keep the same practical market-alignment threshold as Strategy 1:
-            # a clearly bullish NIFTY 500 blocks a short, but small positive
+            # A clearly bullish NIFTY 500 blocks a short; small positive
             # movement does not.
             if float(nifty_change_pct) > NIFTY_BULLISH_BLOCK_PCT:
                 return None
