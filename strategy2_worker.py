@@ -38,10 +38,15 @@ def _write(**updates):
 
 
 def _prepare(scanner):
-    """Prepare reference/gap data exactly once, including late dashboard startup."""
-    scanner.prepare_reference_data()
-    scanner.prepare_opening_candidates()
+    """Prepare and validate daily NIFTY 500 reference/opening-gap data."""
+    references = scanner.prepare_reference_data(force=True)
+    if references is None or references.empty:
+        raise RuntimeError("NIFTY 500 reference data is unavailable or below the required coverage.")
+    candidates = scanner.prepare_opening_candidates(force=True)
+    if candidates is None or candidates.empty:
+        raise RuntimeError("NIFTY 500 opening-gap data is unavailable; no valid Open > PDH or Open < PDL candidates were prepared.")
     scanner._nifty_snapshot()
+    return len(references), len(candidates)
 
 
 def _run():
@@ -49,7 +54,7 @@ def _run():
     try:
         scanner = ScannerEngine()
         _runtime = Strategy2Runtime(scanner)
-        _write(status="PREPARING", message="Strategy 2 worker started; preparing NIFTY 500 reference and opening-gap data.", worker_alive=True, total_capital=250000, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl, diagnostics=_runtime.diagnostics)
+        _write(status="PREPARING", message="Strategy 2 worker started; preparing NIFTY 500 reference and opening-gap data.", worker_alive=True, total_capital=250000, available_capital=_runtime.paper_engine.available_capital, open_positions=len(_runtime.paper_engine.open_positions), daily_pnl=_runtime.daily_pnl)
         prepared = False
         session_date = _now().date()
         while _now().date() == session_date:
@@ -61,13 +66,13 @@ def _run():
 
             if not prepared:
                 try:
-                    _write(status="PREPARING", message="Preparing Strategy 2 opening-gap candidates and NIFTY 500 data.", worker_alive=True)
-                    _prepare(scanner)
+                    _write(status="PREPARING", message="Preparing and validating Strategy 2 opening-gap candidates.", worker_alive=True)
+                    ref_count, candidate_count = _prepare(scanner)
                     prepared = True
-                    _write(status="READY", message="Strategy 2 data prepared; waiting for the 09:45 entry window." if hhmm < TRADING_START else "Strategy 2 data prepared; starting the live scan cycle.", worker_alive=True)
+                    _write(status="READY", message=f"Strategy 2 data ready: {ref_count} references, {candidate_count} opening-gap candidates.", worker_alive=True, reference_count=ref_count, opening_candidate_count=candidate_count, last_error="")
                 except Exception as error:
-                    _write(status="ERROR", message=f"Preparation error: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}")
-                    time.sleep(10)
+                    _write(status="DATA_ERROR", message=f"Preparation failed: {type(error).__name__}: {error}", worker_alive=True, last_error=f"{type(error).__name__}: {error}", reference_count=0, opening_candidate_count=0)
+                    time.sleep(30)
                     continue
 
             if hhmm < TRADING_START:
