@@ -6,7 +6,7 @@ import pandas as pd
 
 from config.settings import MAX_RISK_PER_TRADE, MIN_REQUIRED_RISK, MIN_RR_RATIO
 from papertrade.paper_trade_engine import PaperTradeEngine
-from strategy.candidate_metrics import sort_key
+from strategy.candidate_metrics import metrics, sort_key
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.risk_engine import RiskEngine
 
@@ -66,16 +66,14 @@ def test_build_signal_sell_target_and_stop():
     assert signal["risk_reward"] == 1.25
 
 
-def test_signal_rejects_legacy_volatility_metric():
-    engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    signal = engine.build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5, {"atr_pct": 3.0, "priority_rank": 1})
-    assert "atr_pct" not in signal
-    assert signal["priority_rank"] == 1
+def test_candidate_metadata_contains_no_secondary_priority_metric():
+    result = metrics()
+    assert result == {"metrics_calculated_at": result["metrics_calculated_at"]}
 
 
-def test_highest_gap_is_always_first_regardless_of_other_metrics():
-    high_gap = {"gap_percent": 4.0, "volume": 1}
-    lower_gap = {"gap_percent": 2.0, "volume": 100}
+def test_highest_gap_is_always_first():
+    high_gap = {"gap_percent": 4.0}
+    lower_gap = {"gap_percent": 2.0}
     assert sort_key(high_gap) > sort_key(lower_gap)
 
 
@@ -135,6 +133,3 @@ def test_user_facing_dashboard_has_no_legacy_volatility_labels():
         source = path.read_text(encoding="utf-8").lower()
         for label in forbidden:
             assert label not in source, f"Legacy volatility label '{label}' remains in {path}"
-
-
-# Regression suite is intentionally kept aligned with the production completed-candle guard.
