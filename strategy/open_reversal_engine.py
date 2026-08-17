@@ -114,7 +114,7 @@ class OpenReversalEngine:
             "entry_source": "CURRENT_MARKET_PRICE",
         }
         if metrics:
-            signal.update(metrics)
+            signal.update({k: v for k, v in metrics.items() if "atr" not in str(k).lower() and "average_true_range" not in str(k).lower()})
         return signal
 
     def build(self, symbol, prices, pdh, pdl, today_open=None, nifty_change_pct=0.0, nifty_candle=None):
