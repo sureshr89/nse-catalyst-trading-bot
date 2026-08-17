@@ -12,8 +12,8 @@ from market.live_price import get_current_market_price
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics, sort_key
 
-INDIA_TZ=ZoneInfo("Asia/Kolkata")
-MIN_MARKET_DATA_COVERAGE=0.95
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+MIN_MARKET_DATA_COVERAGE = 0.95
 
 class ScannerEngine:
     """Maintain BUY/SELL waiting states across 30-second control cycles."""
@@ -102,9 +102,9 @@ class ScannerEngine:
         if active and not self._activated[side]: self._activated[side]=True; self._activated_at[side]=datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         return active
     def _seed_and_update(self,side,change,market_data):
+        # NIFTY alignment is checked at final entry; it must not discard an earlier valid price-action sequence.
         active=self._activate_side(side,change)
         if not active and not self._activated[side]: return
-        activation=pd.to_datetime(self._activated_at[side],errors="coerce") if self._activated_at[side] else None
         for _,row in self.opening_candidates.iterrows():
             symbol=str(row["Symbol"]).upper(); initial_side="BUY" if row["OpeningSetup"]=="OPEN_ABOVE_PDH" else "SELL" if row["OpeningSetup"]=="OPEN_BELOW_PDL" else None
             if initial_side!=side: continue
@@ -116,7 +116,6 @@ class ScannerEngine:
             state.setdefault("candidate_id",candidate_id)
             data=market_data.get(symbol); today=self.price_data.today_only(data) if data is not None else pd.DataFrame()
             if today.empty: continue
-            if activation is not None: today=today[today["Datetime"]>=activation]
             for _,candle in today.iterrows():
                 before=dict(state); state=self.strategy.update_state(state,row["TodayOpen"],row["PDH"],row["PDL"],candle["Close"],candle["Datetime"].isoformat())
                 if state.get("pdh_breached") and not before.get("pdh_breached") and side=="BUY": state["state"]="WAITING_FOR_OPEN"
@@ -142,11 +141,10 @@ class ScannerEngine:
                 entry=float(current["Close"]); open_price=float(item["today_open"])
                 if side=="BUY" and entry<open_price: continue
                 if side=="SELL" and entry>open_price: continue
-                metric_values={"atr_pct":item.get("atr_pct",0),"metrics_calculated_at":item.get("metrics_calculated_at","")}
-                signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,metric_values)
+                signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,{"metrics_calculated_at":item.get("metrics_calculated_at","")})
                 if signal:
                     signal.update({"candidate_id":item.get("candidate_id"),"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1})
-                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"atr_pct":item.get("atr_pct",0)})
+                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"gap_percent":item.get("gap_percent",0)})
                     signals.append(signal)
         self.diagnostics["ranking"]=ranking; return signals
     def scan(self):
