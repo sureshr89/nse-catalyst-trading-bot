@@ -66,6 +66,13 @@ def test_build_signal_sell_target_and_stop():
     assert signal["risk_reward"] == 1.25
 
 
+def test_signal_rejects_legacy_volatility_metric():
+    engine = OpenReversalEngine("09:45", "14:00", 1.25)
+    signal = engine.build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5, {"atr_pct": 3.0, "priority_rank": 1})
+    assert "atr_pct" not in signal
+    assert signal["priority_rank"] == 1
+
+
 def test_highest_gap_is_always_first_regardless_of_other_metrics():
     high_gap = {"gap_percent": 4.0, "volume": 1}
     lower_gap = {"gap_percent": 2.0, "volume": 100}
@@ -119,9 +126,12 @@ def test_user_facing_dashboard_has_no_legacy_volatility_labels():
         ROOT / "dashboard" / "app.py",
         ROOT / "dashboard" / "pages" / "current_trading.py",
         ROOT / "dashboard" / "pages" / "analysis.py",
+        ROOT / "dashboard" / "pages" / "news_analysis.py",
         ROOT / "dashboard" / "pages" / "downloads.py",
         ROOT / "dashboard" / "pages" / "stock_scanner.py",
     ]
+    forbidden = ["atr analysis", "atr%", "atr_pct", "average true range"]
     for path in files:
         source = path.read_text(encoding="utf-8").lower()
-        assert "atr" not in source, f"Legacy volatility label remains in {path}"
+        for label in forbidden:
+            assert label not in source, f"Legacy volatility label '{label}' remains in {path}"
