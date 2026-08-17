@@ -13,7 +13,7 @@ from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics, sort_key
 
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
-MIN_MARKET_DATA_COVERAGE=0.80
+MIN_MARKET_DATA_COVERAGE=0.60
 
 class ScannerEngine:
     """Maintain BUY/SELL waiting states across 30-second control cycles."""
@@ -23,7 +23,7 @@ class ScannerEngine:
         self._activated={"BUY":False,"SELL":False}; self._activated_at={"BUY":None,"SELL":None}; self.waiting={"BUY":{},"SELL":{}}; self.qualified={"BUY":{},"SELL":{}}; self.metrics_cache={}; self._load_waiting(); self.diagnostics=self._empty_diagnostics()
     @staticmethod
     def _empty_diagnostics():
-        return {"timestamp":None,"stocks_scanned":0,"opening_setup_passed":0,"market_alignment_passed":0,"strategy_setup_passed":0,"final_signals":0,"gap_up_count":0,"gap_down_count":0,"gap_data_count":0,"nifty500_direction":"UNKNOWN","nifty500_change_pct":0.0,"nifty500_bullish":0,"nifty500_bearish":0,"nifty500_neutral":0,"nifty500_coverage":0,"market_data_coverage":0.0,"buy_waiting":0,"sell_waiting":0,"buy_qualified":0,"sell_qualified":0,"ranking":[],"rejections":{"missing_data":0,"opening_setup":0,"market_alignment":0,"strategy_setup":0}}
+        return {"timestamp":None,"stocks_scanned":0,"opening_setup_passed":0,"market_alignment_passed":0,"strategy_setup_passed":0,"final_signals":0,"gap_up_count":0,"gap_down_count":0,"gap_data_count":0,"nifty500_direction":"UNKNOWN","nifty500_change_pct":0.0,"nifty500_bullish":0,"nifty500_bearish":0,"nifty500_neutral":0,"nifty500_coverage":0,"market_data_coverage":0.0,"coverage_required":MIN_MARKET_DATA_COVERAGE,"buy_waiting":0,"sell_waiting":0,"buy_qualified":0,"sell_qualified":0,"ranking":[],"rejections":{"missing_data":0,"opening_setup":0,"market_alignment":0,"strategy_setup":0}}
     @staticmethod
     def _today(): return pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d")
     @staticmethod
