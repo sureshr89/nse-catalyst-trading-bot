@@ -1,15 +1,22 @@
-"""Live 1-minute market price data for the NIFTY 500 paper strategy."""
+"""Live market price data with bounded Yahoo requests and short-lived caches."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import threading
+import time
 import pandas as pd
 import yfinance as yf
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+_YAHOO_LOCK = threading.RLock()
+_LAST_YAHOO_CALL = 0.0
+_MIN_YAHOO_GAP = 0.20
 
 class PriceData:
     def __init__(self):
-        self.valid_intervals={"1m","5m","1d"}; self.download_timeout=10; self.batch_size=25; self.max_workers=4; self.batch_retries=1
+        self.valid_intervals={"1m","5m","1d"}; self.download_timeout=10
+        self.batch_size=50; self.max_workers=2; self.batch_retries=1
+        self._index_cache={}; self._index_cache_at={}; self._index_change_cache={}; self._index_change_cache_at={}
     def yahoo_symbol(self,symbol):
         symbol=str(symbol).strip().upper()
         if symbol.startswith("^"): return symbol
@@ -47,37 +54,48 @@ class PriceData:
             if c in data.columns:data[c]=pd.to_numeric(data[c],errors="coerce")
         data=data.dropna(subset=required); keep=required+(["Volume"] if "Volume" in data.columns else [])
         return data[keep].sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
+    @staticmethod
+    def _chunks(items,size):
+        for i in range(0,len(items),size):yield items[i:i+size]
+    @staticmethod
+    def _throttle():
+        global _LAST_YAHOO_CALL
+        with _YAHOO_LOCK:
+            wait=_MIN_YAHOO_GAP-(time.monotonic()-_LAST_YAHOO_CALL)
+            if wait>0:time.sleep(wait)
+            _LAST_YAHOO_CALL=time.monotonic()
+    def _download(self,**kwargs):
+        self._throttle()
+        try:return yf.download(**kwargs)
+        except Exception as error:
+            print(f"Yahoo download failed: {type(error).__name__}: {error}"); return pd.DataFrame()
     def get_candles(self,symbol,interval="5m",period="1d"):
         if interval not in self.valid_intervals:raise ValueError(f"Unsupported interval: {interval}")
-        try:
-            data=self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol),period=period,interval=interval,auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout)); return self._completed_1m(data) if interval=="1m" else data
-        except Exception as error:print(f"Price download failed for {symbol}: {error}");return pd.DataFrame()
+        data=self._clean_data(self._download(tickers=self.yahoo_symbol(symbol),period=period,interval=interval,auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))
+        return self._completed_1m(data) if interval=="1m" else data
     def get_1m(self,symbol):return self.get_candles(symbol,"1m","1d")
     def _today_intraday(self,data):
         if data is None or data.empty or "Datetime" not in data.columns:return pd.DataFrame()
         result=data.copy();result["Datetime"]=self._to_ist(result["Datetime"]);result=result.dropna(subset=["Datetime"])
-        if result.empty:return pd.DataFrame()
+        if result.empty:return result
         return result[result["Datetime"].dt.date==datetime.now(INDIA_TZ).date()].sort_values("Datetime").reset_index(drop=True)
     def get_latest_available_1m(self,symbol):
         try:
-            data=self._completed_1m(self._today_intraday(self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol),period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))));return None if data.empty else data.iloc[-1].to_dict()
+            data=self._completed_1m(self._today_intraday(self._clean_data(self._download(tickers=self.yahoo_symbol(symbol),period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))))
+            return None if data.empty else data.iloc[-1].to_dict()
         except Exception:return None
     def get_latest_market_price(self,symbol):
-        try:
-            today=self._completed_1m(self._today_intraday(self._clean_data(yf.download(tickers=self.yahoo_symbol(symbol),period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))))
-            if not today.empty:
-                latest=today.iloc[-1];ts=pd.Timestamp(latest["Datetime"]);ts=ts.tz_localize(INDIA_TZ) if ts.tzinfo is None else ts.tz_convert(INDIA_TZ)
+        latest=self.get_latest_available_1m(symbol)
+        if latest:
+            try:
+                ts=pd.Timestamp(latest["Datetime"]); ts=ts.tz_localize(INDIA_TZ) if ts.tzinfo is None else ts.tz_convert(INDIA_TZ)
                 if 0 <= (datetime.now(INDIA_TZ)-ts.to_pydatetime()).total_seconds() <= 120:return {"Close":float(latest["Close"]),"Datetime":ts.to_pydatetime(),"price_source":"recent_1m"}
-        except Exception:pass
+            except Exception:pass
         return None
     def get_5m(self,symbol):return self.get_candles(symbol,"5m","1d")
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
-    @staticmethod
-    def _chunks(items,size):
-        for i in range(0,len(items),size):yield items[i:i+size]
     def _download_multi_batch(self,tickers,interval="1m",period="1d"):
-        try:return yf.download(tickers=tickers,period=period,interval=interval,auto_adjust=False,progress=False,threads=False,prepost=False,group_by="ticker",timeout=self.download_timeout)
-        except Exception as error:print(f"Yahoo batch failed ({len(tickers)}):",error);return pd.DataFrame()
+        return self._download(tickers=tickers,period=period,interval=interval,auto_adjust=False,progress=False,threads=False,prepost=False,group_by="ticker",timeout=self.download_timeout)
     def _extract_batch(self,batch,raw,completed=True,today_only=True):
         result={};tickers=[f"{s}.NS" for s in batch]
         if raw is None or raw.empty:return result
@@ -98,7 +116,6 @@ class PriceData:
             if not cleaned.empty:result[batch[0]]=cleaned
         return result
     def get_multi_daily(self,symbols,period="5d"):
-        """Batch daily OHLC. Gap detection must not depend on 1-minute feed availability."""
         symbols=list(dict.fromkeys(str(s).upper().replace(".NS","") for s in symbols if str(s).strip()));result={}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures={executor.submit(self._download_multi_batch,[f"{s}.NS" for s in b],"1d",period):b for b in self._chunks(symbols,self.batch_size)}
@@ -109,26 +126,33 @@ class PriceData:
         return result
     def get_multi_1m(self,symbols):
         symbols=list(dict.fromkeys(str(s).upper().replace(".NS","") for s in symbols if str(s).strip()));result={}
-        def worker(batch):
-            raw=self._download_multi_batch([f"{s}.NS" for s in batch],"1m","1d");out=self._extract_batch(batch,raw,True,True);missing=[s for s in batch if s not in out]
-            if missing:out.update(self._extract_batch(missing,self._download_multi_batch([f"{s}.NS" for s in missing],"1m","1d"),True,True))
-            return out
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures={executor.submit(worker,b):b for b in self._chunks(symbols,self.batch_size)}
+            futures={executor.submit(self._download_multi_batch,[f"{s}.NS" for s in b],"1m","1d"):b for b in self._chunks(symbols,self.batch_size)}
             for future in as_completed(futures):
-                try:result.update(future.result())
-                except Exception:pass
+                try:result.update(self._extract_batch(futures[future],future.result(),True,True))
+                except Exception as error:print("1m batch failed:",error)
         for s in symbols:result.setdefault(s,pd.DataFrame())
         return result
-    def get_index_1m(self,ticker="^CRSLDX"):
-        try:return self._completed_1m(self._today_intraday(self._clean_data(yf.download(tickers=ticker,period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))))
-        except Exception:return pd.DataFrame()
-    def get_index_change_pct(self,ticker="^CRSLDX"):
+    def get_index_1m(self,ticker="^CRSLDX",max_age_seconds=20):
+        now=time.monotonic(); cached=self._index_cache.get(ticker)
+        if cached is not None and now-self._index_cache_at.get(ticker,0)<max_age_seconds:return cached.copy()
         try:
-            data=self._clean_data(yf.download(tickers=ticker,period="5d",interval="1d",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout));prior=data[data["Datetime"].dt.date<datetime.now(INDIA_TZ).date()];intraday=self.get_index_1m(ticker)
-            if prior.empty or intraday.empty:return None
-            return (float(intraday.iloc[-1]["Close"])/float(prior.iloc[-1]["Close"])-1)*100
-        except Exception:return None
+            data=self._completed_1m(self._today_intraday(self._clean_data(self._download(tickers=ticker,period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))))
+            if not data.empty:self._index_cache[ticker]=data.copy();self._index_cache_at[ticker]=time.monotonic();return data
+        except Exception:pass
+        return cached.copy() if cached is not None else pd.DataFrame()
+    def get_index_change_pct(self,ticker="^CRSLDX",intraday=None,max_age_seconds=25):
+        now=time.monotonic(); cached=self._index_change_cache.get(ticker)
+        if cached is not None and now-self._index_change_cache_at.get(ticker,0)<max_age_seconds:return cached
+        try:
+            data=self._clean_data(self._download(tickers=ticker,period="5d",interval="1d",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout))
+            if data.empty:return cached
+            prior=data[data["Datetime"].dt.date<datetime.now(INDIA_TZ).date()]
+            intraday=intraday if intraday is not None else self.get_index_1m(ticker,max_age_seconds=max_age_seconds)
+            if prior.empty or intraday is None or intraday.empty:return cached
+            value=(float(intraday.iloc[-1]["Close"])/float(prior.iloc[-1]["Close"])-1)*100
+            self._index_change_cache[ticker]=float(value);self._index_change_cache_at[ticker]=time.monotonic();return float(value)
+        except Exception:return cached
     def today_only(self,df):return self._today_intraday(df)
     def latest_candle(self,symbol,interval="1m"):
         df=self.today_only(self.get_candles(symbol,interval,"1d"));return None if df.empty else df.iloc[-1].to_dict()
