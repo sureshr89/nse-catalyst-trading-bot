@@ -43,10 +43,10 @@ def test_buy_state_requires_breach_then_return_to_open():
 def test_sell_state_requires_breach_then_return_to_open():
     engine = OpenReversalEngine("09:45", "14:00", 1.25)
     state = {"side": "SELL", "pdl_breached": False, "open_returned": False}
-    state = engine.update_state(state, 95.0, 100.0, 90.0, 90.5)
+    state = engine.update_state(state, 100.0, 100.0, 90.0, 90.5)
     assert state["pdl_breached"] is True
     assert state.get("open_returned", False) is False
-    state = engine.update_state(state, 95.0, 100.0, 90.0, 95.0)
+    state = engine.update_state(state, 100.0, 100.0, 90.0, 100.0)
     assert state["open_returned"] is True
 
 
@@ -60,9 +60,9 @@ def test_build_signal_buy_target_and_stop():
 
 def test_build_signal_sell_target_and_stop():
     engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    signal = engine.build_signal("TEST", "SELL", 95.0, 95.0, 105.0, 90.0, -0.5)
+    signal = engine.build_signal("TEST", "SELL", 85.0, 85.0, 105.0, 90.0, -0.5)
     assert signal["stop_loss"] == 90.0
-    assert signal["target"] == 88.75
+    assert signal["target"] == 78.75
     assert signal["risk_reward"] == 1.25
 
 
