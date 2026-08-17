@@ -1,21 +1,18 @@
-"""Strategy 2: gap-up extension reversal SELL.
+"""Strategy 2: gap extension reversal, BUY and SELL.
 
-Rules:
-- Today's Open > PDH.
-- Opening gap from Previous Day Close is used for priority.
-- No entry before 09:45 IST.
-- Stock must first move above Today's Open after 09:45.
-- The first completed 1-minute CLOSE below Today's Open is the only entry trigger.
-- Stop = Today's High at the trigger candle.
-- Target = PDH.
-- NIFTY 500 is a soft protective filter: only clearly bullish (> +0.25%) blocks the short.
+SELL: Open > PDH -> price extends above Open -> after 09:45 -> first completed
+1-minute CLOSE below Open -> SELL -> SL Today's High -> target PDH.
+BUY: Open < PDL -> price extends below Open -> after 09:45 -> first completed
+1-minute CLOSE above Open -> BUY -> SL Today's Low -> target PDL.
+Opening GAP versus Previous Day Close is the sole priority metric.
+NIFTY is a soft protective filter; it must not over-restrict price action.
 """
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
-NIFTY_BULLISH_BLOCK_PCT = 0.25
+NIFTY_BLOCK_PCT = 0.25
 
 
 class GapExtensionReversalEngine:
@@ -43,67 +40,68 @@ class GapExtensionReversalEngine:
         now = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
         return result[result["Datetime"] < now].copy()
 
-    def evaluate(self, symbol, today_data, today_open, pdh, pdc, nifty_change_pct):
+    def _base(self, symbol, side, entry, open_price, pdc, pdh, pdl, stop, target, candle, nifty):
+        risk = abs(stop - entry)
+        reward = abs(entry - target)
+        if risk <= 0 or reward <= 0:
+            return None
+        rr = reward / risk
+        if rr < self.rr:
+            return None
+        gap = (open_price - pdc) / pdc * 100 if pdc else 0.0
+        return {
+            "symbol": str(symbol).upper(), "signal": side,
+            "entry": round(entry, 4), "today_open": round(open_price, 4),
+            "previous_day_close": round(pdc, 4), "pdh": round(pdh, 4), "pdl": round(pdl, 4),
+            "today_high": round(stop, 4) if side == "SELL" else None,
+            "today_low": round(stop, 4) if side == "BUY" else None,
+            "stop_loss": round(stop, 4), "target": round(target, 4),
+            "risk_reward": round(rr, 4), "gap_percent": round(gap, 4),
+            "gap_type": "GAP_UP_EXTENSION_REVERSAL" if side == "SELL" else "GAP_DOWN_EXTENSION_REVERSAL",
+            "setup_type": "GAP_UP_EXTENSION_REVERSAL_SELL" if side == "SELL" else "GAP_DOWN_EXTENSION_REVERSAL_BUY",
+            "trigger_close": round(entry, 4), "trigger_time": candle["Datetime"].isoformat(),
+            "nifty500_change_pct": round(float(nifty), 4),
+        }
+
+    def evaluate(self, symbol, today_data, today_open, pdh, pdc, nifty_change_pct, pdl=None):
         data = self._completed(today_data)
         if data is None or data.empty:
             return None
-        open_price = float(today_open)
-        pdh = float(pdh)
-        pdc = float(pdc)
-        if not (open_price > pdh and pdc < open_price):
-            return None
+        open_price, pdh, pdc = float(today_open), float(pdh), float(pdc)
+        pdl = float(pdl) if pdl is not None else None
         today = data[data["Datetime"].dt.date == datetime.now(INDIA_TZ).date()].copy()
         if today.empty:
             return None
-        after_start = today[
-            (today["Datetime"].dt.time >= self.start)
-            & (today["Datetime"].dt.time <= self.end)
-        ].copy()
-        if after_start.empty:
+        candles = today[(today["Datetime"].dt.time >= self.start) & (today["Datetime"].dt.time <= self.end)].copy()
+        if candles.empty:
             return None
 
-        extended = False
-        day_high = open_price
-        for _, candle in after_start.iterrows():
-            high = float(candle["High"])
-            close = float(candle["Close"])
-            day_high = max(day_high, high)
-            if high > open_price:
-                extended = True
-            if not extended or close >= open_price:
-                continue
+        if open_price > pdh and pdc < open_price:
+            extended = False
+            day_high = open_price
+            for _, candle in candles.iterrows():
+                high, close = float(candle["High"]), float(candle["Close"])
+                day_high = max(day_high, high)
+                if high > open_price:
+                    extended = True
+                if not extended or close >= open_price:
+                    continue
+                if float(nifty_change_pct) > NIFTY_BLOCK_PCT:
+                    return None
+                return self._base(symbol, "SELL", close, open_price, pdc, pdh, pdl, day_high, pdh, candle, nifty_change_pct)
+            return None
 
-            # This is the first completed close below Today's Open. It is the
-            # only reversal trigger for the setup; later candles are ignored.
-            stop = day_high
-            risk = stop - close
-            reward = close - pdh
-            if risk <= 0 or reward <= 0:
-                return None
-            rr = reward / risk
-            if rr < self.rr:
-                return None
-            # A clearly bullish NIFTY 500 blocks a short; small positive
-            # movement does not.
-            if float(nifty_change_pct) > NIFTY_BULLISH_BLOCK_PCT:
-                return None
-            return {
-                "symbol": str(symbol).upper(),
-                "signal": "SELL",
-                "entry": round(close, 4),
-                "today_open": round(open_price, 4),
-                "previous_day_close": round(pdc, 4),
-                "pdh": round(pdh, 4),
-                "pdl": None,
-                "today_high": round(stop, 4),
-                "stop_loss": round(stop, 4),
-                "target": round(pdh, 4),
-                "risk_reward": round(rr, 4),
-                "gap_percent": round((open_price - pdc) / pdc * 100, 4) if pdc else 0.0,
-                "gap_type": "GAP_UP_EXTENSION_REVERSAL",
-                "setup_type": "GAP_UP_EXTENSION_REVERSAL_SELL",
-                "trigger_close": round(close, 4),
-                "trigger_time": candle["Datetime"].isoformat(),
-                "nifty500_change_pct": round(float(nifty_change_pct), 4),
-            }
+        if pdl is not None and open_price < pdl and pdc > open_price:
+            extended = False
+            day_low = open_price
+            for _, candle in candles.iterrows():
+                low, close = float(candle["Low"]), float(candle["Close"])
+                day_low = min(day_low, low)
+                if low < open_price:
+                    extended = True
+                if not extended or close <= open_price:
+                    continue
+                if float(nifty_change_pct) < -NIFTY_BLOCK_PCT:
+                    return None
+                return self._base(symbol, "BUY", close, open_price, pdc, pdh, pdl, day_low, pdl, candle, nifty_change_pct)
         return None
