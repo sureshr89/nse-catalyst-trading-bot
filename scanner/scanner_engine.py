@@ -2,7 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-import json, math
+import json
 import pandas as pd
 from config.settings import TRADING_START, LAST_ENTRY_TIME, RISK_REWARD_RATIO, NIFTY500_MIN_CHANGE_PCT
 from data.reference_store import ReferenceStore
@@ -12,35 +12,32 @@ from market.live_price import get_current_market_price
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics, sort_key
 
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
-MIN_MARKET_DATA_COVERAGE = 0.95
+INDIA_TZ=ZoneInfo("Asia/Kolkata")
+MIN_MARKET_DATA_COVERAGE=0.80
 
 class ScannerEngine:
     """Maintain BUY/SELL waiting states across 30-second control cycles."""
     def __init__(self):
-        self.universe_engine=StockUniverse(); self.universe=self.universe_engine.get_dataframe(refresh=False)
-        self.price_data=PriceData(); self.strategy=OpenReversalEngine(TRADING_START,LAST_ENTRY_TIME,RISK_REWARD_RATIO)
-        self.references=pd.DataFrame(); self.opening_candidates=pd.DataFrame(); self.gap_analysis=pd.DataFrame(); self.universe_market_data={}; self.nifty500_market_data=pd.DataFrame(); self._prepared_date=None
-        self._data_cache_at=None; self._nifty_cache_at=None; self._nifty_change=0.0; self._activated={"BUY":False,"SELL":False}; self._activated_at={"BUY":None,"SELL":None}; self.waiting={"BUY":{},"SELL":{}}; self.qualified={"BUY":{},"SELL":{}}; self.metrics_cache={}; self._load_waiting(); self.diagnostics=self._empty_diagnostics()
+        self.universe_engine=StockUniverse(); self.universe=self.universe_engine.get_dataframe(refresh=False); self.price_data=PriceData(); self.strategy=OpenReversalEngine(TRADING_START,LAST_ENTRY_TIME,RISK_REWARD_RATIO)
+        self.references=pd.DataFrame(); self.opening_candidates=pd.DataFrame(); self.gap_analysis=pd.DataFrame(); self.universe_market_data={}; self.nifty500_market_data=pd.DataFrame(); self._prepared_date=None; self._data_cache_at=None; self._nifty_cache_at=None; self._nifty_change=0.0
+        self._activated={"BUY":False,"SELL":False}; self._activated_at={"BUY":None,"SELL":None}; self.waiting={"BUY":{},"SELL":{}}; self.qualified={"BUY":{},"SELL":{}}; self.metrics_cache={}; self._load_waiting(); self.diagnostics=self._empty_diagnostics()
     @staticmethod
     def _empty_diagnostics():
         return {"timestamp":None,"stocks_scanned":0,"opening_setup_passed":0,"market_alignment_passed":0,"strategy_setup_passed":0,"final_signals":0,"gap_up_count":0,"gap_down_count":0,"gap_data_count":0,"nifty500_direction":"UNKNOWN","nifty500_change_pct":0.0,"nifty500_bullish":0,"nifty500_bearish":0,"nifty500_neutral":0,"nifty500_coverage":0,"market_data_coverage":0.0,"buy_waiting":0,"sell_waiting":0,"buy_qualified":0,"sell_qualified":0,"ranking":[],"rejections":{"missing_data":0,"opening_setup":0,"market_alignment":0,"strategy_setup":0}}
     @staticmethod
     def _today(): return pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d")
     @staticmethod
-    def _candidate_id(symbol,side,today_open,pdh,pdl):
-        return "|".join([pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d"),str(symbol).upper(),str(side).upper(),f"{float(today_open):.4f}",f"{float(pdh):.4f}",f"{float(pdl):.4f}"])
+    def _candidate_id(symbol,side,today_open,pdh,pdl): return "|".join([pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d"),str(symbol).upper(),str(side).upper(),f"{float(today_open):.4f}",f"{float(pdh):.4f}",f"{float(pdl):.4f}"])
     def _waiting_path(self): return Path(__file__).resolve().parents[1]/"outputs"/"waiting_candidates.json"
     def _load_waiting(self):
         try:
-            payload=json.loads(self._waiting_path().read_text(encoding="utf-8"))
+            payload=json.loads(self._waiting_path().read_text(encoding="utf-8"));
             if payload.get("date")!=self._today(): return
             self.waiting=payload.get("waiting",{"BUY":{},"SELL":{}}); self.qualified=payload.get("qualified",{"BUY":{},"SELL":{}}); self._activated=payload.get("activated",{"BUY":False,"SELL":False}); self._activated_at=payload.get("activated_at",{"BUY":None,"SELL":None})
         except Exception: pass
     def _save_waiting(self):
         path=self._waiting_path(); path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(".tmp")
-        try:
-            tmp.write_text(json.dumps({"date":self._today(),"updated_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds"),"activated":self._activated,"activated_at":self._activated_at,"waiting":self.waiting,"qualified":self.qualified},indent=2,default=str),encoding="utf-8"); tmp.replace(path)
+        try: tmp.write_text(json.dumps({"date":self._today(),"updated_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds"),"activated":self._activated,"activated_at":self._activated_at,"waiting":self.waiting,"qualified":self.qualified},indent=2,default=str),encoding="utf-8"); tmp.replace(path)
         except Exception as error: print("Could not persist waiting candidates:",error)
     def _write_diagnostics(self):
         self.diagnostics.update({"buy_waiting":len(self.waiting["BUY"]),"sell_waiting":len(self.waiting["SELL"]),"buy_qualified":len(self.qualified["BUY"]),"sell_qualified":len(self.qualified["SELL"])})
@@ -60,9 +57,8 @@ class ScannerEngine:
         self.references=refs; self._prepared_date=today; return refs
     def _industry_for_symbol(self,symbol):
         try:
-            if "Symbol" in self.universe.columns and "Industry" in self.universe.columns:
-                row=self.universe[self.universe["Symbol"].astype(str).str.upper().eq(str(symbol).upper())]
-                if not row.empty:return str(row.iloc[0]["Industry"] or "UNKNOWN").strip() or "UNKNOWN"
+            row=self.universe[self.universe["Symbol"].astype(str).str.upper().eq(str(symbol).upper())] if "Symbol" in self.universe.columns else pd.DataFrame()
+            if not row.empty and "Industry" in row.columns:return str(row.iloc[0]["Industry"] or "UNKNOWN").strip() or "UNKNOWN"
         except Exception: pass
         return "UNKNOWN"
     def _market_snapshot(self,symbols):
@@ -87,11 +83,8 @@ class ScannerEngine:
             industry=self._industry_for_symbol(symbol)
             if op>pdh: gap_type,setup,level="GAP_UP","OPEN_ABOVE_PDH",pdh
             elif op<pdl: gap_type,setup,level="GAP_DOWN","OPEN_BELOW_PDL",pdl
-            else: gap_type,setup,level="INSIDE_PDH_PDL","NO_GAP_SETUP",None
-            # "Gap" for priority means today's opening gap versus previous-day close.
-            # PDH/PDL is used only to decide whether the opening setup qualifies.
-            gap_from_close=op-pdc; gap_pct_from_close=gap_from_close/pdc*100 if pdc else 0.0
-            setup_gap=op-level if level is not None else 0.0; setup_gap_pct=setup_gap/level*100 if level else 0.0
+            else: gap_type,setup,level="INSIDE_PDH_PDL", "NO_GAP_SETUP", None
+            gap_from_close=op-pdc; gap_pct_from_close=gap_from_close/pdc*100 if pdc else 0.0; setup_gap=op-level if level is not None else 0.0; setup_gap_pct=setup_gap/level*100 if level else 0.0
             gaps.append({"Symbol":symbol,"Industry":industry,"PreviousClose":round(pdc,4),"TodayOpen":round(op,4),"Gap":round(gap_from_close,4),"GapPercent":round(gap_pct_from_close,3),"GapFromPDH_PDL":round(setup_gap,4),"GapPercentFromPDH_PDL":round(setup_gap_pct,3),"GapFromPreviousClose":round(gap_from_close,4),"GapPercentFromPreviousClose":round(gap_pct_from_close,3),"GapType":gap_type,"PDH":round(pdh,4),"PDL":round(pdl,4),"PreparedAtIST":datetime.now(INDIA_TZ).isoformat(timespec="seconds")})
             if setup!="NO_GAP_SETUP": rows.append({"Symbol":symbol,"Industry":industry,"PDH":pdh,"PDL":pdl,"TodayOpen":op,"PreviousDayClose":pdc,"Gap":gap_from_close,"GapPercent":gap_pct_from_close,"GapFromPDH_PDL":setup_gap,"GapPercentFromPDH_PDL":setup_gap_pct,"GapFromPreviousClose":gap_from_close,"GapPercentFromPreviousClose":gap_pct_from_close,"GapType":gap_type,"OpeningSetup":setup})
         self.gap_analysis=pd.DataFrame(gaps).drop_duplicates("Symbol") if gaps else pd.DataFrame(); self.opening_candidates=pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame(); self._write_gap_analysis(gaps)
@@ -105,19 +98,16 @@ class ScannerEngine:
         if active and not self._activated[side]: self._activated[side]=True; self._activated_at[side]=datetime.now(INDIA_TZ).isoformat(timespec="seconds")
         return active
     def _seed_and_update(self,side,change,market_data):
-        # NIFTY alignment is checked at final entry; it must not discard an earlier valid price-action sequence.
         active=self._activate_side(side,change)
         if not active and not self._activated[side]: return
         for _,row in self.opening_candidates.iterrows():
             symbol=str(row["Symbol"]).upper(); initial_side="BUY" if row["OpeningSetup"]=="OPEN_ABOVE_PDH" else "SELL" if row["OpeningSetup"]=="OPEN_BELOW_PDL" else None
             if initial_side!=side: continue
             candidate_id=self._candidate_id(symbol,side,row["TodayOpen"],row["PDH"],row["PDL"])
-            if symbol not in self.waiting[side] and symbol not in self.qualified[side]:
-                self.waiting[side][symbol]={"candidate_id":candidate_id,"symbol":symbol,"side":side,"today_open":float(row["TodayOpen"]),"pdh":float(row["PDH"]),"pdl":float(row["PDL"]),"previous_day_close":float(row["PreviousDayClose"]),"gap":float(row.get("Gap",0)),"gap_percent":float(row.get("GapPercent",0)),"industry":row.get("Industry","UNKNOWN"),"state":"WAITING_FOR_BREACH","created_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds")}
+            if symbol not in self.waiting[side] and symbol not in self.qualified[side]: self.waiting[side][symbol]={"candidate_id":candidate_id,"symbol":symbol,"side":side,"today_open":float(row["TodayOpen"]),"pdh":float(row["PDH"]),"pdl":float(row["PDL"]),"previous_day_close":float(row["PreviousDayClose"]),"gap":float(row.get("Gap",0)),"gap_percent":float(row.get("GapPercent",0)),"industry":row.get("Industry","UNKNOWN"),"state":"WAITING_FOR_BREACH","created_at":datetime.now(INDIA_TZ).isoformat(timespec="seconds")}
             state=self.waiting[side].get(symbol)
             if not state: continue
-            state.setdefault("candidate_id",candidate_id)
-            data=market_data.get(symbol); today=self.price_data.today_only(data) if data is not None else pd.DataFrame()
+            state.setdefault("candidate_id",candidate_id); data=market_data.get(symbol); today=self.price_data.today_only(data) if data is not None else pd.DataFrame()
             if today.empty: continue
             for _,candle in today.iterrows():
                 before=dict(state); state=self.strategy.update_state(state,row["TodayOpen"],row["PDH"],row["PDL"],candle["Close"],candle["Datetime"].isoformat())
@@ -146,19 +136,23 @@ class ScannerEngine:
                 if side=="SELL" and entry>open_price: continue
                 signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,{"metrics_calculated_at":item.get("metrics_calculated_at","")})
                 if signal:
-                    signal.update({"candidate_id":item.get("candidate_id"),"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1})
-                    ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"gap_percent":item.get("gap_percent",0)})
-                    signals.append(signal)
+                    signal.update({"candidate_id":item.get("candidate_id"),"industry":item.get("industry","UNKNOWN"),"gap":item.get("gap",0),"gap_percent":item.get("gap_percent",0),"gap_type":"GAP_UP" if side=="BUY" else "GAP_DOWN","nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1}); ranking.append({"priority":len(ranking)+1,"candidate_id":item.get("candidate_id"),"symbol":symbol,"side":side,"gap_percent":item.get("gap_percent",0)}); signals.append(signal)
         self.diagnostics["ranking"]=ranking; return signals
     def scan(self):
         self.diagnostics=self._empty_diagnostics(); refs=self.prepare_reference_data()
-        if refs.empty:return self._finish([])
+        if refs.empty:
+            self.diagnostics["rejections"]["missing_data"]="REFERENCE_DATA_UNAVAILABLE"; return self._finish([])
         symbols=refs["Symbol"].astype(str).str.upper().drop_duplicates().tolist(); self.diagnostics["stocks_scanned"]=len(symbols); data=self._market_snapshot(symbols); self.universe_market_data=data
-        available=sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"]=available/len(symbols) if symbols else 0.0
-        if available<math.ceil(len(symbols)*MIN_MARKET_DATA_COVERAGE): self.diagnostics["rejections"]["missing_data"]+=len(symbols)-available; self._write_diagnostics(); return self._finish([])
+        available=sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"]=round(available/len(symbols),4) if symbols else 0.0
+        self.diagnostics["coverage_required"]=MIN_MARKET_DATA_COVERAGE
+        if available<max(1,int(len(symbols)*MIN_MARKET_DATA_COVERAGE)):
+            self.diagnostics["rejections"]["missing_data"]=len(symbols)-available; self._write_diagnostics(); return self._finish([])
         change=self._nifty_snapshot()
-        if change is None:return self._finish([])
+        if change is None:
+            self.diagnostics["rejections"]["missing_data"]="NIFTY500_INDEX_UNAVAILABLE"; return self._finish([])
         self.diagnostics["nifty500_change_pct"]=round(change,4); self.diagnostics["nifty500_direction"]="BULLISH" if change>=NIFTY500_MIN_CHANGE_PCT else "BEARISH" if change<=-NIFTY500_MIN_CHANGE_PCT else "NEUTRAL"; self.diagnostics["nifty500_bullish"]=int(change>=NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_bearish"]=int(change<=-NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_neutral"]=int(abs(change)<NIFTY500_MIN_CHANGE_PCT)
-        self._build_gap_board(refs,data); self._seed_and_update("BUY",change,data); self._seed_and_update("SELL",change,data); signals=self._final_signals(change,data)
-        self.diagnostics["market_alignment_passed"]=len(self.qualified["BUY"])+len(self.qualified["SELL"]); self.diagnostics["strategy_setup_passed"]=len(signals); self.diagnostics["final_signals"]=len(signals); self._save_waiting(); self._write_diagnostics(); return signals
-    def _finish(self,signals): self.diagnostics["final_signals"]=len(signals); self._write_diagnostics(); return signals
+        opening=self._build_gap_board(self.references,data); self.diagnostics["opening_setup_passed"]=len(opening)
+        self._seed_and_update("BUY",change,data); self._seed_and_update("SELL",change,data)
+        self.diagnostics["market_alignment_passed"]=sum(1 for side in ("BUY","SELL") if self.strategy.market_aligned(side,change)); self.diagnostics["strategy_setup_passed"]=len(self.qualified["BUY"])+len(self.qualified["SELL"])
+        signals=self._final_signals(change,data); self.diagnostics["final_signals"]=len(signals); self._save_waiting(); return self._finish(signals)
+    def _finish(self,signals): self._write_diagnostics(); return signals
