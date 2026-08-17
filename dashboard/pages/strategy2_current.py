@@ -5,8 +5,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 
 from dashboard.nav import render_nav
 from dashboard.style import load_css
@@ -21,30 +20,33 @@ ensure_strategy2_running()
 render_nav()
 
 s = get_strategy2_status() or status()
-d = diagnostics()
+d = diagnostics() or {}
 st.title("🔴 Strategy 2 — Current Trading")
-st.caption("Gap-Up Extension Reversal SELL • separate ₹2,50,000 paper account • completed 1-minute data")
+st.caption("Gap Extension Reversal BUY + SELL • separate ₹2,50,000 paper account • completed 1-minute data")
 
-cards = st.columns(5)
+cards = st.columns(6)
 cards[0].metric("Status", s.get("status", "STARTING"))
 cards[1].metric("Available Capital", format_price(s.get("available_capital", 250000)))
 cards[2].metric("Open Positions", int(s.get("open_positions", 0) or 0))
 cards[3].metric("Daily P&L", format_price(s.get("daily_pnl", 0)))
-cards[4].metric("Qualified", int((d or {}).get("qualified", 0) or 0))
-if s.get("message"):
-    st.info(str(s["message"]))
+cards[4].metric("BUY Qualified", int(d.get("buy_qualified", 0) or 0))
+cards[5].metric("SELL Qualified", int(d.get("sell_qualified", 0) or 0))
+if s.get("message"): st.info(str(s["message"]))
 
-st.subheader("⚡ Exact Entry Rules")
+st.subheader("⚡ Exact Strategy 2 Rules")
 st.dataframe(pd.DataFrame([
-    ("Setup", "Today's Open > PDH"),
-    ("Extension", "After 09:45, price must trade above Today's Open"),
-    ("Trigger", "First completed 1-minute CLOSE below Today's Open"),
-    ("Side", "SELL only"),
-    ("Stop", "Today's High at the trigger"),
-    ("Target", "PDH"),
-    ("Priority", "Largest opening GAP % from Previous Day Close first"),
-    ("NIFTY", "Only clearly bullish NIFTY 500 (> +0.25%) blocks the short"),
+    ("SELL setup", "Today's Open > PDH"),
+    ("SELL extension", "After 09:45, price trades above Today's Open"),
+    ("SELL trigger", "First completed 1-minute CLOSE below Today's Open"),
+    ("SELL SL / Target", "Today's High at trigger / PDH"),
+    ("BUY setup", "Today's Open < PDL"),
+    ("BUY extension", "After 09:45, price trades below Today's Open"),
+    ("BUY trigger", "First completed 1-minute CLOSE above Today's Open"),
+    ("BUY SL / Target", "Today's Low at trigger / PDL"),
+    ("Priority", "Largest absolute opening GAP % from Previous Day Close first"),
+    ("NIFTY", "Soft protective filter: clearly bullish blocks SELL; clearly bearish blocks BUY"),
     ("Risk", "₹1,400–₹1,500 intended risk / minimum 1.25R"),
+    ("Capital", "Separate ₹2,50,000 paper account"),
 ], columns=["Condition", "Rule"]), use_container_width=True, hide_index=True)
 
 st.subheader("📡 Live Scan State")
@@ -52,7 +54,10 @@ scan_rows = [
     ("Last scan", s.get("last_scan") or "Not scanned yet"),
     ("Signals in last scan", int(s.get("last_signal_count", 0) or 0)),
     ("Opening GAP candidates", int(d.get("candidates", 0) or 0)),
-    ("Qualified reversals", int(d.get("qualified", 0) or 0)),
+    ("BUY candidates", int(d.get("buy_candidates", 0) or 0)),
+    ("SELL candidates", int(d.get("sell_candidates", 0) or 0)),
+    ("BUY qualified", int(d.get("buy_qualified", 0) or 0)),
+    ("SELL qualified", int(d.get("sell_qualified", 0) or 0)),
     ("Approved signals", int(d.get("signals", 0) or 0)),
 ]
 st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
@@ -60,8 +65,8 @@ st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]), use_container
 st.subheader("🎯 Today's Qualified / Approved Signals")
 q = today_signals()
 if not q.empty:
-    cols = [c for c in ["timestamp", "symbol", "gap_percent", "today_open", "pdh", "trigger_close", "entry", "stop_loss", "target", "risk_reward", "priority_rank", "news_sentiment", "approved", "reason"] if c in q.columns]
-    st.dataframe(q[cols].tail(50).iloc[::-1], use_container_width=True, hide_index=True, height=330)
+    cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "today_open", "pdh", "pdl", "trigger_close", "entry", "stop_loss", "target", "risk_reward", "priority_rank", "news_sentiment", "approved", "reason"] if c in q.columns]
+    st.dataframe(q[cols].tail(100).iloc[::-1], use_container_width=True, hide_index=True, height=360)
 else:
     st.info("No Strategy 2 signal decisions recorded today.")
 
