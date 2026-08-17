@@ -66,7 +66,7 @@ st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]).astype(str), w
 st.subheader("🎯 Today's Qualified / Approved Signals")
 q = today_signals()
 if not q.empty:
-    cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "today_open", "pdh", "pdl", "trigger_close", "entry", "stop_loss", "target", "risk_reward", "priority_rank", "news_sentiment", "approved", "reason"] if c in q.columns]
+    cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "today_open", "pdh", "pdl", "trigger_close", "entry", "stop_loss", "target", "risk_reward", "priority_rank", "approved", "reason"] if c in q.columns]
     st.dataframe(q[cols].tail(100).iloc[::-1], width="stretch", hide_index=True, height=360)
 else:
     st.info("No Strategy 2 signal decisions recorded today.")
