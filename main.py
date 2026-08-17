@@ -1,4 +1,4 @@
-"""Core paper-trading orchestration for the NIFTY 500 open-return strategy."""
+"""Core paper-trading orchestration for the NIFTY 500 strategies."""
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import time
@@ -10,13 +10,19 @@ from market.price_data import PriceData
 from papertrade.paper_trade_engine import PaperTradeEngine
 from papertrade.trade_journal_clean import TradeJournal
 from papertrade.missed_capital_tracker import MissedCapitalTracker
+from strategy2_runtime import Strategy2Runtime
+
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
+
+
 class TradingBot:
-    """Run one NIFTY 500 paper-trading session without live execution."""
+    """Run one NIFTY 500 paper-trading session with both strategy runtimes."""
     def __init__(self):
         if LIVE_TRADING: raise RuntimeError("LIVE_TRADING must be False. This application is paper trading only.")
         if not PAPER_TRADING: raise RuntimeError("PAPER_TRADING must be True.")
-        self.scanner=ScannerEngine();self.risk_engine=RiskEngine();self.price_data=PriceData();self.paper_engine=PaperTradeEngine();self.journal=TradeJournal();self._restore_risk_counts_from_paper_state();self.missed_capital=MissedCapitalTracker(self.journal,self.price_data);self.running=True;self.processed_signals=set();self.daily_pnl=self._restore_daily_pnl();self.cooldown_until=self._restore_cooldown();self.square_off_done=False
+        self.scanner=ScannerEngine(); self.risk_engine=RiskEngine(); self.price_data=PriceData(); self.paper_engine=PaperTradeEngine(); self.journal=TradeJournal(); self._restore_risk_counts_from_paper_state(); self.missed_capital=MissedCapitalTracker(self.journal,self.price_data); self.running=True; self.processed_signals=set(); self.daily_pnl=self._restore_daily_pnl(); self.cooldown_until=self._restore_cooldown(); self.square_off_done=False
+        self.strategy2=Strategy2Runtime(self.scanner)
+
     @staticmethod
     def _now():return datetime.now(INDIA_TZ)
     @staticmethod
@@ -82,7 +88,7 @@ class TradingBot:
         except Exception:return None
     def signal_key(self,signal):
         candidate=str(signal.get("candidate_id","")).strip().upper()
-        if not candidate:candidate="|".join([str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("open_cross_level","")).strip(),str(signal.get("pdh","")).strip(),str(signal.get("pdl","")).strip()])
+        if not candidate:candidate="|".join([str(signal.get("strategy", "STRATEGY_1")).strip().upper(),str(signal.get("symbol","")).strip().upper(),str(signal.get("signal","")).strip().upper(),str(signal.get("open_cross_level","")).strip(),str(signal.get("pdh","")).strip(),str(signal.get("pdl","")).strip()])
         return ("CANDIDATE",candidate)
     def daily_limit_reached(self):return self.daily_pnl<=-float(DAILY_MAX_LOSS) or self.daily_pnl>=float(DAILY_PROFIT_TARGET)
     def cooldown_active(self):
@@ -95,7 +101,7 @@ class TradingBot:
         try:self.journal.log_signal(row)
         except Exception as error:print("Signal journal save failed:",error)
     def _attach_trade_context(self,position,signal):
-        fields=("candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","nifty500_universe","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type")
+        fields=("strategy","strategy_name","strategy_version","candidate_id","open_cross_level","pdh","pdl","today_open","today_low","today_high","market_direction","stock_direction","stock_today_direction","setup_type","trigger_close","pdh_pdl_reached","nifty500_universe","priority_rank","risk_per_share","actual_risk","position_value","previous_day_close","gap","gap_percent","gap_type")
         for field in fields:
             if field in signal:position[field]=signal[field]
         return position
@@ -181,13 +187,16 @@ class TradingBot:
             if price is None:continue
             closed=self.paper_engine.close_position(symbol,price,exit_time,"SQUARE_OFF")
             if closed is not None:self.daily_pnl=round(self.daily_pnl+float(closed.get("pnl",0) or 0),2)
-        journal_ok=self._retry_closed_journal();self.square_off_done=(not bool(self.paper_engine.open_positions)) and journal_ok
+        journal_ok=self._retry_closed_journal(); self.strategy2.square_off_all(); self.square_off_done=(not bool(self.paper_engine.open_positions)) and journal_ok and not bool(self.strategy2.paper_engine.open_positions)
     def scan_for_entries(self):
         now=self.current_time()
         if now<TRADING_START or now>LAST_ENTRY_TIME or self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:return
-        for signal in self.scanner.scan() or []:
+        signals=self.scanner.scan() or []
+        for signal in signals:
             if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:break
             self.process_signal(signal)
+        try:self.strategy2.scan()
+        except Exception as error:print(f"Strategy 2 scan failed: {type(error).__name__}: {error}")
     def latest_1m_candle(self,symbol):
         try:return self.price_data.get_latest_available_1m(symbol)
         except Exception as error:print(symbol,"1-minute data error:",error);return None
@@ -195,4 +204,7 @@ class TradingBot:
         if self.current_time()>=SQUARE_OFF_TIME:
             if not self.square_off_done:self.square_off_all()
             return
-        self.square_off_done=False;self._process_open_positions();self.scan_for_entries()
+        self.square_off_done=False; self._process_open_positions()
+        try:self.strategy2.process_positions()
+        except Exception as error:print(f"Strategy 2 position processing failed: {type(error).__name__}: {error}")
+        self.scan_for_entries()
