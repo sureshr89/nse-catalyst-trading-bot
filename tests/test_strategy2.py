@@ -36,9 +36,9 @@ def test_strategy2_enters_on_first_completed_close_below_open():
 
 def test_strategy2_first_close_is_only_trigger():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
-    data = _data([104.5, 102.9, 101.5], [104.5, 103.4, 102.0])
-    # First close below open has insufficient RR, so the later lower close
-    # must not create a second opportunity.
+    data = _data([104.5, 100.9, 100.5], [104.5, 103.2, 102.0])
+    # The first close below open has insufficient RR. A later close must not
+    # create another entry opportunity for the same setup.
     assert engine.evaluate("TEST", data, 103, 100, 100, -0.2) is None
 
 
