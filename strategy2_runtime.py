@@ -18,6 +18,7 @@ from news.sentiment import analyze_yahoo_news, news_allows_trade
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 STRATEGY2_TRADES = Path("outputs/strategy2_trades.csv")
+MAX_TRIGGER_AGE_SECONDS = 120
 
 
 class Strategy2Runtime:
@@ -37,8 +38,7 @@ class Strategy2Runtime:
         self._write_diagnostics()
 
     @staticmethod
-    def _now():
-        return datetime.now(INDIA_TZ)
+    def _now(): return datetime.now(INDIA_TZ)
 
     @staticmethod
     def _date_ist(value):
@@ -78,10 +78,8 @@ class Strategy2Runtime:
             if df.empty or "candidate_id" not in df.columns: return
             today = self._now().date()
             for _, row in df.iterrows():
-                if self._date_ist(row.get("timestamp")) == today and str(row.get("candidate_id", "")).strip():
-                    self.processed.add(str(row["candidate_id"]).strip())
-        except Exception:
-            pass
+                if self._date_ist(row.get("timestamp")) == today and str(row.get("candidate_id", "")).strip(): self.processed.add(str(row["candidate_id"]).strip())
+        except Exception: pass
 
     def _write_diagnostics(self):
         payload = dict(self.diagnostics)
@@ -92,8 +90,7 @@ class Strategy2Runtime:
         payload["total_capital"] = self.paper_engine.total_capital
         payload["daily_pnl"] = self.daily_pnl
         payload["cooldown_active"] = bool(self.cooldown_until and self._now().replace(tzinfo=None) < self.cooldown_until)
-        path = Path("outputs/strategy2_diagnostics.json")
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path = Path("outputs/strategy2_diagnostics.json"); path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
     def _reject(self, reason):
@@ -103,30 +100,25 @@ class Strategy2Runtime:
     def _news_gate(self, signal):
         side = str(signal.get("signal", "SELL")).upper()
         analysis = analyze_yahoo_news(signal["symbol"])
-        signal.update({
-            "news_sentiment": analysis.get("sentiment", "NEUTRAL"),
-            "news_confidence": analysis.get("confidence", 0.0),
-            "news_headline": analysis.get("headline", ""),
-            "news_reason": analysis.get("reason", ""),
-            "news_source": analysis.get("source", "Yahoo Finance"),
-            "news_checked_at": self._now().isoformat(),
-        })
+        signal.update({"news_sentiment": analysis.get("sentiment", "NEUTRAL"), "news_confidence": analysis.get("confidence", 0.0), "news_headline": analysis.get("headline", ""), "news_reason": analysis.get("reason", ""), "news_source": analysis.get("source", "Yahoo Finance"), "news_checked_at": self._now().isoformat()})
         return news_allows_trade(side, analysis)
 
     def _open_signal(self, signal, rank):
+        trigger = pd.to_datetime(signal.get("trigger_time"), errors="coerce")
+        if pd.isna(trigger):
+            self._reject("invalid_trigger_time"); return False
+        if getattr(trigger, "tzinfo", None) is None: trigger = trigger.tz_localize(INDIA_TZ)
+        else: trigger = trigger.tz_convert(INDIA_TZ)
+        age = (self._now() - trigger).total_seconds()
+        if age > MAX_TRIGGER_AGE_SECONDS:
+            self._reject("stale_trigger"); return False
+        if age < -5:
+            self._reject("future_trigger"); return False
+
         candidate_id = f"S2|{self._now().date().isoformat()}|{signal['symbol']}|{signal['signal']}|{signal['trigger_time']}"
-        signal.update({
-            "candidate_id": candidate_id,
-            "entry_time": signal["trigger_time"],
-            "open_cross_level": signal["today_open"],
-            "priority_rank": rank,
-            "candidate_state": "QUALIFIED",
-            "nifty500_universe": True,
-            "pdh_pdl_reached": False,
-        })
+        signal.update({"candidate_id": candidate_id, "entry_time": signal["trigger_time"], "open_cross_level": signal["today_open"], "priority_rank": rank, "candidate_state": "QUALIFIED", "nifty500_universe": True, "pdh_pdl_reached": False})
         if candidate_id in self.processed or self.journal.signal_exists(signal):
-            self.processed.add(candidate_id)
-            return False
+            self.processed.add(candidate_id); return False
         if self.daily_pnl <= -float(DAILY_MAX_LOSS) or self.daily_pnl >= float(DAILY_PROFIT_TARGET):
             self._reject("daily_limit"); self.processed.add(candidate_id); return False
         if self.cooldown_until and self._now().replace(tzinfo=None) < self.cooldown_until:
@@ -134,8 +126,7 @@ class Strategy2Runtime:
         if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
             self._reject("position_limit"); return False
         if not self._news_gate(signal):
-            self.journal.log_signal({**signal, "approved": False, "reason": "NEWS_REJECTED"})
-            self._reject("news_rejected"); self.processed.add(candidate_id); return False
+            self.journal.log_signal({**signal, "approved": False, "reason": "NEWS_REJECTED"}); self._reject("news_rejected"); self.processed.add(candidate_id); return False
         risk = self.risk_engine.approve_trade(signal, available_capital=self.paper_engine.available_capital)
         self.journal.log_signal({**signal, **risk, "approved": bool(risk.get("approved")), "reason": "; ".join(map(str, risk.get("reasons", [])))})
         if not risk.get("approved"):
@@ -156,43 +147,25 @@ class Strategy2Runtime:
     def scan(self):
         now = self._now().strftime("%H:%M")
         if now < TRADING_START or now > LAST_ENTRY_TIME: return []
-        candidates = self.scanner.opening_candidates
-        data = self.scanner.universe_market_data
-        nifty_change = self.scanner._nifty_change
+        candidates = self.scanner.opening_candidates; data = self.scanner.universe_market_data; nifty_change = self.scanner._nifty_change
         if candidates is None or candidates.empty:
-            candidates = self.scanner.prepare_opening_candidates(force=True)
-            data = self.scanner.universe_market_data
+            candidates = self.scanner.prepare_opening_candidates(force=True); data = self.scanner.universe_market_data
         rows = []
         if candidates is None or candidates.empty:
-            self.diagnostics["candidates"] = 0
-            self.last_signals = []
-            self._write_diagnostics()
-            return []
+            self.diagnostics["candidates"] = 0; self.last_signals = []; self._write_diagnostics(); return []
         for _, row in candidates.iterrows():
-            symbol = str(row.get("Symbol", "")).upper().strip()
-            if not symbol: continue
-            setup = str(row.get("OpeningSetup", ""))
-            if setup not in {"OPEN_ABOVE_PDH", "OPEN_BELOW_PDL"}: continue
+            symbol = str(row.get("Symbol", "")).upper().strip(); setup = str(row.get("OpeningSetup", ""))
+            if not symbol or setup not in {"OPEN_ABOVE_PDH", "OPEN_BELOW_PDL"}: continue
             stock_data = data.get(symbol)
             if stock_data is None or stock_data.empty: continue
             signal = self.strategy.evaluate(symbol, stock_data, row["TodayOpen"], row["PDH"], row["PreviousDayClose"], nifty_change, row["PDL"])
             if signal:
-                signal["gap_percent"] = float(row.get("GapPercentFromPreviousClose", signal.get("gap_percent", 0.0)))
-                signal["industry"] = row.get("Industry", "UNKNOWN")
-                rows.append(signal)
+                signal["gap_percent"] = float(row.get("GapPercentFromPreviousClose", signal.get("gap_percent", 0.0))); signal["industry"] = row.get("Industry", "UNKNOWN"); rows.append(signal)
         rows.sort(key=lambda x: abs(float(x.get("gap_percent", 0.0))), reverse=True)
-        self.diagnostics["candidates"] = int(len(candidates))
-        self.diagnostics["buy_candidates"] = int(sum(str(r.get("OpeningSetup", "")) == "OPEN_BELOW_PDL" for _, r in candidates.iterrows()))
-        self.diagnostics["sell_candidates"] = int(sum(str(r.get("OpeningSetup", "")) == "OPEN_ABOVE_PDH" for _, r in candidates.iterrows()))
-        self.diagnostics["qualified"] = len(rows)
-        self.diagnostics["buy_qualified"] = int(sum(s.get("signal") == "BUY" for s in rows))
-        self.diagnostics["sell_qualified"] = int(sum(s.get("signal") == "SELL" for s in rows))
-        self.diagnostics["signals"] = 0
-        self.last_signals = rows
+        self.diagnostics["candidates"] = int(len(candidates)); self.diagnostics["buy_candidates"] = int(sum(str(r.get("OpeningSetup", "")) == "OPEN_BELOW_PDL" for _, r in candidates.iterrows())); self.diagnostics["sell_candidates"] = int(sum(str(r.get("OpeningSetup", "")) == "OPEN_ABOVE_PDH" for _, r in candidates.iterrows())); self.diagnostics["qualified"] = len(rows); self.diagnostics["buy_qualified"] = int(sum(s.get("signal") == "BUY" for s in rows)); self.diagnostics["sell_qualified"] = int(sum(s.get("signal") == "SELL" for s in rows)); self.diagnostics["signals"] = 0; self.last_signals = rows
         for rank, signal in enumerate(rows, 1):
             if self._open_signal(signal, rank): self.diagnostics["signals"] += 1
-        self._write_diagnostics()
-        return rows
+        self._write_diagnostics(); return rows
 
     def process_positions(self):
         for symbol in list(self.paper_engine.open_positions):
@@ -200,15 +173,12 @@ class Strategy2Runtime:
             if candle is None: continue
             closed = self.paper_engine.process_candle(symbol, candle)
             if closed:
-                self.daily_pnl = round(self.daily_pnl + float(closed.get("pnl", 0) or 0), 2)
-                self.journal.log_trade(closed)
-                if str(closed.get("exit_reason", "")).upper() == "STOP_LOSS":
-                    self.cooldown_until = self._now().replace(tzinfo=None) + timedelta(minutes=COOLDOWN_MINUTES)
+                self.daily_pnl = round(self.daily_pnl + float(closed.get("pnl", 0) or 0), 2); self.journal.log_trade(closed)
+                if str(closed.get("exit_reason", "")).upper() == "STOP_LOSS": self.cooldown_until = self._now().replace(tzinfo=None) + timedelta(minutes=COOLDOWN_MINUTES)
         self._write_diagnostics()
 
     def run_cycle(self):
-        self.process_positions()
-        return self.scan()
+        self.process_positions(); return self.scan()
 
     def square_off_all(self):
         for symbol in list(self.paper_engine.open_positions):
@@ -216,6 +186,5 @@ class Strategy2Runtime:
             if candle is None: continue
             closed = self.paper_engine.close_position(symbol, float(candle["Close"]), candle["Datetime"], "SQUARE_OFF")
             if closed:
-                self.daily_pnl = round(self.daily_pnl + float(closed.get("pnl", 0) or 0), 2)
-                self.journal.log_trade(closed)
+                self.daily_pnl = round(self.daily_pnl + float(closed.get("pnl", 0) or 0), 2); self.journal.log_trade(closed)
         self._write_diagnostics()
