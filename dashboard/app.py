@@ -14,7 +14,7 @@ from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running, get_status
-from strategy2_worker import ensure_strategy2_running, get_strategy2_status
+from dashboard.strategy2_data import status as strategy2_status
 from market.price_data import PriceData
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
@@ -26,14 +26,10 @@ startup_errors = []
 try:
     ensure_bot_running()
 except Exception as exc:
-    startup_errors.append(f"Strategy 1: {type(exc).__name__}: {exc}")
-try:
-    ensure_strategy2_running()
-except Exception as exc:
-    startup_errors.append(f"Strategy 2: {type(exc).__name__}: {exc}")
+    startup_errors.append(f"Paper bot: {type(exc).__name__}: {exc}")
 
 status = get_status() or {}
-strategy2 = get_strategy2_status() or {}
+strategy2 = strategy2_status() or {}
 render_nav()
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -111,5 +107,5 @@ st.dataframe(pd.DataFrame([
     ("Strategy 1 SL", "BUY PDH / SELL PDL", "—", "FIXED FOR NOW"),
 ], columns=["Item", "Strategy 1", "Strategy 2", "Status"]), width="stretch", hide_index=True)
 
-st.caption(f"Dashboard refresh 5s • bot control cycle 30s • strategy candles 1m completed CLOSE • Updated {now.strftime('%H:%M:%S IST')} • Paper trading only")
+st.caption(f"Dashboard refresh 5s • single paper-bot control cycle 30s • strategy candles 1m completed CLOSE • Updated {now.strftime('%H:%M:%S IST')} • Paper trading only")
 render_daily_footer()
