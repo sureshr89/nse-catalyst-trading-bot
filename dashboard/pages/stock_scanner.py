@@ -38,35 +38,41 @@ st.title("🔎 NIFTY 500 Stock Scanner")
 st.caption("Workflow: highest qualifying GAP first → strategy/risk validation → paper entry")
 metric_cards([("BUY waiting",len(waiting_data.get("BUY",{}))), ("SELL waiting",len(waiting_data.get("SELL",{}))), ("BUY qualified",len(qualified_data.get("BUY",{}))), ("SELL qualified",len(qualified_data.get("SELL",{})))])
 st.caption(f"NIFTY 500 {market_change:+.2f}% • 1-minute completed-candle logic • Updated {now.strftime('%H:%M:%S')} IST")
-st.subheader("🏆 Priority Ranking — Highest Gap First")
-ranks=pd.DataFrame(diag.get("ranking",[]) if isinstance(diag,dict) else [])
-if not ranks.empty:
-    for col in ["gap_percent","gap_priority_pct"]:
-        if col in ranks.columns: ranks[col]=pd.to_numeric(ranks[col],errors="coerce")
-    if "gap_percent" in ranks.columns: ranks=ranks.sort_values("gap_percent",key=lambda s:s.abs(),ascending=False)
-    display_cols=[c for c in ["priority","symbol","side","gap_percent","candidate_state"] if c in ranks.columns]
-    view=ranks[display_cols].copy(); view.rename(columns={"priority":"Priority","symbol":"Symbol","side":"Side","gap_percent":"Gap %","candidate_state":"State"},inplace=True)
-    st.dataframe(view,width="stretch",hide_index=True,height=360); st.caption("Priority is determined only by the largest qualifying absolute GAP %. No secondary volatility metric is used.")
-else: st.info("No qualified candidates yet.")
-st.subheader("⏳ Waiting Stocks")
-waiting_rows=[]
-for side in ("BUY","SELL"):
-    for symbol,item in waiting_data.get(side,{}).items(): waiting_rows.append({"Side":side,"Symbol":symbol,"State":item.get("state","WAITING"),"Gap %":item.get("gap_percent",0),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl")),"Created":item.get("created_at","—")})
-if waiting_rows:
-    wdf=pd.DataFrame(waiting_rows); wdf["Gap %"]=pd.to_numeric(wdf["Gap %"],errors="coerce"); wdf=wdf.sort_values("Gap %",key=lambda s:s.abs(),ascending=False); st.dataframe(wdf,width="stretch",hide_index=True,height=360)
-else: st.info("No stocks are currently waiting for the required breach/return sequence.")
-st.subheader("📊 Gap / Opening Board")
-if gaps.empty: st.info("Gap board will appear when market data is available.")
-else:
-    board=gaps.copy()
-    for c in ["GapPercent","GapPercentFromPreviousClose"]:
-        if c in board.columns: board[c]=pd.to_numeric(board[c],errors="coerce")
-    if "GapPercent" in board.columns: board["GapPriority"]=board["GapPercent"].abs(); board=board.sort_values("GapPriority",ascending=False,na_position="last")
-    preferred=[c for c in ["Symbol","Industry","TodayOpen","PreviousClose","GapType","GapPercent","GapPercentFromPreviousClose","PDH","PDL"] if c in board.columns]; view=board[preferred].copy()
-    for c in ["TodayOpen","PreviousClose","PDH","PDL"]:
-        if c in view.columns: view[c]=view[c].map(money)
-    for c in ["GapPercent","GapPercentFromPreviousClose"]:
-        if c in view.columns: view[c]=view[c].map(pct)
-    st.dataframe(view,width="stretch",hide_index=True,height=520)
+with st.expander("🏆 Priority Ranking — Highest Gap First", expanded=False):
+    ranks=pd.DataFrame(diag.get("ranking",[]) if isinstance(diag,dict) else [])
+    if not ranks.empty:
+        for col in ["gap_percent","gap_priority_pct"]:
+            if col in ranks.columns: ranks[col]=pd.to_numeric(ranks[col],errors="coerce")
+        if "gap_percent" in ranks.columns: ranks=ranks.sort_values("gap_percent",key=lambda s:s.abs(),ascending=False)
+        display_cols=[c for c in ["priority","symbol","side","gap_percent","candidate_state"] if c in ranks.columns]
+        view=ranks[display_cols].copy(); view.rename(columns={"priority":"Priority","symbol":"Symbol","side":"Side","gap_percent":"Gap %","candidate_state":"State"},inplace=True)
+        st.dataframe(view,width="stretch",hide_index=True,height=360); st.caption("Priority is determined only by the largest qualifying absolute GAP %. No secondary volatility metric is used.")
+    else: st.info("No qualified candidates yet.")
+with st.expander("⏳ Waiting Stocks", expanded=False):
+    waiting_rows=[]
+    for side in ("BUY","SELL"):
+        for symbol,item in waiting_data.get(side,{}).items(): waiting_rows.append({"Side":side,"Symbol":symbol,"State":item.get("state","WAITING"),"Gap %":item.get("gap_percent",0),"Today's Open":money(item.get("today_open")),"PDH":money(item.get("pdh")),"PDL":money(item.get("pdl")),"Created":item.get("created_at","—")})
+    if waiting_rows:
+        wdf=pd.DataFrame(waiting_rows); wdf["Gap %"]=pd.to_numeric(wdf["Gap %"],errors="coerce"); wdf=wdf.sort_values("Gap %",key=lambda s:s.abs(),ascending=False); st.dataframe(wdf,width="stretch",hide_index=True,height=360)
+    else: st.info("No stocks are currently waiting for the required breach/return sequence.")
+with st.expander("📊 Gap / Opening Board", expanded=False):
+    if gaps.empty: st.info("Gap board will appear when market data is available.")
+    else:
+        board=gaps.copy()
+        for c in ["GapPercent","GapPercentFromPreviousClose"]:
+            if c in board.columns: board[c]=pd.to_numeric(board[c],errors="coerce")
+        if "GapPercent" in board.columns: board["GapPriority"]=board["GapPercent"].abs(); board=board.sort_values("GapPriority",ascending=False,na_position="last")
+        preferred=[c for c in ["Symbol","Industry","TodayOpen","PreviousClose","GapType","GapPercent","GapPercentFromPreviousClose","PDH","PDL"] if c in board.columns]; view=board[preferred].copy()
+        for c in ["TodayOpen","PreviousClose","PDH","PDL"]:
+            if c in view.columns: view[c]=view[c].map(money)
+        for c in ["GapPercent","GapPercentFromPreviousClose"]:
+            if c in view.columns: view[c]=view[c].map(pct)
+        st.dataframe(view,width="stretch",hide_index=True,height=520)
+st.subheader("📍 Open Paper Positions")
+if positions:
+    rows=[]
+    for symbol,p in positions.items(): rows.append({"Stock":symbol,"Strategy":p.get("strategy","STRATEGY_1"),"Side":p.get("signal"),"Entry":money(p.get("entry")),"SL":money(p.get("stop_loss")),"Target":money(p.get("target")),"Qty":p.get("quantity"),"Risk":money(p.get("actual_risk",p.get("risk"))),"Entry Time":p.get("entry_time","—")})
+    st.dataframe(pd.DataFrame(rows).astype(str),width="stretch",hide_index=True)
+else: st.info("No open paper positions.")
 st.caption("Strategy: qualifying gap → PDH/PDL breach → return to Today's Open using completed 1-minute CLOSE → current-price/risk validation. Industry/Sector is informational only. Paper trading only.")
 render_daily_footer()
