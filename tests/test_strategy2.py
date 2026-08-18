@@ -51,7 +51,7 @@ def test_strategy2_uses_trigger_day_high_including_pre_0945_extension():
     data = pd.DataFrame([
         {"Datetime": base, "Open": 110, "High": 105, "Low": 109, "Close": 110},
         {"Datetime": base + pd.Timedelta(minutes=15), "Open": 110, "High": 111, "Low": 109, "Close": 111},
-        {"Datetime": base + pd.Timedelta(minutes=16), "Open": 111, "High": 104, "Low": 103, "Close": 104},
+        {"Datetime": base + pd.Timedelta(minutes=16), "Open": 111, "High": 110, "Low": 108, "Close": 109},
     ])
     result = engine.evaluate("TEST", data, 110, 100, 100, -0.2, 99, as_of=base + pd.Timedelta(minutes=17))
     assert result is not None
