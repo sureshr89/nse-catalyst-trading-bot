@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 
@@ -26,23 +26,23 @@ def test_strategy2_requires_open_above_pdh_for_sell():
 
 def test_strategy2_enters_on_first_completed_close_below_open_sell():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
-    data, as_of = _data([111, 104, 102], [111.5, 106, 107])
+    data, as_of = _data([111, 107, 102], [111, 108, 107])
     result = engine.evaluate("TEST", data, 110, 100, 100, -0.2, 99, as_of=as_of)
     assert result is not None
     assert result["signal"] == "SELL"
-    assert result["entry"] == 104.0
+    assert result["entry"] == 107.0
     assert result["target"] == 100.0
-    assert result["stop_loss"] == 111.5
+    assert result["stop_loss"] == 111.0
     assert result["trigger_time"].endswith("09:46:00+05:30")
 
 
 def test_strategy2_later_reversal_does_not_replace_first_trigger():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
-    data, as_of = _data([111, 104, 102], [111.5, 106, 107])
+    data, as_of = _data([111, 107, 102], [111, 108, 107])
     result = engine.evaluate("TEST", data, 110, 100, 100, -0.2, 99, as_of=as_of)
     assert result is not None
-    assert result["entry"] == 104.0
-    assert result["stop_loss"] == 111.5
+    assert result["entry"] == 107.0
+    assert result["stop_loss"] == 111.0
 
 
 def test_strategy2_uses_trigger_day_high_including_pre_0945_extension():
