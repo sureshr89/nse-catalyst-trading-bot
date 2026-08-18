@@ -6,12 +6,15 @@ Fallback: Yahoo/yfinance live 1-minute bar.
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
+import time
 from market.price_data import PriceData
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 _PRICE_DATA = PriceData()
 _ORIGINAL_LIVE = PriceData.get_latest_live_price
 _GROWW = None
+_GROWW_CACHE = {}
+_GROWW_CACHE_AT = {}
 
 
 def _groww_client():
@@ -37,6 +40,10 @@ def _groww_live(symbol):
     symbol = str(symbol).strip().upper().replace(".NS", "")
     if not symbol:
         return None
+    now_mono = time.monotonic()
+    cached = _GROWW_CACHE.get(symbol)
+    if cached is not None and now_mono - _GROWW_CACHE_AT.get(symbol, 0.0) <= 1.0:
+        return dict(cached)
     try:
         exchange_symbol = f"NSE_{symbol}"
         response = client.get_ltp(segment=client.SEGMENT_CASH, exchange_trading_symbols=(exchange_symbol,))
@@ -47,7 +54,10 @@ def _groww_live(symbol):
         value = float(value)
         if value <= 0:
             return None
-        return {"Close": value, "Datetime": datetime.now(INDIA_TZ), "Open": None, "High": None, "Low": None, "price_source": "GROWW_REALTIME_LTP"}
+        result = {"Close": value, "Datetime": datetime.now(INDIA_TZ), "Open": None, "High": None, "Low": None, "price_source": "GROWW_REALTIME_LTP"}
+        _GROWW_CACHE[symbol] = dict(result)
+        _GROWW_CACHE_AT[symbol] = time.monotonic()
+        return result
     except Exception:
         return None
 
@@ -57,8 +67,6 @@ def _fallback_live(self, symbol, max_age_seconds=2):
     if latest is None:
         return None
     latest = dict(latest)
-    # Yahoo's 1-minute bar timestamp is the bar start, not the trigger time.
-    # For journal accuracy record the local observation time separately.
     latest["Datetime"] = datetime.now(INDIA_TZ)
     latest["price_source"] = latest.get("price_source", "YAHOO_LIVE_1M_BAR")
     return latest
@@ -84,6 +92,4 @@ def _patched_get_latest_live_price(self, symbol, max_age_seconds=8):
     return _fallback_live(self, symbol, max_age_seconds=max_age_seconds)
 
 
-# Scanner imports this module during application startup. Patch the shared
-# PriceData class so position monitoring also uses the same live source.
 PriceData.get_latest_live_price = _patched_get_latest_live_price
