@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-import io
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -15,6 +14,7 @@ from bot_runner import ensure_bot_running
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
+from dashboard.dashboard_utils import build_single_sheet_master_excel
 from dashboard.strategy2_data import status, diagnostics, state, gaps, signals, trades, format_price, format_pct, STARTING_CAPITAL
 from market.price_data import PriceData
 from strategy.contracts import strategy_metadata
@@ -123,21 +123,12 @@ with st.expander("📊 Analysis — complete before-trade + after-trade analysis
 with st.expander("📋 Decision Records",expanded=False):
     st.dataframe(sig.tail(500).iloc[::-1],width="stretch",hide_index=True,height=400) if not sig.empty else st.info("No decision records.")
 
-with st.expander("⬇️ Downloads — master monthly file",expanded=False):
-    st.caption("One Strategy 2 master workbook with ALL TRADES and month-wise sheets.")
-    if all_trades.empty: st.info("No trade history available yet.")
-    else:
-        try:
-            out=io.BytesIO()
-            with pd.ExcelWriter(out,engine="openpyxl") as writer:
-                all_trades.to_excel(writer,index=False,sheet_name="ALL TRADES")
-                dates=pd.to_datetime(all_trades.get("entry_time",pd.Series(dtype=str)),errors="coerce")
-                months=dates.dt.strftime("%Y-%m") if not dates.empty else pd.Series(dtype=str)
-                for month in months.dropna().unique(): all_trades.loc[months.eq(month)].to_excel(writer,index=False,sheet_name=str(month)[:31])
-            st.download_button("⬇️ DOWNLOAD S2 MASTER EXCEL",data=out.getvalue(),file_name="NSE_CATALYST_S2_MASTER.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
-        except Exception as e: st.error(f"Master workbook unavailable: {e}")
-    st.download_button("⬇️ S2 TRADES CSV",data=all_trades.to_csv(index=False).encode(),file_name="strategy2_trades.csv",mime="text/csv",width="stretch")
-    st.download_button("⬇️ S2 SIGNALS CSV",data=sig.to_csv(index=False).encode(),file_name="strategy2_signals.csv",mime="text/csv",width="stretch")
+with st.expander("⬇️ Downloads — single-sheet master",expanded=False):
+    try:
+        master_bytes = build_single_sheet_master_excel(all_trades, sig, gap)
+        st.caption("One workbook • one worksheet: ALL DATA • trades + signals + premarket gap board • S1/S2 kept in the Strategy column.")
+        st.download_button("⬇️ DOWNLOAD ALL STRATEGIES — SINGLE SHEET EXCEL",data=master_bytes,file_name="NSE_CATALYST_ALL_STRATEGIES_SINGLE_SHEET.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+    except Exception as error: st.error(f"Single-sheet master unavailable: {type(error).__name__}: {error}")
 
 st.caption(f"Heartbeat: {s.get('heartbeat','—')} • Last scan: {d.get('timestamp','—')} • UI refresh: 5s")
 render_daily_footer()
