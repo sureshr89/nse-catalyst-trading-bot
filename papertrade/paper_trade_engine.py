@@ -169,170 +169,21 @@ class PaperTradeEngine:
             "used_capital": self.used_capital,
             "saved_at": datetime.now(INDIA_TZ).isoformat(),
         }
+        temporary = f"{path}.{os.getpid()}.tmp"
         try:
-            with open(path, "w", encoding="utf-8") as file:
+            with open(temporary, "w", encoding="utf-8") as file:
                 json.dump(state, file, ensure_ascii=False, indent=2, default=str)
                 file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, path)
             sync_json(path, path.replace(os.sep, "/"), "Save NIFTY 500 paper-trading state")
         except Exception as error:
+            try:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+            except Exception:
+                pass
             print(f"Paper state sync skipped: {type(error).__name__}: {error}")
 
     def has_open_position(self, symbol):
         return str(symbol).strip().upper() in self.open_positions
-
-    def _validate_trade(self, trade):
-        if not isinstance(trade, dict): return None, "Trade must be a dictionary"
-        if not self.paper_trading: return None, "Paper trading is disabled"
-        if self.live_trading: return None, "Live trading must remain disabled"
-        if not trade.get("approved", False): return None, "Trade has not been approved"
-        symbol = str(trade.get("symbol", "")).strip().upper(); signal = str(trade.get("signal", "")).strip().upper()
-        entry = self._number(trade.get("entry")); stop = self._number(trade.get("stop_loss")); target = self._number(trade.get("target")); qty_num = self._number(trade.get("quantity")); actual_risk = self._number(trade.get("actual_risk"))
-        if not symbol: return None, "Missing symbol"
-        if signal not in {"BUY", "SELL"}: return None, "Invalid signal"
-        if any(v is None or v <= 0 for v in (entry, stop, target, qty_num)): return None, "Invalid trade values"
-        if int(qty_num) != qty_num: return None, "Quantity must be a positive whole number"
-        qty = int(qty_num)
-        if signal == "BUY" and (stop >= entry or target <= entry): return None, "Invalid BUY stop/target"
-        if signal == "SELL" and (stop <= entry or target >= entry): return None, "Invalid SELL stop/target"
-        risk = round(abs(entry - stop) * qty, 2); reward = round(abs(target - entry) * qty, 2); rr = reward / risk if risk > 0 else 0.0
-        if risk < float(MIN_REQUIRED_RISK): return None, f"Actual risk Rs {risk:.2f} is below minimum {float(MIN_REQUIRED_RISK):.2f}"
-        if risk > float(MAX_RISK_PER_TRADE): return None, f"Actual risk Rs {risk:.2f} exceeds maximum {float(MAX_RISK_PER_TRADE):.2f}"
-        if rr < float(MIN_RR_RATIO): return None, f"Risk:Reward {rr:.2f} is below minimum 1:{float(MIN_RR_RATIO):.1f}"
-        if actual_risk is not None and abs(actual_risk - risk) > 1.0: return None, "Approved risk does not match calculated risk"
-        entry_hhmm = self._time_string(trade.get("entry_time") or datetime.now(INDIA_TZ))
-        if entry_hhmm is None or entry_hhmm < self.trading_start or entry_hhmm > self.last_entry_time: return None, "Entry time is outside the allowed window"
-        position_value = round(entry * qty, 2)
-        if position_value > self.available_capital: return None, "Insufficient available capital"
-        if self.has_open_position(symbol): return None, f"{symbol} already has an open position"
-        if len(self.open_positions) >= MAX_OPEN_POSITIONS: return None, "Maximum open positions reached"
-        return {"symbol": symbol, "signal": signal, "entry_time": trade.get("entry_time"), "entry": round(entry, 4), "stop_loss": round(stop, 4), "target": round(target, 4), "quantity": qty, "risk": risk, "reward": reward, "rr": round(rr, 4), "position_value": position_value}, None
-
-    def open_trade(self, trade):
-        validated, reason = self._validate_trade(trade)
-        if validated is None: return {"opened": False, "reason": reason}
-        self.trade_counter += 1
-        trade_id = f"PAPER-{self.trade_counter:04d}"
-        position = {"trade_id": trade_id, "symbol": validated["symbol"], "stock": validated["symbol"], "signal": validated["signal"], "buy_sell": validated["signal"], "entry_time": validated["entry_time"], "entry": validated["entry"], "stop_loss": validated["stop_loss"], "target": validated["target"], "quantity": validated["quantity"], "risk": validated["risk"], "reward": validated["reward"], "rr": validated["rr"], "mae": 0.0, "mfe": 0.0, "last_processed_candle": self._candle_key(validated["entry_time"]), "last_live_price": validated["entry"], "status": "OPEN", "exit_time": None, "exit_price": None, "exit_reason": None, "pnl": None}
-        ignored = {"approved", "reasons", "min_rr_ratio", "min_required_risk", "max_risk", "capital", "trade_count"}
-        for field, value in trade.items():
-            if field not in ignored and field not in position and value is not None:
-                position[field] = value
-        position["risk_per_share"] = round(abs(validated["entry"] - validated["stop_loss"]), 4)
-        position["actual_risk"] = validated["risk"]
-        position["position_value"] = validated["position_value"]
-        self.open_positions[validated["symbol"]] = position
-        self.used_capital = round(self.used_capital + validated["position_value"], 2)
-        self.available_capital = round(self.total_capital - self.used_capital, 2)
-        self._save_state()
-        return {"opened": True, "trade_id": trade_id, "position": position.copy()}
-
-    @staticmethod
-    def calculate_pnl(signal, entry, exit_price, quantity):
-        if signal == "BUY": return round((exit_price - entry) * quantity, 2)
-        if signal == "SELL": return round((entry - exit_price) * quantity, 2)
-        return 0.0
-
-    def _update_excursions(self, position, high, low):
-        entry = float(position.get("entry", 0) or 0); qty = int(float(position.get("quantity", 0) or 0)); signal = str(position.get("signal", "")).upper()
-        if entry <= 0 or qty <= 0: return
-        if signal == "BUY": favorable = max(0.0, (float(high) - entry) * qty); adverse = max(0.0, (entry - float(low)) * qty)
-        else: favorable = max(0.0, (entry - float(low)) * qty); adverse = max(0.0, (float(high) - entry) * qty)
-        position["mfe"] = round(max(float(position.get("mfe", 0) or 0), favorable), 2)
-        position["mae"] = round(max(float(position.get("mae", 0) or 0), adverse), 2)
-
-    def close_position(self, symbol, exit_price, exit_time, reason):
-        symbol = str(symbol).strip().upper()
-        if not self.has_open_position(symbol): return None
-        exit_price = self._number(exit_price)
-        if exit_price is None or exit_price <= 0: return None
-        position = self.open_positions[symbol]
-        pnl = self.calculate_pnl(position["signal"], position["entry"], exit_price, position["quantity"])
-        position.update({"status": "CLOSED", "exit_time": exit_time, "exit_price": round(exit_price, 4), "exit_reason": reason, "pnl": pnl})
-        closed = position.copy(); self.closed_positions.append(closed)
-        position_value = round(float(position["entry"]) * int(position["quantity"]), 2)
-        self.used_capital = round(max(0.0, self.used_capital - position_value), 2)
-        self.available_capital = round(self.total_capital - self.used_capital, 2)
-        del self.open_positions[symbol]
-        self._save_state()
-        return closed
-
-    def process_live_price(self, symbol, price, timestamp=None, high=None, low=None):
-        """Exit immediately on observed LTP or current 1-minute bar High/Low."""
-        symbol = str(symbol).strip().upper()
-        if not self.has_open_position(symbol): return None
-        value = self._number(price)
-        if value is None or value <= 0: return None
-        now = datetime.now(INDIA_TZ)
-        if not (time(9, 15) <= now.time() <= time(15, 30)): return None
-
-        # Strategy 1's monitor historically passed only Close. Refresh the same
-        # live bar here so its High/Low can also trigger an exit immediately.
-        if high is None or low is None:
-            try:
-                live = self.price_data.get_latest_live_price(symbol, max_age_seconds=2)
-                if live is not None:
-                    high = live.get("High")
-                    low = live.get("Low")
-                    value = self._number(live.get("Close")) or value
-                    timestamp = live.get("Datetime") or timestamp
-            except Exception:
-                pass
-
-        position = self.open_positions[symbol]
-        signal = str(position.get("signal", "")).upper(); stop = float(position["stop_loss"]); target = float(position["target"])
-        observed_high = max(value, self._number(high) or value)
-        observed_low = min(value, self._number(low) or value)
-        position["last_live_price"] = value
-        self._update_excursions(position, observed_high, observed_low)
-        stamp = timestamp or now
-        if signal == "BUY":
-            sl_hit, target_hit = observed_low <= stop, observed_high >= target
-        elif signal == "SELL":
-            sl_hit, target_hit = observed_high >= stop, observed_low <= target
-        else:
-            return None
-        if sl_hit and target_hit: return self.close_position(symbol, stop, stamp, "AMBIGUOUS_LIVE_BAR_STOP_FIRST")
-        if sl_hit: return self.close_position(symbol, stop, stamp, "STOP_LOSS_LIVE")
-        if target_hit: return self.close_position(symbol, target, stamp, "TARGET_LIVE")
-        self._save_state()
-        return None
-
-    def process_candle(self, symbol, candle):
-        symbol = str(symbol).strip().upper()
-        if not self.has_open_position(symbol): return None
-        candles = []
-        try:
-            history = self.price_data.get_1m(symbol)
-            if history is not None and not history.empty: candles = history.to_dict("records")
-        except Exception: pass
-        if not candles:
-            if not isinstance(candle, dict):
-                try: candle = candle.to_dict()
-                except Exception: return None
-            candles = [candle]
-        last = self._candle_key(self.open_positions[symbol].get("last_processed_candle")); now = datetime.now(INDIA_TZ); current_minute = now.replace(second=0, microsecond=0)
-        selected = []
-        for item in candles:
-            high = self._number(item.get("High")); low = self._number(item.get("Low")); close = self._number(item.get("Close")); candle_time = item.get("Datetime")
-            if high is None or low is None or close is None: continue
-            parsed = pd.to_datetime(candle_time, errors="coerce")
-            if pd.isna(parsed): continue
-            parsed = parsed.tz_localize(INDIA_TZ) if getattr(parsed, "tzinfo", None) is None else parsed.tz_convert(INDIA_TZ)
-            if parsed.date() != now.date() or not (time(9, 15) <= parsed.time() <= time(15, 30)) or parsed.to_pydatetime() >= current_minute: continue
-            key = self._candle_key(parsed)
-            if key and last and key <= last: continue
-            selected.append((parsed, key, high, low))
-        for parsed, key, high, low in sorted(selected, key=lambda x: x[0]):
-            if not self.has_open_position(symbol): return None
-            position = self.open_positions[symbol]; self._update_excursions(position, high, low); signal = str(position["signal"]).upper(); stop = float(position["stop_loss"]); target = float(position["target"])
-            sl_hit, target_hit = ((low <= stop, high >= target) if signal == "BUY" else (high >= stop, low <= target))
-            position["last_processed_candle"] = key or last
-            if sl_hit and target_hit: return self.close_position(symbol, stop, key, "AMBIGUOUS_CANDLE_STOP_FIRST")
-            if sl_hit: return self.close_position(symbol, stop, key, "STOP_LOSS")
-            if target_hit: return self.close_position(symbol, target, key, "TARGET")
-        self._save_state()
-        return None
-
-    def summary(self):
-        pnl_values = [self._number(t.get("pnl")) or 0.0 for t in self.closed_positions]
-        return {"open_positions": len(self.open_positions), "closed_positions": len(self.closed_positions), "winning_trades": sum(1 for p in pnl_values if p > 0), "losing_trades": sum(1 for p in pnl_values if p < 0), "total_pnl": round(sum(pnl_values), 2), "total_capital": self.total_capital, "available_capital": round(self.available_capital, 2), "used_capital": round(self.used_capital, 2)}
