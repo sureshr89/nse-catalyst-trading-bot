@@ -81,7 +81,7 @@ if nifty_value is None or nifty_change is None:
 st.subheader("🔵 Strategy 1 — PDH/PDL Return")
 left, right = st.columns(2, gap="large")
 with left:
-    st.markdown("<div class='dashboard-info-card'><div class='info-row'><span>PRIORITY</span><b>Highest qualifying absolute GAP % first — no ATR</b></div><div class='info-row'><span>SETUP</span><b>Gap above PDH for BUY / gap below PDL for SELL</b></div><div class='info-row'><span>TRIGGER</span><b>Completed 1-minute CLOSE breaches PDH/PDL, then a later completed 1-minute CLOSE returns to Today's Open</b></div><div class='info-row'><span>SL</span><b>BUY = PDH • SELL = PDL</b></div><div class='info-row'><span>TARGET</span><b>1.25R • ₹1,400–₹1,500 intended risk • maximum 2 open positions</b></div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='dashboard-info-card'><div class='info-row'><span>PRIORITY</span><b>Highest qualifying absolute GAP % first — no ATR</b></div><div class='info-row'><span>SETUP</span><b>Gap above PDH for BUY / gap below PDL for SELL</b></div><div class='info-row'><span>TRIGGER</span><b>LIVE LTP reaches/crosses PDH/PDL, then LIVE LTP returns to Today's Open — no candle-close confirmation</b></div><div class='info-row'><span>SL</span><b>BUY = PDH • SELL = PDL</b></div><div class='info-row'><span>TARGET</span><b>1.25R • ₹1,400–₹1,500 intended risk • maximum 2 open positions</b></div></div>", unsafe_allow_html=True)
 with right:
     st.markdown("<div class='dashboard-info-card'><div class='session-row'><span>Worker</span><b>" + s1_status + "</b></div><div class='session-row'><span>Heartbeat</span><b>" + str(status.get("heartbeat") or "Not available") + "</b></div><div class='session-row'><span>Last scan</span><b>" + str(status.get("last_scan_completed") or "Not scanned yet") + "</b></div><div class='session-row'><span>Signals</span><b>" + str(int(status.get("last_signal_count", 0) or 0)) + "</b></div><div class='session-row'><span>Capital</span><b>" + money(s1_capital) + "</b></div></div>", unsafe_allow_html=True)
 if status.get("last_scan_error"):
@@ -90,7 +90,7 @@ if status.get("last_scan_error"):
 st.subheader("🔴 Strategy 2 — Gap Extension Reversal")
 left, right = st.columns(2, gap="large")
 with left:
-    st.markdown("<div class='dashboard-info-card'><div class='info-row'><span>SELL</span><b>Open above PDH → extension → completed 1-minute CLOSE below Open</b></div><div class='info-row'><span>BUY</span><b>Open below PDL → extension → completed 1-minute CLOSE above Open</b></div><div class='info-row'><span>ENTRY</span><b>Completed trigger candle close</b></div><div class='info-row'><span>ACCOUNT</span><b>Separate ₹2,50,000 paper account and separate positions/journal</b></div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='dashboard-info-card'><div class='info-row'><span>SELL</span><b>Open above PDH → LIVE price extends above Open → LIVE LTP crosses below Open</b></div><div class='info-row'><span>BUY</span><b>Open below PDL → LIVE price extends below Open → LIVE LTP crosses above Open</b></div><div class='info-row'><span>ENTRY</span><b>Immediate LIVE LTP at the reversal trigger — no candle-close confirmation</b></div><div class='info-row'><span>ACCOUNT</span><b>Separate ₹2,50,000 paper account and separate positions/journal</b></div></div>", unsafe_allow_html=True)
 with right:
     st.markdown("<div class='dashboard-info-card'><div class='session-row'><span>Worker</span><b>" + s2_status + "</b></div><div class='session-row'><span>Last scan</span><b>" + str(strategy2.get("last_scan") or "Not scanned yet") + "</b></div><div class='session-row'><span>Signals</span><b>" + str(int(strategy2.get("last_signal_count", 0) or 0)) + "</b></div><div class='session-row'><span>Capital</span><b>" + money(s2_capital) + "</b></div></div>", unsafe_allow_html=True)
 if strategy2.get("last_error"):
@@ -102,10 +102,10 @@ st.dataframe(pd.DataFrame([
     ("Positions", "Strategy 1 only", "Strategy 2 only", "SEPARATE"),
     ("Signals", "signals.csv", "strategy2_signals.csv", "SEPARATE"),
     ("Trades", "trades.csv", "strategy2_trades.csv", "SEPARATE"),
-    ("Candles", "Completed 1m CLOSE", "Completed 1m CLOSE", "NO FORMING CANDLE"),
+    ("Entry / Exit", "LIVE LTP", "LIVE LTP", "NO CANDLE CLOSE"),
     ("Strategy 1 priority", "Highest qualifying GAP %", "—", "NO ATR"),
     ("Strategy 1 SL", "BUY PDH / SELL PDL", "—", "FIXED FOR NOW"),
 ], columns=["Item", "Strategy 1", "Strategy 2", "Status"]), width="stretch", hide_index=True)
 
-st.caption(f"Dashboard refresh 5s • single paper-bot control cycle 30s • strategy candles 1m completed CLOSE • Updated {now.strftime('%H:%M:%S IST')} • Paper trading only")
+st.caption(f"Dashboard refresh 5s • paper-bot scan cycle {settings.SCAN_INTERVAL_SECONDS}s • live entry/SL/target monitoring • Updated {now.strftime('%H:%M:%S IST')} • Paper trading only")
 render_daily_footer()
