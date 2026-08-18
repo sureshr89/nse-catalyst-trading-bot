@@ -1,6 +1,6 @@
 """Live market price adapter.
 
-Preferred source: Groww real-time LTP when GROWW_ACCESS_TOKEN is set.
+Preferred source: Groww real-time quote when GROWW_ACCESS_TOKEN is set.
 Fallback: Yahoo/yfinance live 1-minute bar.
 """
 from datetime import datetime
@@ -45,16 +45,23 @@ def _groww_live(symbol):
     if cached is not None and now_mono - _GROWW_CACHE_AT.get(symbol, 0.0) <= 1.0:
         return dict(cached)
     try:
-        exchange_symbol = f"NSE_{symbol}"
-        response = client.get_ltp(segment=client.SEGMENT_CASH, exchange_trading_symbols=(exchange_symbol,))
-        payload = response.get("payload", response) if isinstance(response, dict) else {}
-        value = payload.get(exchange_symbol) if isinstance(payload, dict) else None
-        if isinstance(value, dict):
-            value = value.get("ltp") or value.get("last_price") or value.get("price")
-        value = float(value)
+        quote = client.get_quote(exchange=client.EXCHANGE_NSE, segment=client.SEGMENT_CASH, trading_symbol=symbol)
+        payload = quote.get("payload", quote) if isinstance(quote, dict) else {}
+        ltp = payload.get("last_price") or payload.get("price")
+        ohlc = payload.get("ohlc") or {}
+        if isinstance(ohlc, str):
+            ohlc = {}
+        value = float(ltp)
         if value <= 0:
             return None
-        result = {"Close": value, "Datetime": datetime.now(INDIA_TZ), "Open": None, "High": None, "Low": None, "price_source": "GROWW_REALTIME_LTP"}
+        result = {
+            "Close": value,
+            "Datetime": datetime.now(INDIA_TZ),
+            "Open": ohlc.get("open"),
+            "High": ohlc.get("high"),
+            "Low": ohlc.get("low"),
+            "price_source": "GROWW_REALTIME_QUOTE",
+        }
         _GROWW_CACHE[symbol] = dict(result)
         _GROWW_CACHE_AT[symbol] = time.monotonic()
         return result
