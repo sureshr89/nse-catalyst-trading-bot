@@ -154,32 +154,59 @@ class PaperTradeEngine:
     def process_candle(self,symbol,candle):
         symbol=str(symbol).strip().upper()
         if not self.has_open_position(symbol):return None
-        if not isinstance(candle,dict):
-            try:candle=candle.to_dict()
-            except Exception:return None
-        high=self._number(candle.get("High")); low=self._number(candle.get("Low")); close=self._number(candle.get("Close")); candle_time=candle.get("Datetime")
-        if high is None or low is None or close is None:return None
-        parsed=pd.to_datetime(candle_time,errors="coerce")
-        if pd.isna(parsed):return None
-        if getattr(parsed,"tzinfo",None) is None:parsed=parsed.tz_localize(INDIA_TZ)
-        else:parsed=parsed.tz_convert(INDIA_TZ)
+        position=self.open_positions[symbol]
+        # The old implementation processed only the single latest completed candle.
+        # If Yahoo returned a newer candle after one or more candles were missed,
+        # an SL/TP touch in the skipped candle could remain open indefinitely.
+        # Recover every completed candle after last_processed_candle in order.
+        candles=[]
+        try:
+            history=self.price_data.get_1m(symbol)
+            if history is not None and not history.empty:
+                candles=history.to_dict("records")
+        except Exception:
+            candles=[]
+        if not candles:
+            if not isinstance(candle,dict):
+                try:candle=candle.to_dict()
+                except Exception:return None
+            candles=[candle]
+
+        last=self._candle_key(position.get("last_processed_candle"))
         now=datetime.now(INDIA_TZ)
         session_start=time(9,15); session_end=time(15,30)
-        if parsed.date()!=now.date():return None
-        # A candle stamped at the current minute is still forming. Only a candle
-        # whose timestamp is strictly before the current minute may trigger SL/TP.
         current_minute=now.replace(second=0,microsecond=0)
-        if parsed.to_pydatetime()>=current_minute:return None
-        if not (session_start<=parsed.time()<=session_end):return None
-        key=self._candle_key(parsed); exit_timestamp=key; position=self.open_positions[symbol]; last=self._candle_key(position.get("last_processed_candle"))
-        if key and last and key<=last:return None
-        self._update_excursions(position,high,low); signal=position["signal"]; stop=float(position["stop_loss"]); target=float(position["target"])
-        if signal=="BUY":sl_hit,target_hit=low<=stop,high>=target
-        else:sl_hit,target_hit=high>=stop,low<=target
-        position["last_processed_candle"]=key or last
-        if sl_hit and target_hit:return self.close_position(symbol,stop,exit_timestamp,"AMBIGUOUS_CANDLE_STOP_FIRST")
-        if sl_hit:return self.close_position(symbol,stop,exit_timestamp,"STOP_LOSS")
-        if target_hit:return self.close_position(symbol,target,exit_timestamp,"TARGET")
-        self._save_state(); return None
+        selected=[]
+        for item in candles:
+            high=self._number(item.get("High")); low=self._number(item.get("Low")); close=self._number(item.get("Close")); candle_time=item.get("Datetime")
+            if high is None or low is None or close is None:continue
+            parsed=pd.to_datetime(candle_time,errors="coerce")
+            if pd.isna(parsed):continue
+            if getattr(parsed,"tzinfo",None) is None:parsed=parsed.tz_localize(INDIA_TZ)
+            else:parsed=parsed.tz_convert(INDIA_TZ)
+            if parsed.date()!=now.date() or not (session_start<=parsed.time()<=session_end):continue
+            if parsed.to_pydatetime()>=current_minute:continue
+            key=self._candle_key(parsed)
+            if key and last and key<=last:continue
+            selected.append((parsed,key,high,low))
+        if not selected:
+            return None
+        selected.sort(key=lambda row: row[0])
+        for parsed,key,high,low in selected:
+            if not self.has_open_position(symbol):return None
+            position=self.open_positions[symbol]
+            self._update_excursions(position,high,low)
+            signal=str(position["signal"]).upper(); stop=float(position["stop_loss"]); target=float(position["target"])
+            if signal=="BUY":sl_hit,target_hit=low<=stop,high>=target
+            else:sl_hit,target_hit=high>=stop,low<=target
+            position["last_processed_candle"]=key or self._candle_key(position.get("last_processed_candle"))
+            if sl_hit and target_hit:
+                return self.close_position(symbol,stop,key,"AMBIGUOUS_CANDLE_STOP_FIRST")
+            if sl_hit:
+                return self.close_position(symbol,stop,key,"STOP_LOSS")
+            if target_hit:
+                return self.close_position(symbol,target,key,"TARGET")
+        self._save_state()
+        return None
     def summary(self):
         pnl_values=[self._number(t.get("pnl")) or 0.0 for t in self.closed_positions]; return {"open_positions":len(self.open_positions),"closed_positions":len(self.closed_positions),"winning_trades":sum(1 for pnl in pnl_values if pnl>0),"losing_trades":sum(1 for pnl in pnl_values if pnl<0),"total_pnl":round(sum(pnl_values),2),"total_capital":self.total_capital,"available_capital":round(self.available_capital,2),"used_capital":round(self.used_capital,2)}
