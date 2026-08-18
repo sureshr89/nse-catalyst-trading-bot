@@ -8,7 +8,8 @@ such as Google Drive/database.
 import base64,json,os,time,urllib.error,urllib.request
 from pathlib import Path
 REPO=os.getenv("GITHUB_REPOSITORY","sureshr89/nse-catalyst-trading-bot");BRANCH=os.getenv("GITHUB_DATA_BRANCH","data");TOKEN=os.getenv("GITHUB_TOKEN","").strip();ALLOW_PUBLIC_DATA=os.getenv("GITHUB_ALLOW_PUBLIC_DATA","false").strip().lower()=="true";API_ROOT=f"https://api.github.com/repos/{REPO}/contents";_REPO_PRIVATE=None;_LAST_SIGNAL_SYNC=0.0;_MAX_SYNC_RETRIES=3
-CURRENT_PAPER_STATE_VERSION=6
+# Keep this aligned with papertrade.paper_trade_engine.STATE_VERSION.
+CURRENT_PAPER_STATE_VERSION=8
 
 def _repo_is_private():
  global _REPO_PRIVATE
@@ -31,20 +32,16 @@ def _request(url,method="GET",payload=None):
   raw=response.read().decode("utf-8");return json.loads(raw) if raw else {}
 
 def _migrate_paper_state_file(path):
- """Migrate known older paper-state schemas without discarding recoverable trades."""
+ """Migrate known paper-state schemas and quarantine corrupt files safely."""
  try:
   if not path.exists() or path.stat().st_size<=0:return "missing"
   state=json.loads(path.read_text(encoding="utf-8"))
-  if not isinstance(state,dict):return "invalid"
+  if not isinstance(state,dict):raise ValueError("paper state is not a JSON object")
   version=int(state.get("state_version",0) or 0)
   if version==CURRENT_PAPER_STATE_VERSION:return "current"
   if version>CURRENT_PAPER_STATE_VERSION:
    quarantine=path.with_name(path.name+f".future-v{version}")
-   if not quarantine.exists():
-    path.replace(quarantine)
-    print(f"Future paper state v{version} quarantined at {quarantine}; current engine is v{CURRENT_PAPER_STATE_VERSION}.")
-   else:
-    print(f"Future paper state v{version} already quarantined at {quarantine}; preserving existing state.")
+   if not quarantine.exists():path.replace(quarantine)
    return "future"
   state.setdefault("open_positions",{})
   state.setdefault("closed_positions",[])
@@ -53,9 +50,19 @@ def _migrate_paper_state_file(path):
   state.setdefault("available_capital",None)
   state.setdefault("used_capital",0.0)
   state["state_version"]=CURRENT_PAPER_STATE_VERSION
-  path.write_text(json.dumps(state,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+  temporary=path.with_name(path.name+f".{os.getpid()}.migration.tmp")
+  temporary.write_text(json.dumps(state,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+  os.replace(temporary,path)
   print(f"Migrated paper state v{version} to v{CURRENT_PAPER_STATE_VERSION} without discarding trades.")
   return "migrated"
+ except json.JSONDecodeError:
+  # Never keep a corrupt/partially-written file in place. If persistence is enabled,
+  # restore() can then recover the last known good copy from the data branch.
+  quarantine=path.with_name(path.name+f".corrupt-{time.time_ns()}")
+  try:path.replace(quarantine)
+  except Exception:pass
+  print(f"Corrupt paper state quarantined: {quarantine.name}")
+  return "invalid"
  except Exception as error:
   print(f"Paper state migration skipped: {type(error).__name__}: {error}")
   return "error"
