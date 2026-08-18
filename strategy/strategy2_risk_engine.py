@@ -6,13 +6,14 @@ or open-risk state. The validation rules remain the same as the main risk gate.
 from pathlib import Path
 import json
 
+from config.settings import STRATEGY2_TOTAL_CAPITAL
 from strategy.risk_engine import RiskEngine
 
 
 class Strategy2RiskEngine(RiskEngine):
-    """RiskEngine using only Strategy 2 persistence and its own ₹2.5 lakh pool."""
+    """RiskEngine using only Strategy 2 persistence and its own configured capital pool."""
 
-    STRATEGY2_CAPITAL = 250000.0
+    STRATEGY2_CAPITAL = float(STRATEGY2_TOTAL_CAPITAL)
     STRATEGY2_TRADES = Path("outputs/strategy2_trades.csv")
     STRATEGY2_STATE = Path("outputs/strategy2_paper_engine_state.json")
 
