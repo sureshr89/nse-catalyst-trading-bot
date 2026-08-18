@@ -10,16 +10,16 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from strategy2_worker import ensure_strategy2_running, get_strategy2_status
+from bot_runner import ensure_bot_running
 from dashboard.strategy2_data import status, diagnostics, state, format_price, format_pct, today_signals
 
 st.set_page_config(page_title="NSE Catalyst | Strategy 2 Current", page_icon="🔴", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="s2_current_live")
-ensure_strategy2_running()
+ensure_bot_running()
 render_nav()
 
-s = get_strategy2_status() or status()
+s = status() or {}
 d = diagnostics() or {}
 st.title("🔴 Strategy 2 — Current Trading")
 st.caption("Gap Extension Reversal BUY + SELL • separate ₹2,50,000 paper account • completed 1-minute data")
@@ -89,5 +89,5 @@ if rejections:
 else:
     st.info("No rejections recorded in the latest scan cycle.")
 
-st.caption("Auto-refresh 5s • scan cycle 30s • paper trading only • live orders disabled")
+st.caption("Auto-refresh 5s • single paper-bot scan cycle 30s • paper trading only • live orders disabled")
 render_daily_footer()
