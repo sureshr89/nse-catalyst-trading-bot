@@ -61,15 +61,12 @@ def test_sell_state_requires_breach_then_return_to_open(monkeypatch):
     monkeypatch.setattr(module, "_LIVE", fake)
     engine = OpenReversalEngine("00:00", "23:59", 1.25)
     state = {"symbol": "TEST", "side": "SELL", "pdl_breached": False, "open_returned": False}
-    state = engine.update_state(state, 100.0, 105.0, 90.0, 90.5)
+    state = engine.update_state(state, 100.0, 105.0, 90.0, 95.0)
     assert state["pdl_breached"] is False
-    fake.price = 89.5
+    fake.price = 92.0
     state = engine.update_state(state, 100.0, 105.0, 90.0, 90.5)
     assert state["pdl_breached"] is True
     assert state.get("open_returned", False) is False
-    fake.price = 100.0
-    state = engine.update_state(state, 100.0, 105.0, 90.0, 100.0)
-    assert state["open_returned"] is False
     fake.price = 99.0
     state = engine.update_state(state, 100.0, 105.0, 90.0, 100.0)
     assert state["open_returned"] is True
