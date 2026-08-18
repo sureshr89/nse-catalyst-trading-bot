@@ -1,4 +1,4 @@
-"""Strategy 1 single-page command center: live trading, analysis and downloads in collapsible sections."""
+"""Strategy 1 single-page command center with live trading and deep before/after-trade analysis."""
 import json
 import sys
 from pathlib import Path
@@ -126,7 +126,6 @@ except Exception:
 meta = strategy_metadata("STRATEGY_1")
 st.title("🔵 Strategy 1")
 st.caption(f"{meta['name']} • {meta['version']} • Single-page command center • LIVE LTP entry / SL / target • no candle-close confirmation • {now.strftime('%d %b %Y %H:%M:%S')} IST")
-
 cards([
     ("WORKER", "🟢 RUNNING" if worker_ok else "🔴 STALE"), ("NIFTY 500", money(nifty)), ("NIFTY CHANGE", pct(nifty_change)),
     ("ENTRY WINDOW", window), ("OPEN POSITIONS", len(positions)), ("REALIZED DAILY P&L", money(status.get("daily_pnl", status.get("session_pnl", 0)))),
@@ -137,7 +136,6 @@ alignment_panel(nifty, nifty_change, NIFTY500_MIN_CHANGE_PCT, index_age, scan_ag
 if status.get("error") or status.get("last_scan_error"):
     st.error(str(status.get("error") or status.get("last_scan_error")))
 
-# ---------------- LIVE TRADING ----------------
 st.subheader("🔎 Live Scanner & Trading")
 risk_approved = 0
 if not signals.empty and "approved" in signals.columns:
@@ -206,8 +204,8 @@ with st.expander("📍 Open Paper Positions", expanded=True):
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     else: st.info("No open Strategy 1 paper positions.")
 
-# ---------------- ANALYSIS ----------------
-with st.expander("📊 Analysis — all S1 charts and trade analysis", expanded=False):
+# ---------------- DEEP ANALYSIS ----------------
+with st.expander("📊 Analysis — complete before-trade + after-trade analysis", expanded=True):
     closed = trades.copy()
     if not closed.empty and "strategy" in closed.columns:
         closed = closed[closed["strategy"].astype(str).str.upper().isin(["STRATEGY_1", "S1", "OPEN_RETURN"])].copy()
@@ -232,47 +230,82 @@ with st.expander("📊 Analysis — all S1 charts and trade analysis", expanded=
     win_rate = wins / len(closed) * 100 if not closed.empty else 0.0
     max_dd = abs(float(closed["Drawdown"].min())) if not closed.empty else 0.0
     cards([("Decision Records", len(signals)), ("Closed Trades", len(closed)), ("Wins / Losses", f"{wins} / {losses}"), ("Net P&L", money(net)), ("Equity", money(STARTING_CAPITAL + net)), ("Win Rate", f"{win_rate:.1f}%"), ("Profit Factor", f"{pf:.2f}"), ("Max Drawdown", money(max_dd))])
-    with st.expander("⚡ Authoritative Strategy Rules", expanded=False):
-        st.dataframe(pd.DataFrame(list(meta["rules"]) + [("Risk", "₹1,400–₹1,500 intended actual risk • maximum 2 positions"), ("Entry window", "09:45–14:00 IST"), ("Monitoring", "LIVE LTP • no candle-close confirmation"), ("Square-off", "15:00 IST")], columns=["Rule", "Definition"]), width="stretch", hide_index=True)
-    if signals.empty:
-        st.info("No S1 decision records yet.")
-    else:
-        approved = signals.get("approved", pd.Series(False, index=signals.index)).astype(str).str.lower().isin({"true", "1", "yes"})
-        outcome = approved.map({True: "Approved", False: "Rejected / Watch"}).value_counts().rename_axis("Outcome").reset_index(name="Decisions")
-        a,b = st.columns(2)
-        with a: chart(px.bar(outcome, x="Outcome", y="Decisions", text="Decisions", title="Decision Outcome"), "s1_all_outcome")
-        with b:
-            side = signals["signal"].astype(str).str.upper().value_counts().rename_axis("Signal").reset_index(name="Decisions") if "signal" in signals.columns else pd.DataFrame()
-            if not side.empty: chart(px.bar(side, x="Signal", y="Decisions", text="Decisions", title="BUY vs SELL Decisions"), "s1_all_side")
-        a,b = st.columns(2)
-        with a: chart(px.histogram(signals, x="actual_risk" if "actual_risk" in signals.columns else signals.columns[0], nbins=14, title="Actual Risk Distribution"), "s1_all_risk")
-        with b:
-            rrcol = "risk_reward" if "risk_reward" in signals.columns else "rr"
-            if rrcol in signals.columns: chart(px.histogram(signals, x=rrcol, nbins=14, title="Risk:Reward Distribution"), "s1_all_rr")
-        with st.expander("📋 Decision Records", expanded=False):
-            cols = [c for c in ["timestamp","symbol","signal","gap_percent","entry","stop_loss","target","quantity","actual_risk","risk_reward","approved","reason"] if c in signals.columns]
-            st.dataframe(signals[cols].tail(300).iloc[::-1] if cols else signals.tail(300).iloc[::-1], width="stretch", hide_index=True, height=400)
-    if closed.empty:
-        st.info("No completed S1 trades yet. Closed-trade charts will populate automatically.")
-    else:
-        a,b = st.columns(2)
-        with a: chart(px.line(closed, x="Trade #", y="Cumulative P&L", markers=True, title="Cumulative P&L"), "s1_all_cum")
-        with b: chart(px.area(closed, x="Trade #", y="Drawdown", title="Drawdown"), "s1_all_dd")
-        a,b = st.columns(2)
-        with a: chart(px.histogram(closed, x="pnl", nbins=14, title="P&L Distribution"), "s1_all_pnl")
-        with b: chart(px.bar(closed.groupby("Result", as_index=False)["pnl"].sum(), x="Result", y="pnl", text="pnl", title="P&L by Outcome"), "s1_all_result")
-        with st.expander("📋 Trade Taken Details — Entry / Exit / P&L", expanded=False):
-            cols = [c for c in ["strategy","symbol","signal","entry","entry_time","market_entry_time","trigger_entry_time","exit","exit_price","exit_time","stop_loss","target","quantity","actual_risk","pnl","exit_reason","status"] if c in closed.columns]
-            st.dataframe(closed[cols].tail(500).iloc[::-1] if cols else closed.tail(500).iloc[::-1], width="stretch", hide_index=True, height=450)
-        with st.expander("📈 Additional Analysis", expanded=False):
+
+    with st.expander("🟢 Before Trade — setup & decision analysis", expanded=True):
+        st.caption("What the system knew and why the trade was or was not allowed before entry. No post-entry values are used in this section.")
+        before_cols = [c for c in ["timestamp","symbol","signal","today_open","open","pdh","pdl","pdc","gap_percent","nifty500_change_pct","market_alignment","opening_setup","pdh_breached","pdl_breached","qualified_time","entry","stop_loss","target","quantity","actual_risk","risk_reward","approved","reason"] if c in signals.columns]
+        before = signals[before_cols].tail(500).iloc[::-1].copy() if before_cols else signals.tail(500).iloc[::-1].copy()
+        if not before.empty:
+            st.dataframe(before, width="stretch", hide_index=True, height=420)
+        else:
+            st.info("No pre-trade decision records yet.")
+        if not signals.empty:
+            charts = []
+            if "approved" in signals.columns:
+                outcome = signals["approved"].astype(str).str.lower().isin(["true","1","yes"]).map({True:"Approved",False:"Rejected / Watch"}).value_counts().rename_axis("Outcome").reset_index(name="Decisions")
+                charts.append((outcome, "bar", "Outcome"))
+            if "signal" in signals.columns:
+                side = signals["signal"].astype(str).str.upper().value_counts().rename_axis("Signal").reset_index(name="Decisions")
+                charts.append((side, "bar", "Side"))
+            a,b = st.columns(2)
+            if len(charts) > 0:
+                with a: chart(px.bar(charts[0][0], x=charts[0][0].columns[0], y="Decisions", text="Decisions", title="Pre-Trade Decision Outcome"), "s1_before_outcome")
+            if len(charts) > 1:
+                with b: chart(px.bar(charts[1][0], x=charts[1][0].columns[0], y="Decisions", text="Decisions", title="Pre-Trade BUY vs SELL"), "s1_before_side")
+            if "gap_percent" in signals.columns and "actual_risk" in signals.columns:
+                pre = signals.copy()
+                pre["gap_percent"] = pd.to_numeric(pre["gap_percent"], errors="coerce")
+                pre["actual_risk"] = pd.to_numeric(pre["actual_risk"], errors="coerce")
+                chart(px.scatter(pre, x="gap_percent", y="actual_risk", color="signal" if "signal" in pre.columns else None, hover_data=[c for c in ["symbol","approved","reason"] if c in pre.columns], title="Pre-Trade GAP vs Actual Risk"), "s1_before_gap_risk")
+
+    with st.expander("⚡ Entry Quality — what happened at the trigger", expanded=False):
+        entry_cols = [c for c in ["strategy","symbol","signal","entry","entry_time","market_entry_time","trigger_entry_time","today_open","pdh","pdl","gap_percent","stop_loss","target","quantity","actual_risk","risk_reward","entry_source","reason"] if c in closed.columns]
+        entry_view = closed[entry_cols].tail(500).iloc[::-1] if entry_cols and not closed.empty else pd.DataFrame()
+        if not entry_view.empty: st.dataframe(entry_view, width="stretch", hide_index=True, height=360)
+        else: st.info("No completed entry records yet.")
+
+    with st.expander("🔴 After Trade — exit, P&L and outcome analysis", expanded=True):
+        if closed.empty:
+            st.info("No completed S1 trades yet. Post-trade analysis will populate automatically after exits.")
+        else:
+            after_cols = [c for c in ["Trade #","symbol","signal","entry","entry_time","exit","exit_price","exit_time","stop_loss","target","quantity","actual_risk","pnl","exit_reason","status"] if c in closed.columns]
+            st.dataframe(closed[after_cols].tail(500).iloc[::-1], width="stretch", hide_index=True, height=430)
+            a,b = st.columns(2)
+            with a: chart(px.line(closed, x="Trade #", y="Cumulative P&L", markers=True, title="Cumulative P&L After Trades"), "s1_after_cum")
+            with b: chart(px.area(closed, x="Trade #", y="Drawdown", title="Drawdown After Trades"), "s1_after_dd")
+            a,b = st.columns(2)
+            with a: chart(px.histogram(closed, x="pnl", nbins=14, title="Trade P&L Distribution"), "s1_after_pnl")
+            with b: chart(px.bar(closed.groupby("Result", as_index=False)["pnl"].sum(), x="Result", y="pnl", text="pnl", title="P&L by Outcome"), "s1_after_result")
+            if "exit_reason" in closed.columns:
+                exits = closed["exit_reason"].fillna("Unknown").astype(str).value_counts().rename_axis("Exit Reason").reset_index(name="Trades")
+                chart(px.bar(exits, x="Exit Reason", y="Trades", text="Trades", title="Exit Reasons"), "s1_after_exit_reason")
+
+    with st.expander("📈 Performance & Pattern Analysis", expanded=False):
+        if not closed.empty:
             if "symbol" in closed.columns:
                 stock = closed.groupby("symbol", as_index=False).agg(Trades=("symbol","size"), PnL=("pnl","sum"), Win_Rate=("pnl",lambda x:(x>0).mean()*100)).sort_values("PnL", ascending=False)
-                chart(px.bar(stock.head(20), x="symbol", y="PnL", text="Trades", title="Stocks by P&L"), "s1_all_stocks", 340)
-                st.dataframe(stock, width="stretch", hide_index=True, height=300)
+                a,b = st.columns(2)
+                with a: chart(px.bar(stock.head(20), x="symbol", y="PnL", text="Trades", title="Stocks by P&L"), "s1_perf_stocks", 340)
+                with b: st.dataframe(stock, width="stretch", hide_index=True, height=300)
             if "gap_percent" in closed.columns:
-                gap = closed.copy(); gap["Gap Magnitude %"] = gap["gap_percent"].abs(); chart(px.scatter(gap, x="Gap Magnitude %", y="pnl", hover_data=[c for c in ["symbol","signal"] if c in gap.columns], title="GAP vs P&L"), "s1_all_gap")
+                gap = closed.copy(); gap["Gap Magnitude %"] = gap["gap_percent"].abs()
+                chart(px.scatter(gap, x="Gap Magnitude %", y="pnl", hover_data=[c for c in ["symbol","signal"] if c in gap.columns], title="GAP Magnitude vs P&L"), "s1_perf_gap")
             riskcol = "actual_risk" if "actual_risk" in closed.columns and closed["actual_risk"].abs().sum() else "risk"
-            if riskcol in closed.columns: chart(px.scatter(closed, x=riskcol, y="pnl", hover_data=[c for c in ["symbol","signal","quantity"] if c in closed.columns], title="Risk vs P&L"), "s1_all_risk_pnl")
+            if riskcol in closed.columns:
+                chart(px.scatter(closed, x=riskcol, y="pnl", hover_data=[c for c in ["symbol","signal","quantity","exit_reason"] if c in closed.columns], title="Risk vs P&L"), "s1_perf_risk")
+        else:
+            st.info("Performance patterns will appear after completed trades.")
+
+    with st.expander("📋 Decision Records", expanded=False):
+        cols = [c for c in ["timestamp","symbol","signal","gap_percent","entry","stop_loss","target","quantity","actual_risk","risk_reward","approved","reason"] if c in signals.columns]
+        st.dataframe(signals[cols].tail(500).iloc[::-1] if cols else signals.tail(500).iloc[::-1], width="stretch", hide_index=True, height=400)
+
+    with st.expander("📋 Trade Taken Details — Entry / Exit / P&L", expanded=False):
+        cols = [c for c in ["strategy","symbol","signal","entry","entry_time","market_entry_time","trigger_entry_time","exit","exit_price","exit_time","stop_loss","target","quantity","actual_risk","pnl","exit_reason","status"] if c in closed.columns]
+        st.dataframe(closed[cols].tail(500).iloc[::-1] if cols else closed.tail(500).iloc[::-1], width="stretch", hide_index=True, height=450)
+
+    with st.expander("⚡ Authoritative Strategy Rules", expanded=False):
+        st.dataframe(pd.DataFrame(list(meta["rules"]) + [("Risk", "₹1,400–₹1,500 intended actual risk • maximum 2 positions"), ("Entry window", "09:45–14:00 IST"), ("Monitoring", "LIVE LTP • no candle-close confirmation"), ("Square-off", "15:00 IST")], columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
 # ---------------- DOWNLOADS ----------------
 with st.expander("⬇️ Downloads — all S1 data", expanded=False):
