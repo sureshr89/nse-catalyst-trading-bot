@@ -17,6 +17,7 @@ from bot_runner import ensure_bot_running
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
+from dashboard.dashboard_utils import build_single_sheet_master_excel
 from market.price_data import PriceData
 from config.settings import NIFTY500_MIN_CHANGE_PCT
 from strategy.contracts import strategy_metadata
@@ -308,20 +309,14 @@ with st.expander("📊 Analysis — complete before-trade + after-trade analysis
         st.dataframe(pd.DataFrame(list(meta["rules"]) + [("Risk", "₹1,400–₹1,500 intended actual risk • maximum 2 positions"), ("Entry window", "09:45–14:00 IST"), ("Monitoring", "LIVE LTP • no candle-close confirmation"), ("Square-off", "15:00 IST")], columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
 # ---------------- DOWNLOADS ----------------
-with st.expander("⬇️ Downloads — all S1 data", expanded=False):
-    def csv_bytes(frame): return frame.to_csv(index=False).encode("utf-8")
-    def json_bytes(name, fallback):
-        path = ROOT / "outputs" / name
-        try: return path.read_bytes() if path.exists() else json.dumps(fallback, indent=2).encode("utf-8")
-        except Exception: return json.dumps(fallback, indent=2).encode("utf-8")
+with st.expander("⬇️ Downloads — single-sheet master", expanded=False):
     gaps = read(ROOT / "outputs/gap_analysis.csv", "csv")
-    st.download_button("⬇️ TRADES CSV", data=csv_bytes(trades), file_name="nifty500_trades.csv", mime="text/csv", width="stretch")
-    st.download_button("⬇️ SIGNALS CSV", data=csv_bytes(signals), file_name="nifty500_signals.csv", mime="text/csv", width="stretch")
-    st.download_button("⬇️ PREMARKET GAP BOARD CSV", data=csv_bytes(gaps), file_name="nifty500_premarket_gap_board.csv", mime="text/csv", width="stretch")
-    st.download_button("⬇️ WAITING / QUALIFIED JSON", data=json_bytes("waiting_candidates.json", {"waiting":{},"qualified":{}}), file_name="nifty500_waiting_candidates.json", mime="application/json", width="stretch")
-    st.download_button("⬇️ SCANNER DIAGNOSTICS JSON", data=json_bytes("scanner_diagnostics.json", {}), file_name="nifty500_scanner_diagnostics.json", mime="application/json", width="stretch")
-    st.download_button("⬇️ BOT STATUS JSON", data=json_bytes("bot_status.json", {}), file_name="nifty500_bot_status.json", mime="application/json", width="stretch")
-    st.download_button("⬇️ PAPER STATE JSON", data=json_bytes("paper_engine_state.json", {"strategy":"STRATEGY_1","open_positions":{}}), file_name="nifty500_paper_state.json", mime="application/json", width="stretch")
+    try:
+        master_bytes = build_single_sheet_master_excel(trades, signals, gaps)
+        st.caption("One workbook • one worksheet: ALL DATA • trades + signals + premarket gap board • S1/S2 kept in the Strategy column.")
+        st.download_button("⬇️ DOWNLOAD ALL STRATEGIES — SINGLE SHEET EXCEL", data=master_bytes, file_name="NSE_CATALYST_ALL_STRATEGIES_SINGLE_SHEET.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+    except Exception as error:
+        st.error(f"Single-sheet master unavailable: {type(error).__name__}: {error}")
     if not gaps.empty:
         with st.expander("📌 GAP Board Preview", expanded=False): st.dataframe(gaps, width="stretch", hide_index=True, height=350)
 
