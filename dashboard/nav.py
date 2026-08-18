@@ -11,19 +11,18 @@ def _link(label, page):
 def _row(left, right):
     cols = st.columns(2, gap="small")
     with cols[0]:
-        if left[0]:
-            _link(left[0], left[1])
+        if left[0]: _link(left[0], left[1])
     with cols[1]:
-        if right[0]:
-            _link(right[0], right[1])
+        if right[0]: _link(right[0], right[1])
 
 
+@st.cache_data(ttl=10, show_spinner=False)
 def _ad_ratio_snapshot():
-    """Return a short-lived NIFTY 500 advance/decline snapshot.
+    """Return a short-lived NIFTY 500 A/D snapshot using live 1m prices.
 
-    This is a dashboard confirmation metric only; it does not alter S1/S2
-    entry logic. Values are refreshed about every 10 seconds and are based on
-    the latest available 1-minute prices for the NIFTY 500 universe.
+    This is a shared confirmation display for S1/S2. It does not change either
+    strategy's entry logic. Previous close is taken from the same daily market
+    data source rather than using the previous 1-minute candle.
     """
     try:
         from data.stock_universe import StockUniverse
@@ -34,30 +33,31 @@ def _ad_ratio_snapshot():
         symbols = universe["Symbol"].astype(str).str.upper().drop_duplicates().tolist()
         if not symbols:
             return None
-        data = PriceData().get_multi_1m(symbols)
+        prices = PriceData()
+        intraday = prices.get_multi_1m(symbols)
+        daily = prices.get_multi_daily(symbols, period="5d")
         advances = declines = unchanged = available = 0
         for symbol in symbols:
-            frame = data.get(symbol) if isinstance(data, dict) else None
-            if frame is None or frame.empty:
-                continue
-            frame = frame.copy()
-            if "Datetime" in frame.columns:
-                frame["Datetime"] = pd.to_datetime(frame["Datetime"], errors="coerce")
-                frame = frame.dropna(subset=["Datetime"]).sort_values("Datetime")
-            if frame.empty or "Close" not in frame.columns:
+            frame = intraday.get(symbol) if isinstance(intraday, dict) else None
+            if frame is None or frame.empty or "Close" not in frame.columns:
                 continue
             try:
+                frame = frame.copy()
+                if "Datetime" in frame.columns:
+                    frame["Datetime"] = pd.to_datetime(frame["Datetime"], errors="coerce")
+                    frame = frame.dropna(subset=["Datetime"]).sort_values("Datetime")
                 current = float(frame.iloc[-1]["Close"])
-                previous = None
-                if "PreviousDayClose" in frame.columns:
-                    previous = float(frame.iloc[-1]["PreviousDayClose"])
-                if previous is None or previous <= 0:
-                    # The scanner's reference data is the authoritative PDC
-                    # source; if unavailable here, classify only when a prior
-                    # daily close can be obtained from the frame.
-                    if len(frame) > 1:
-                        previous = float(frame.iloc[-2]["Close"])
-                if previous is None or previous <= 0:
+                dframe = daily.get(symbol) if isinstance(daily, dict) else None
+                if dframe is None or dframe.empty or "Close" not in dframe.columns:
+                    continue
+                dframe = dframe.copy()
+                if "Datetime" in dframe.columns:
+                    dframe["Datetime"] = pd.to_datetime(dframe["Datetime"], errors="coerce")
+                    dframe = dframe.dropna(subset=["Datetime"]).sort_values("Datetime")
+                if len(dframe) < 2:
+                    continue
+                previous = float(dframe.iloc[-2]["Close"])
+                if previous <= 0:
                     continue
                 available += 1
                 if current > previous:
@@ -66,12 +66,12 @@ def _ad_ratio_snapshot():
                     declines += 1
                 else:
                     unchanged += 1
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, IndexError):
                 continue
         ratio = advances / declines if declines else (float(advances) if advances else 0.0)
-        if ratio >= 1.5:
+        if ratio >= 1.50:
             bias = "STRONG BULLISH"
-        elif ratio >= 1.0:
+        elif ratio >= 1.00:
             bias = "BULLISH"
         elif ratio >= 0.67:
             bias = "BEARISH"
@@ -83,35 +83,29 @@ def _ad_ratio_snapshot():
 
 
 def _render_ad_panel():
-    # Streamlit reruns the page every ~5 seconds; this keeps the AD calculation
-    # lightweight enough while the underlying 1-minute market data updates.
     snapshot = _ad_ratio_snapshot()
-    if not snapshot:
-        return
+    if not snapshot: return
     if snapshot.get("error"):
         st.caption(f"A/D Ratio unavailable: {snapshot['error']}")
         return
-    ratio = snapshot["ratio"]
     st.markdown(
         f"""
         <div style='border:1px solid #303A4B;border-radius:12px;padding:10px 12px;margin:8px 0 12px;background:#111722'>
           <div style='display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap'>
-            <div><b>📊 NIFTY 500 Advance / Decline</b><br><small>Live confirmation filter • updated {snapshot['updated']} IST</small></div>
-            <div><b>A/D Ratio: {ratio:.2f}</b> • {snapshot['bias']}</div>
+            <div><b>📊 NIFTY 500 Advance / Decline</b><br><small>Live confirmation filter • refreshed every ~10 seconds • {snapshot['updated']} IST</small></div>
+            <div><b>A/D Ratio: {snapshot['ratio']:.2f}</b> • {snapshot['bias']}</div>
           </div>
           <div style='margin-top:6px'><small>Advances: <b>{snapshot['advances']}</b> &nbsp; Declines: <b>{snapshot['declines']}</b> &nbsp; Unchanged: <b>{snapshot['unchanged']}</b> &nbsp; Coverage: <b>{snapshot['available']}/{snapshot['total']}</b></small></div>
-          <div style='margin-top:5px'><small>Interpretation: &gt;1.50 strong bullish • 1.00–1.49 bullish • 0.67–0.99 bearish • &lt;0.67 strong bearish. This is displayed for confirmation only; S1/S2 entry logic is unchanged.</small></div>
+          <div style='margin-top:5px'><small>&gt;1.50 strong bullish • 1.00–1.49 bullish • 0.67–0.99 bearish • &lt;0.67 strong bearish. Confirmation only — S1/S2 entry logic is unchanged.</small></div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """, unsafe_allow_html=True,
     )
 
 
 def render_nav(top_offset=0):
-    """Minimal strategy selector with shared live NIFTY 500 A/D confirmation."""
+    """Shared strategy selector and live NIFTY 500 A/D confirmation panel."""
     if top_offset:
-        st.write("")
-        st.write("")
+        st.write(""); st.write("")
     st.markdown("""
     <style>
     .nse-nav-title{font-size:.72rem;font-weight:800;letter-spacing:.05em;margin:8px 0 6px;text-transform:uppercase}
