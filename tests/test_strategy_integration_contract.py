@@ -20,8 +20,7 @@ def test_contracts_are_the_authoritative_rule_source():
 
 
 def test_strategy_1_signal_carries_identity():
-    engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    signal = engine.build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5)
+    signal = OpenReversalEngine("09:45", "14:00", 1.25).build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5)
     assert signal["strategy"] == "STRATEGY_1"
     assert signal["strategy_version"] == STRATEGY_VERSION
 
@@ -32,13 +31,18 @@ def test_strategy_2_signal_carries_identity():
     assert engine.strategy_version == STRATEGY_VERSION
 
 
-def test_dashboard_does_not_duplicate_strategy_rule_text():
+def test_active_dashboard_pages_use_contract_metadata():
     current = (ROOT / "dashboard" / "pages" / "current_trading.py").read_text(encoding="utf-8")
-    analysis = (ROOT / "dashboard" / "pages" / "strategy2_analysis.py").read_text(encoding="utf-8")
+    strategy2 = (ROOT / "dashboard" / "pages" / "strategy2_current.py").read_text(encoding="utf-8")
     assert "strategy_metadata" in current
-    assert "strategy_metadata" in analysis
+    assert "strategy_metadata" in strategy2
     assert "Open > PDH → completed 1m close below PDH" not in current
-    assert "Open < PDL → extension below Open" not in analysis
+    assert "Open < PDL → extension below Open" not in strategy2
+
+
+def test_no_legacy_dashboard_pages_remain():
+    pages = {p.name for p in (ROOT / "dashboard" / "pages").glob("*.py")}
+    assert pages == {"current_trading.py", "strategy2_current.py"}
 
 
 def test_scanner_uses_strategy_engine_for_initial_side():
