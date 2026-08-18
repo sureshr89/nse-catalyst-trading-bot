@@ -1,8 +1,4 @@
-"""Strategy 1 live command center.
-
-The separate Scanner page is intentionally removed from navigation. The useful
-scanner state is shown here in a compact operator view.
-"""
+"""Strategy 1 live command center with scanner details and live positions."""
 import json
 import sys
 from pathlib import Path
@@ -28,7 +24,6 @@ ENTRY_START, ENTRY_END = "09:45", "14:00"
 st.set_page_config(page_title="NSE Catalyst | Strategy 1 Current", page_icon="🔵", layout="wide")
 st_autorefresh(interval=5000, key="s1_current_live")
 st.markdown(load_css(), unsafe_allow_html=True)
-render_nav()
 
 
 def read(path, kind="json"):
@@ -38,7 +33,7 @@ def read(path, kind="json"):
         return {} if kind == "json" else pd.DataFrame()
 
 
-def price(v):
+def money(v):
     try: return f"₹{float(v):,.2f}"
     except Exception: return "—"
 
@@ -58,27 +53,30 @@ def age(v):
 
 
 def cards(items):
-    st.markdown("<div class='metric-grid'>" + "".join(f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a,b in items) + "</div>", unsafe_allow_html=True)
+    html = "<div class='metric-grid'>" + "".join(f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a, b in items) + "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 try:
-    live_status = ensure_bot_running()
+    launcher = ensure_bot_running() or {}
 except Exception as error:
-    live_status = {"error": f"Worker launcher: {type(error).__name__}: {error}"}
+    launcher = {"error": f"Worker launcher: {type(error).__name__}: {error}"}
 
 status = read(ROOT / "outputs/bot_status.json")
-if isinstance(live_status, dict): status.update(live_status)
+if isinstance(launcher, dict): status.update(launcher)
 diag = read(ROOT / "outputs/scanner_diagnostics.json")
 state = read(ROOT / "outputs/paper_engine_state.json")
-waiting = read(ROOT / "outputs/waiting_candidates.json")
 signals = read(ROOT / "outputs/signals.csv", "csv")
+waiting = read(ROOT / "outputs/waiting_candidates.json")
 now = datetime.now(INDIA_TZ)
 clock = now.strftime("%H:%M")
 positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
-heartbeat = age(status.get("heartbeat"))
+heartbeat_age = age(status.get("heartbeat"))
 scan_age = age(diag.get("timestamp"))
+worker_ok = bool(status.get("worker_alive")) and heartbeat_age is not None and heartbeat_age <= 90
 coverage = float(diag.get("market_data_coverage", 0) or 0)
 required = float(diag.get("coverage_required", .60) or .60)
+window = "PREPARE" if clock < ENTRY_START else "ACTIVE" if clock <= ENTRY_END else "CLOSED"
 
 try:
     pdx = PriceData()
@@ -88,32 +86,36 @@ try:
 except Exception:
     nifty, nifty_change = None, None
 
-window = "PREPARE" if clock < ENTRY_START else "ACTIVE" if clock <= ENTRY_END else "CLOSED"
-worker_ok = bool(status.get("worker_alive")) and heartbeat is not None and heartbeat <= 90
-
 st.title("🔵 Strategy 1 — Current Trading")
 st.caption(f"PDH/PDL + Today's Open Return • paper trading only • {now.strftime('%d %b %Y %H:%M:%S')} IST")
+
 cards([
     ("WORKER", "🟢 RUNNING" if worker_ok else "🔴 STALE"),
-    ("NIFTY 500", price(nifty)),
+    ("NIFTY 500", money(nifty)),
     ("NIFTY CHANGE", pct(nifty_change)),
     ("ENTRY WINDOW", window),
     ("OPEN POSITIONS", len(positions)),
-    ("DAILY P&L", price(status.get("session_pnl", 0))),
+    ("REALIZED DAILY P&L", money(status.get("daily_pnl", status.get("session_pnl", 0)))),
+    ("LAST SCAN", f"{scan_age}s ago" if scan_age is not None else "—"),
+    ("EXIT MONITOR", "~2s LIVE"),
 ])
-if status.get("error"):
-    st.error(str(status["error"]))
+
+if status.get("error") or status.get("last_scan_error"):
+    st.error(str(status.get("error") or status.get("last_scan_error")))
 
 st.subheader("🔎 Scanner — Live Summary")
+risk_approved = 0
+if not signals.empty and "approved" in signals.columns:
+    risk_approved = int(signals["approved"].astype(str).str.lower().isin(["true", "1", "yes"]).sum())
 cards([
-    ("LAST SCAN", f"{scan_age}s ago" if scan_age is not None else "—"),
     ("STOCKS SCANNED", diag.get("stocks_scanned", 0)),
-    ("REFERENCES", diag.get("reference_data_count", 0)),
+    ("REFERENCE DATA", diag.get("reference_data_count", 0)),
     ("GAP SETUPS", diag.get("opening_setup_passed", 0)),
     ("QUALIFIED", diag.get("strategy_setup_passed", 0)),
     ("FINAL SIGNALS", diag.get("final_signals", 0)),
+    ("RISK APPROVED", risk_approved),
     ("1m COVERAGE", f"{coverage:.0%}"),
-    ("RISK APPROVED", int(signals["approved"].astype(str).str.lower().isin(["true","1","yes"]).sum()) if not signals.empty and "approved" in signals.columns else 0),
+    ("SCAN AGE", f"{scan_age}s" if scan_age is not None else "—"),
 ])
 if coverage < required and int(diag.get("stocks_scanned", 0) or 0) > 0:
     st.warning(f"Scanner safety gate: 1-minute coverage {coverage:.0%} is below required {required:.0%}.")
@@ -133,18 +135,20 @@ with st.expander("📋 Scanner Pipeline", expanded=False):
 with st.expander("⏳ Waiting / Qualified Stocks", expanded=False):
     rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in (waiting.get("waiting", {}).get(side, {}) or {}).items():
-            rows.append({"Side": side, "Stock": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Open": price(item.get("today_open")), "PDH": price(item.get("pdh")), "PDL": price(item.get("pdl"))})
+        items = (waiting.get("waiting", {}).get(side, {}) or {}) if isinstance(waiting, dict) else {}
+        if not isinstance(items, dict): items = {}
+        for symbol, item in items.items():
+            if isinstance(item, dict):
+                rows.append({"Side": side, "Stock": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Open": money(item.get("today_open")), "PDH": money(item.get("pdh")), "PDL": money(item.get("pdl"))})
     if rows:
-        frame = pd.DataFrame(rows)
-        frame["Gap %"] = pd.to_numeric(frame["Gap %"], errors="coerce")
+        frame = pd.DataFrame(rows); frame["Gap %"] = pd.to_numeric(frame["Gap %"], errors="coerce")
         st.dataframe(frame.sort_values("Gap %", key=lambda s: s.abs(), ascending=False), width="stretch", hide_index=True, height=300)
     else:
         st.info("No stocks currently waiting for a state transition.")
 
 with st.expander("🚨 Today's Approved Signals", expanded=False):
-    if not signals.empty:
-        frame = signals.copy()
+    frame = signals.copy()
+    if not frame.empty:
         date_col = "entry_time" if "entry_time" in frame.columns else "timestamp" if "timestamp" in frame.columns else None
         if date_col:
             dates = pd.to_datetime(frame[date_col], errors="coerce")
@@ -152,32 +156,46 @@ with st.expander("🚨 Today's Approved Signals", expanded=False):
             frame = frame.loc[dates.dt.date.eq(now.date())]
         if "approved" in frame.columns:
             frame = frame[frame["approved"].astype(str).str.lower().isin(["true", "1", "yes"])]
-        cols = [c for c in ["symbol", "signal", "entry_time", "entry", "stop_loss", "target", "quantity", "gap_percent", "priority_rank"] if c in frame.columns]
+        cols = [c for c in ["strategy", "symbol", "signal", "entry_time", "entry", "stop_loss", "target", "quantity", "actual_risk", "risk_reward", "gap_percent", "priority_rank"] if c in frame.columns]
         if not frame.empty and cols:
-            st.dataframe(frame[cols].tail(20).iloc[::-1], width="stretch", hide_index=True)
+            st.dataframe(frame[cols].tail(25).iloc[::-1], width="stretch", hide_index=True)
         else: st.info("No approved signals today.")
     else: st.info("No approved signals today.")
 
 st.subheader("📍 Open Paper Positions")
+st.caption("Live P&L is unrealized and changes with LTP. Realized P&L changes only after an exit is recorded.")
 if positions:
-    rows = []
-    pdx = PriceData()
+    pdx = PriceData(); rows = []
     for symbol, position in positions.items():
         try:
-            latest = pdx.get_latest_live_price(symbol, max_age_seconds=3)
-            ltp = latest.get("Close") if latest else None
+            live = pdx.get_latest_live_price(symbol, max_age_seconds=3)
+            ltp = live.get("Close") if live else None
+            live_time = live.get("Datetime") if live else None
         except Exception:
-            ltp = None
-        entry = position.get("entry"); side = str(position.get("signal", "")).upper(); pnl = None
+            ltp = None; live_time = None
+        entry = position.get("entry"); side = str(position.get("signal", "")).upper(); qty = int(float(position.get("quantity", 0) or 0)); pnl = None
         try:
-            qty = float(position.get("quantity", 0) or 0)
             if ltp is not None and entry is not None:
                 pnl = ((float(ltp) - float(entry)) * qty) if side == "BUY" else ((float(entry) - float(ltp)) * qty)
         except Exception: pass
-        rows.append({"Stock": symbol, "Side": side, "Entry": price(entry), "LTP": price(ltp), "Live P&L": price(pnl), "SL": price(position.get("stop_loss")), "Target": price(position.get("target")), "Qty": position.get("quantity", "—"), "Entry Time": position.get("entry_time", "—")})
+        rows.append({
+            "Strategy": "STRATEGY_1",
+            "Stock": symbol,
+            "Side": side,
+            "Entry": money(entry),
+            "LTP": money(ltp),
+            "Live P&L": money(pnl),
+            "SL": money(position.get("stop_loss")),
+            "Target": money(position.get("target")),
+            "Qty": qty,
+            "Risk": money(position.get("actual_risk", position.get("risk"))),
+            "Entry Time": position.get("entry_time", "—"),
+            "Price Data": "LIVE" if live_time is not None else "STALE/UNAVAILABLE",
+        })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 else:
-    st.info("No open paper positions.")
+    st.info("No open Strategy 1 paper positions.")
 
 st.caption(f"Heartbeat: {status.get('heartbeat','—')} • Last scan: {diag.get('timestamp','—')} • Position exit monitor: every ~2s • UI refresh: 5s")
+render_nav()
 render_daily_footer()
