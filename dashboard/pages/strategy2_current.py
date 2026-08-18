@@ -1,7 +1,7 @@
 """Strategy 2 current trading dashboard.
 
-This page intentionally mirrors the Strategy 1 Current Trading layout and
-section order. Only the underlying Strategy 2 data sources and rules differ.
+This page mirrors the Strategy 1 Current Trading layout and section order.
+Only the underlying Strategy 2 data sources and rules differ.
 """
 from pathlib import Path
 import sys
@@ -57,6 +57,16 @@ def read_gap_board():
         return gaps()
     except Exception:
         return pd.DataFrame()
+
+
+def as_side_map(value):
+    """Return only the expected BUY/SELL mapping; diagnostics counters may use the same key."""
+    if not isinstance(value, dict):
+        return {"BUY": {}, "SELL": {}}
+    return {
+        "BUY": value.get("BUY", {}) if isinstance(value.get("BUY", {}), dict) else {},
+        "SELL": value.get("SELL", {}) if isinstance(value.get("SELL", {}), dict) else {},
+    }
 
 s = status() or {}
 d = diagnostics() or {}
@@ -120,11 +130,13 @@ with st.expander(f"{meta['strategy']} — {meta['name']} — v{meta['version']}"
     st.dataframe(pd.DataFrame(rules, columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
 with st.expander("⏳ Waiting & Qualified Stocks", expanded=False):
-    waiting = d.get("waiting", {}) or {}
-    qualified = d.get("qualified", {}) or {}
+    # Some S2 diagnostics use numeric counters named 'qualified'. Never call
+    # .get() on that counter. Candidate maps, when present, are normalized here.
+    waiting = as_side_map(d.get("waiting", {}))
+    qualified = as_side_map(d.get("qualified", {}))
     waiting_rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in (waiting.get(side, {}) or {}).items():
+        for symbol, item in waiting[side].items():
             waiting_rows.append({"Side": side, "Stock": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
     if waiting_rows:
         wdf = pd.DataFrame(waiting_rows)
@@ -135,7 +147,7 @@ with st.expander("⏳ Waiting & Qualified Stocks", expanded=False):
 
     qualified_rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in (qualified.get(side, {}) or {}).items():
+        for symbol, item in qualified[side].items():
             qualified_rows.append({"Side": side, "Stock": symbol, "Qualified": item.get("qualified_at", "—"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
     if qualified_rows:
         qdf = pd.DataFrame(qualified_rows)
@@ -160,32 +172,40 @@ with st.expander("🏆 Gap Board — Largest Absolute Gap First", expanded=False
         for c in ["TodayOpen", "PDH", "PDL", "PreviousDayClose", "Gap"]:
             if c in view.columns:
                 view[c] = view[c].map(format_price)
-        if "GapPercentFromPreviousClose" in view.columns:
-            view["GapPercentFromPreviousClose"] = view["GapPercentFromPreviousClose"].map(format_pct)
+        for c in ["GapPercentFromPreviousClose"]:
+            if c in view.columns:
+                view[c] = view[c].map(format_pct)
         st.dataframe(view, width="stretch", hide_index=True, height=360)
 
 with st.expander("🚨 Today's Approved Signals", expanded=False):
     if not sig.empty:
         frame = sig.copy()
-        if "approved" in frame.columns:
-            approved = frame["approved"].astype(str).str.lower().isin(["true", "1", "yes"])
-            frame = frame[approved]
-        cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "entry", "stop_loss", "target", "quantity", "actual_risk", "risk_reward", "priority_rank", "reason"] if c in frame.columns]
-        if not frame.empty and cols:
+        cols = [c for c in ["strategy", "strategy_version", "symbol", "signal", "entry_time", "entry", "stop_loss", "target", "quantity", "actual_risk", "risk_reward", "gap_percent", "priority_rank"] if c in frame.columns]
+        if cols:
             st.dataframe(frame[cols].tail(25).iloc[::-1], width="stretch", hide_index=True)
         else:
-            st.info("No approved Strategy 2 signals today.")
+            st.dataframe(frame.tail(25).iloc[::-1], width="stretch", hide_index=True)
     else:
-        st.info("No Strategy 2 signal records today.")
+        st.info("No Strategy 2 approved signals yet.")
 
 st.subheader("📍 Open Paper Positions")
 if positions:
     rows = []
-    for symbol, p in positions.items():
-        rows.append({"Stock": symbol, "Strategy": p.get("strategy", "STRATEGY_2"), "Side": p.get("signal"), "Entry": format_price(p.get("entry")), "LTP": format_price(p.get("ltp")), "SL": format_price(p.get("stop_loss")), "Target": format_price(p.get("target")), "Qty": p.get("quantity", "—"), "Risk": format_price(p.get("actual_risk", p.get("risk"))), "Entry Time": p.get("entry_time", "—")})
+    for symbol, position in positions.items():
+        rows.append({
+            "Stock": symbol,
+            "Strategy": position.get("strategy", "STRATEGY_2"),
+            "Side": position.get("signal"),
+            "Entry": format_price(position.get("entry")),
+            "SL": format_price(position.get("stop_loss")),
+            "Target": format_price(position.get("target")),
+            "Qty": position.get("quantity"),
+            "Risk": format_price(position.get("actual_risk", position.get("risk"))),
+            "Entry Time": position.get("entry_time", "—"),
+        })
     st.dataframe(pd.DataFrame(rows).astype(str), width="stretch", hide_index=True)
 else:
     st.info("No open Strategy 2 paper positions.")
 
-st.caption(f"Worker heartbeat: {s.get('heartbeat', '—')} • Last scan: {s.get('last_scan', '—')} • Scan error: {s.get('last_error') or 'None'} • Auto-refresh 5s • Paper trading only")
+st.caption(f"Worker heartbeat: {s.get('heartbeat', '—')} • Last scan: {s.get('last_scan', '—')} • Last error: {s.get('last_error') or 'None'} • Auto-refresh 5s • Paper trading only")
 render_daily_footer()
