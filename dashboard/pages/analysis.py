@@ -80,7 +80,7 @@ html += "</div>"
 st.markdown(html, unsafe_allow_html=True)
 
 st.subheader("⚡ Authoritative Strategy Rules")
-rules = list(meta["rules"]) + [("Risk", "₹1,400–₹1,500 intended actual risk • maximum 2 positions"), ("Entry window", "09:45–14:00 IST"), ("Monitoring", "Completed 1-minute strategy candles"), ("Square-off", "15:00 IST")]
+rules = list(meta["rules"]) + [("Risk", "₹1,400–₹1,500 intended actual risk • maximum 2 positions"), ("Entry window", "09:45–14:00 IST"), ("Monitoring", "LIVE LTP monitoring approximately every 2 seconds; no candle-close confirmation"), ("Square-off", "15:00 IST")]
 st.dataframe(pd.DataFrame(rules, columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
 # Signal-journal analysis is independent of closed-trade analysis so charts work as soon as records exist.
