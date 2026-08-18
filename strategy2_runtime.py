@@ -4,7 +4,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
 import pandas as pd
-from config.settings import TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MAX_OPEN_POSITIONS, DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES
+from config.settings import (
+    TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME, MAX_OPEN_POSITIONS,
+    DAILY_MAX_LOSS, DAILY_PROFIT_TARGET, COOLDOWN_MINUTES,
+    MIN_REQUIRED_RISK, MAX_RISK_PER_TRADE, MIN_RR_RATIO,
+)
 from strategy.gap_extension_reversal_engine import GapExtensionReversalEngine
 from strategy.strategy2_risk_engine import Strategy2RiskEngine
 from papertrade.strategy2_paper_engine import Strategy2PaperTradeEngine
@@ -37,6 +41,7 @@ class Strategy2Runtime:
             "sell_candidates": 0,
             "buy_qualified": 0,
             "sell_qualified": 0,
+            "risk_adjusted": 0,
             "rejections": {},
         }
         self._restore_session()
@@ -151,13 +156,79 @@ class Strategy2Runtime:
         key = str(reason).strip().lower().replace(" ", "_")
         self.diagnostics["rejections"][key] = self.diagnostics["rejections"].get(key, 0) + 1
 
-    def _rollback_registered_trade(self, symbol):
+    def _normalize_risk(self, signal):
+        """Widen only an impractically tight stop so the new trade risks about Rs 1,450.
+
+        Existing/open positions are never touched. This is applied only to a new signal
+        immediately before risk approval, using the capital actually available at that time.
+        If the widened stop would violate the minimum 1.25R rule, the signal is rejected.
+        """
         try:
-            count = self.risk_engine.get_trade_count(symbol)
-            if count > 0:
-                self.risk_engine.trade_counts[str(symbol).strip().upper()] = count - 1
-        except Exception as error:
-            print(f"Strategy 2 risk-count rollback failed: {type(error).__name__}: {error}")
+            entry = float(signal.get("entry"))
+            stop = float(signal.get("stop_loss"))
+            target = float(signal.get("target"))
+            side = str(signal.get("signal", "")).upper()
+            available = float(self.paper_engine.available_capital)
+        except (TypeError, ValueError):
+            return False
+        if entry <= 0 or stop <= 0 or target <= 0 or available <= 0:
+            return False
+
+        distance = abs(stop - entry)
+        if distance <= 0:
+            return False
+        capital_qty = int(available // entry)
+        if capital_qty <= 0:
+            self._reject("risk_no_capital_for_share")
+            return False
+        max_risk_qty = int(float(MAX_RISK_PER_TRADE) // distance)
+        quantity = min(max_risk_qty, capital_qty)
+        if quantity <= 0:
+            self._reject("risk_no_valid_quantity")
+            return False
+        raw_risk = round(distance * quantity, 2)
+
+        # Keep the strategy's original structural stop when it already uses the
+        # intended risk band. Only widen a stop that would otherwise risk < Rs 1,400.
+        if raw_risk >= float(MIN_REQUIRED_RISK):
+            signal.setdefault("original_stop_loss", round(stop, 4))
+            signal["risk_adjusted"] = False
+            signal["risk_target"] = round((float(MIN_REQUIRED_RISK) + float(MAX_RISK_PER_TRADE)) / 2.0, 2)
+            return True
+
+        risk_target = (float(MIN_REQUIRED_RISK) + float(MAX_RISK_PER_TRADE)) / 2.0
+        desired_distance = risk_target / quantity
+        if side == "SELL":
+            adjusted_stop = max(stop, entry + desired_distance)
+            reward_per_share = entry - target
+        elif side == "BUY":
+            adjusted_stop = min(stop, entry - desired_distance)
+            reward_per_share = target - entry
+        else:
+            return False
+
+        adjusted_distance = abs(adjusted_stop - entry)
+        adjusted_risk = round(adjusted_distance * quantity, 2)
+        rr = reward_per_share / adjusted_distance if adjusted_distance > 0 else 0.0
+        if adjusted_risk > float(MAX_RISK_PER_TRADE) + 0.01:
+            self._reject("risk_adjustment_over_max")
+            return False
+        if adjusted_risk < float(MIN_REQUIRED_RISK) - 0.01:
+            self._reject("risk_adjustment_below_min")
+            return False
+        if rr < float(MIN_RR_RATIO):
+            self._reject("risk_adjustment_rr")
+            return False
+
+        signal["original_stop_loss"] = round(stop, 4)
+        signal["stop_loss"] = round(adjusted_stop, 4)
+        signal["risk_adjusted"] = True
+        signal["risk_target"] = round(risk_target, 2)
+        signal["estimated_quantity"] = int(quantity)
+        signal["estimated_risk"] = adjusted_risk
+        signal["risk_reward"] = round(rr, 4)
+        self.diagnostics["risk_adjusted"] += 1
+        return True
 
     def _open_signal(self, signal, rank):
         trigger = pd.to_datetime(signal.get("trigger_time"), errors="coerce")
@@ -187,6 +258,10 @@ class Strategy2Runtime:
             return False
         if len(self.paper_engine.open_positions) >= MAX_OPEN_POSITIONS:
             self._reject("position_limit")
+            return False
+
+        if not self._normalize_risk(signal):
+            self.processed.add(candidate_id)
             return False
 
         risk = self.risk_engine.approve_trade(signal, available_capital=self.paper_engine.available_capital)
