@@ -79,13 +79,7 @@ class OpenReversalEngine:
             return None
 
     def update_state(self, state, today_open, pdh, pdl, completed_close=None, stamp=None):
-        """Evaluate ONLY the current live LTP.
-
-        The completed_close/stamp arguments remain for API compatibility but are
-        deliberately ignored. This prevents a completed candle from qualifying
-        a breach or return after the user explicitly requested no candle-close
-        confirmation.
-        """
+        """Evaluate ONLY the current live LTP; candle arguments are ignored."""
         state = dict(state)
         side = str(state.get("side", "")).upper()
         open_price = float(today_open)
@@ -103,8 +97,10 @@ class OpenReversalEngine:
             return state
 
         now = datetime.now(INDIA_TZ).isoformat(timespec="milliseconds")
+        # BUY setup: today's open is already above PDH. The stock must first
+        # cross/reach PDH from below, then return to/above today's Open.
         if side == "BUY":
-            if not state.get("pdh_breached") and ltp <= pdh:
+            if not state.get("pdh_breached") and ltp >= pdh:
                 state["pdh_breached"] = True
                 state["pdh_breach_time"] = now
                 state["breach_price"] = ltp
@@ -113,8 +109,10 @@ class OpenReversalEngine:
                 state["qualified_time"] = now
                 state["qualified_ltp"] = ltp
                 state["trigger_price"] = ltp
+        # SELL setup: today's open is already below PDL. The stock must first
+        # cross/reach PDL from above, then return to/below today's Open.
         elif side == "SELL":
-            if not state.get("pdl_breached") and ltp >= pdl:
+            if not state.get("pdl_breached") and ltp <= pdl:
                 state["pdl_breached"] = True
                 state["pdl_breach_time"] = now
                 state["breach_price"] = ltp
@@ -179,10 +177,7 @@ class OpenReversalEngine:
         if side is None or not self.market_aligned(side, nifty_change_pct):
             return None
         state = {"symbol": symbol, "side": side, "pdh_breached": False, "pdl_breached": False, "open_returned": False}
-        for _ in today_data.itertuples():
-            state = self.update_state(state, open_price, pdh, pdl)
-            if state.get("open_returned"):
-                break
+        state = self.update_state(state, open_price, pdh, pdl)
         if not state.get("open_returned"):
             return None
         live = self._live(symbol)
