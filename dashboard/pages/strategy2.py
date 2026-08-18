@@ -8,22 +8,22 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from strategy2_worker import ensure_strategy2_running, get_strategy2_status
-from dashboard.strategy2_data import diagnostics, format_price
+from bot_runner import ensure_bot_running
+from dashboard.strategy2_data import status, diagnostics, format_price
 
 st.set_page_config(page_title="NSE Catalyst | Strategy 2", page_icon="🔴", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="s2_home_live")
-ensure_strategy2_running()
+ensure_bot_running()
 render_nav()
 
-s = get_strategy2_status() or {}
+s = status() or {}
 d = diagnostics() or {}
 st.title("🔴 Strategy 2 — Gap Extension Reversal")
 st.caption("Independent ₹2,50,000 paper strategy • BUY + SELL • same dashboard standard as Strategy 1")
 
 cards = st.columns(6)
-cards[0].metric("Worker", s.get("status", "STARTING"))
+cards[0].metric("Bot Status", s.get("status", "STARTING"))
 cards[1].metric("Capital", format_price(s.get("available_capital", 250000)))
 cards[2].metric("Open Positions", int(s.get("open_positions", 0) or 0))
 cards[3].metric("Daily P&L", format_price(s.get("daily_pnl", 0)))
@@ -54,6 +54,6 @@ st.dataframe(__import__("pandas").DataFrame([
     ("Approved signals", d.get("signals", 0)),
 ], columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
 
-st.success("Strategy 2 is isolated from Strategy 1: capital, positions, signals, diagnostics and journal are separate.")
+st.success("Strategy 2 is isolated from Strategy 1: capital, positions, signals, diagnostics and journal are separate. One runtime owns Strategy 2.")
 st.info("Use the four Strategy 2 pages below through the grouped navigation: Current • Analysis • Scanner • Downloads.")
 render_daily_footer()
