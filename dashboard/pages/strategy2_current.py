@@ -51,24 +51,26 @@ cards([("WORKER","🟢 RUNNING" if worker_ok else "🔴 STALE"),("AVAILABLE CAPI
 if s.get("last_error"): st.error(str(s["last_error"]))
 
 with st.expander("🔎 Live Scanner & Trading",expanded=True):
-    risk_approved=int(d.get("risk_adjusted",0) or 0); cards([("CANDIDATES",d.get("candidates",0)),("BUY CANDIDATES",d.get("buy_candidates",0)),("SELL CANDIDATES",d.get("sell_candidates",0)),("BUY QUALIFIED",d.get("buy_qualified",0)),("SELL QUALIFIED",d.get("sell_qualified",0)),("FINAL SIGNALS",d.get("signals",0)),("RISK APPROVED",risk_approved),("REJECTIONS",sum((d.get("rejections",{}) or {}).values()))])
+    today_sig=sig.copy()
+    if not today_sig.empty:
+        dc="entry_time" if "entry_time" in today_sig.columns else "timestamp" if "timestamp" in today_sig.columns else None
+        if dc:
+            z=pd.to_datetime(today_sig[dc],errors="coerce"); z=z.dt.tz_localize(INDIA_TZ) if z.dt.tz is None else z.dt.tz_convert(INDIA_TZ); today_sig=today_sig.loc[z.dt.date.eq(now.date())]
+    approved_today=today_sig[today_sig["approved"].astype(str).str.lower().isin({"true","1","yes"})] if not today_sig.empty and "approved" in today_sig.columns else today_sig.iloc[0:0]
+    cards([("CANDIDATES",d.get("candidates",0)),("BUY CANDIDATES",d.get("buy_candidates",0)),("SELL CANDIDATES",d.get("sell_candidates",0)),("BUY QUALIFIED",d.get("buy_qualified",0)),("SELL QUALIFIED",d.get("sell_qualified",0)),("FINAL SIGNALS",d.get("signals",0)),("RISK APPROVED",len(approved_today)),("REJECTIONS",sum((d.get("rejections",{}) or {}).values()))])
 
 with st.expander("📋 Scanner Pipeline & Alignment",expanded=False):
     pipeline=pd.DataFrame([("Universe",d.get("candidates",0),"NIFTY 500 opening GAP candidates","DATA"),("Extension",int(d.get("buy_candidates",0) or 0)+int(d.get("sell_candidates",0) or 0),"Live price extends beyond Today's Open","SETUP"),("Reversal qualified",int(d.get("buy_qualified",0) or 0)+int(d.get("sell_qualified",0) or 0),"Live price returns through Today's Open","LIVE LTP"),("Risk adjusted",d.get("risk_adjusted",0),"₹1,400–₹1,500 actual-risk band","RISK"),("Final approved",d.get("signals",0),"Entry + risk gate accepted","ENTRY")],columns=["Stage","Count","Rule / Data","Type"]); st.dataframe(pipeline,width="stretch",hide_index=True)
 
-with st.expander("⏳ Waiting / Qualified Stocks",expanded=False):
-    if gap.empty: st.info("No Strategy 2 candidates currently available.")
+with st.expander("⏳ GAP Candidates / Setups",expanded=False):
+    if gap.empty: st.info("No Strategy 2 GAP candidates currently available.")
     else:
         b=gap.copy(); cols=[c for c in ["Symbol","TodayOpen","PDH","PDL","PreviousDayClose","GapPercentFromPreviousClose","GapType","OpeningSetup"] if c in b.columns]; st.dataframe(b[cols].head(100),width="stretch",hide_index=True,height=340)
 
 with st.expander("🚨 Today's Approved Signals",expanded=False):
-    today=sig.copy()
+    today=approved_today.copy()
     if not today.empty:
-        dc="entry_time" if "entry_time" in today.columns else "timestamp" if "timestamp" in today.columns else None
-        if dc:
-            z=pd.to_datetime(today[dc],errors="coerce"); z=z.dt.tz_localize(INDIA_TZ) if z.dt.tz is None else z.dt.tz_convert(INDIA_TZ); today=today.loc[z.dt.date.eq(now.date())]
-        if "approved" in today.columns: today=today[today["approved"].astype(str).str.lower().isin({"true","1","yes"})]
-        cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","actual_risk","risk_reward","gap_percent","priority_rank"] if c in today.columns]; st.dataframe(today[cols].tail(25).iloc[::-1],width="stretch",hide_index=True) if not today.empty else st.info("No approved signals today.")
+        cols=[c for c in ["symbol","signal","entry_time","entry","stop_loss","target","quantity","actual_risk","risk_reward","gap_percent","priority_rank"] if c in today.columns]; st.dataframe(today[cols].tail(25).iloc[::-1],width="stretch",hide_index=True)
     else: st.info("No approved signals today.")
 
 with st.expander("📍 Open Paper Positions",expanded=True):
