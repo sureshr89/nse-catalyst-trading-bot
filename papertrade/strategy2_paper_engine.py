@@ -59,11 +59,17 @@ class Strategy2PaperTradeEngine(PaperTradeEngine):
             print(f"Strategy 2 paper state save skipped: {type(error).__name__}: {error}")
 
     def process_candle(self, symbol, candle):
-        """Use live LTP for exits; completed candle remains the fallback."""
+        """Use live LTP plus current-bar High/Low for immediate exits; candle is fallback."""
         try:
             live = self.price_data.get_latest_live_price(symbol, max_age_seconds=3)
             if live is not None:
-                return self.process_live_price(symbol, live.get("Close"), live.get("Datetime"))
+                return self.process_live_price(
+                    symbol,
+                    live.get("Close"),
+                    live.get("Datetime"),
+                    high=live.get("High"),
+                    low=live.get("Low"),
+                )
         except Exception:
             pass
         return super().process_candle(symbol, candle)
