@@ -1,98 +1,191 @@
+"""Strategy 2 current trading dashboard.
+
+This page intentionally mirrors the Strategy 1 Current Trading layout and
+section order. Only the underlying Strategy 2 data sources and rules differ.
+"""
 from pathlib import Path
 import sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
-from dashboard.strategy2_data import status, diagnostics, state, format_price, format_pct, today_signals
+from dashboard.strategy2_data import status, diagnostics, state, gaps, signals, format_price, format_pct
+from strategy.contracts import strategy_metadata
 
-st.set_page_config(page_title="NSE Catalyst | Strategy 2 Current", page_icon="🔴", layout="wide", initial_sidebar_state="collapsed")
-st.markdown(load_css(), unsafe_allow_html=True)
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+ENTRY_START, ENTRY_END = "09:45", "14:00"
+
+st.set_page_config(page_title="NSE Catalyst | Strategy 2 Current", page_icon="🎯", layout="wide")
 st_autorefresh(interval=5000, key="s2_current_live")
-ensure_bot_running()
+st.markdown(load_css(), unsafe_allow_html=True)
+try:
+    ensure_bot_running()
+except Exception:
+    pass
 render_nav()
+
+
+def age_seconds(value):
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=INDIA_TZ)
+        return max(0, int((datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()))
+    except Exception:
+        return None
+
+
+def metric_cards(items):
+    html = "<div class='metric-grid'>"
+    for label, value in items:
+        html += f"<div class='metric-card'><small>{label}</small><b>{value}</b></div>"
+    st.markdown(html + "</div>", unsafe_allow_html=True)
+
+
+def read_gap_board():
+    try:
+        return gaps()
+    except Exception:
+        return pd.DataFrame()
 
 s = status() or {}
 d = diagnostics() or {}
-st.title("🔴 Strategy 2 — Current Trading")
-st.caption("Gap Extension Reversal BUY + SELL • separate ₹2,50,000 paper account • completed 1-minute data")
+paper = state() or {}
+gap = read_gap_board()
+sig = signals()
+now = datetime.now(INDIA_TZ)
+clock = now.strftime("%H:%M")
+positions = paper.get("open_positions", {}) or {}
 
-cards = st.columns(6)
-cards[0].metric("Status", str(s.get("status", "STARTING")))
-cards[1].metric("Available Capital", format_price(s.get("available_capital", 250000)))
-cards[2].metric("Open Positions", int(s.get("open_positions", 0) or 0))
-cards[3].metric("Daily P&L", format_price(s.get("daily_pnl", 0)))
-cards[4].metric("BUY Qualified", int(d.get("buy_qualified", 0) or 0))
-cards[5].metric("SELL Qualified", int(d.get("sell_qualified", 0) or 0))
-if s.get("message"): st.info(str(s["message"]))
+worker_age = age_seconds(s.get("heartbeat"))
+worker_ok = bool(s.get("worker_alive")) and worker_age is not None and worker_age <= 90
+last_scan_age = age_seconds(s.get("last_scan"))
+window = "PREPARE" if clock < ENTRY_START else "ACTIVE" if clock <= ENTRY_END else "CLOSED"
 
-with st.expander("⚡ Exact Strategy 2 Rules", expanded=False):
-    rules_df = pd.DataFrame([
-        ("SELL setup", "Today's Open > PDH"),
-        ("SELL extension", "After 09:45, price trades above Today's Open"),
-        ("SELL trigger", "First completed 1-minute CLOSE below Today's Open"),
-        ("SELL SL / Target", "Today's High at trigger / PDH; tight SL is widened only when needed to target ₹1,450 risk"),
-        ("BUY setup", "Today's Open < PDL"),
-        ("BUY extension", "After 09:45, price trades below Today's Open"),
-        ("BUY trigger", "First completed 1-minute CLOSE above Today's Open"),
-        ("BUY SL / Target", "Today's Low at trigger / PDL; tight SL is widened only when needed to target ₹1,450 risk"),
-        ("Priority", "Largest absolute opening GAP % from Previous Day Close first"),
-        ("NIFTY", "Soft protective filter: clearly bullish blocks SELL; clearly bearish blocks BUY"),
-        ("Risk", "₹1,400–₹1,500 actual risk • adaptive tight-stop target ₹1,450 • minimum 1.25R"),
-        ("Capital", "Separate ₹2,50,000 paper account"),
-    ], columns=["Condition", "Rule"])
-    st.dataframe(rules_df.astype(str), width="stretch", hide_index=True)
+st.title("🎯 Strategy 2 — Current Trading")
+st.caption(f"Gap Extension Reversal • separate ₹2,50,000 paper account • strategy-driven pipeline • {now.strftime('%d %b %Y %H:%M:%S')} IST")
+metric_cards([
+    ("SYSTEM WORKER", "🟢 RUNNING" if worker_ok else "🔴 STOPPED / STALE"),
+    ("AVAILABLE CAPITAL", format_price(s.get("available_capital", 250000))),
+    ("MARKET FILTER", "🟢 ACTIVE" if worker_ok else "⚪ WAIT"),
+    ("ENTRY WINDOW", window),
+    ("OPEN POSITIONS", len(positions)),
+    ("DAILY P&L", format_price(s.get("daily_pnl", 0))),
+])
 
-with st.expander("📡 Live Scan State", expanded=False):
-    scan_rows = [
-        ("Last scan", str(s.get("last_scan") or "Not scanned yet")),
-        ("Signals in last scan", str(int(s.get("last_signal_count", 0) or 0))),
-        ("Opening GAP candidates", str(int(d.get("candidates", 0) or 0))),
-        ("BUY candidates", str(int(d.get("buy_candidates", 0) or 0))),
-        ("SELL candidates", str(int(d.get("sell_candidates", 0) or 0))),
-        ("BUY qualified", str(int(d.get("buy_qualified", 0) or 0))),
-        ("SELL qualified", str(int(d.get("sell_qualified", 0) or 0))),
-        ("Risk-adjusted signals", str(int(d.get("risk_adjusted", 0) or 0))),
-        ("Approved signals", str(int(d.get("signals", 0) or 0))),
+if s.get("last_error"):
+    st.error(str(s["last_error"]))
+
+with st.expander("🩺 System & Data Health", expanded=False):
+    health = pd.DataFrame([
+        ("Worker heartbeat", "PASS" if worker_ok else "FAIL", f"{worker_age}s ago" if worker_age is not None else "missing"),
+        ("Scanner diagnostics", "PASS" if last_scan_age is not None and last_scan_age <= 90 else "FAIL", f"{last_scan_age}s ago" if last_scan_age is not None else "missing"),
+        ("Opening GAP data", "PASS" if not gap.empty else "FAIL", f"{len(gap)} rows"),
+        ("Strategy signals", "PASS" if not sig.empty else "WAIT", f"{len(sig)} records"),
+        ("Paper state", "PASS" if isinstance(paper, dict) else "FAIL", f"{len(positions)} open positions"),
+        ("Strategy version", "PASS", str(d.get("strategy_version", "unknown"))),
+    ], columns=["Check", "Status", "Detail"])
+    st.dataframe(health, width="stretch", hide_index=True)
+
+with st.expander("🔗 Decision Pipeline", expanded=False):
+    pipeline = pd.DataFrame([
+        ("1. Universe", d.get("candidates", 0), "NIFTY 500 opening candidates"),
+        ("2. GAP setup", d.get("candidates", 0), "Open above PDH / below PDL"),
+        ("3. Extension", d.get("buy_candidates", 0) + d.get("sell_candidates", 0), "Price extends beyond Today's Open"),
+        ("4. Reversal trigger", d.get("buy_qualified", 0) + d.get("sell_qualified", 0), "First completed 1m close back through Open"),
+        ("5. Risk validation", d.get("risk_adjusted", 0), "₹1,400–₹1,500 actual-risk band"),
+        ("6. Approved", d.get("signals", 0), "Risk gate accepted"),
+    ], columns=["Stage", "Count", "Meaning"])
+    st.dataframe(pipeline, width="stretch", hide_index=True)
+
+st.subheader("📐 Authoritative Strategy Rules")
+meta = strategy_metadata("STRATEGY_2")
+with st.expander(f"{meta['strategy']} — {meta['name']} — v{meta['version']}", expanded=False):
+    rules = list(meta["rules"]) + [
+        ("Risk", "₹1,400–₹1,500 actual risk • adaptive target ₹1,450 • minimum 1.25R"),
+        ("Entry window", "09:45–14:00 IST"),
+        ("Monitoring", "Completed 1-minute strategy candles"),
+        ("Square-off", "15:00 IST"),
     ]
-    st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]).astype(str), width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(rules, columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
-st.subheader("🎯 Today's Qualified / Approved Signals")
-q = today_signals()
-if not q.empty:
-    numeric_cols = ["risk_reward", "actual_risk", "estimated_risk", "gap_percent", "entry", "stop_loss", "target"]
-    for c in numeric_cols:
-        if c in q.columns: q[c] = pd.to_numeric(q[c], errors="coerce")
-    cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "today_open", "pdh", "pdl", "trigger_close", "entry", "original_stop_loss", "stop_loss", "target", "risk_adjusted", "estimated_quantity", "estimated_risk", "actual_risk", "risk_reward", "priority_rank", "approved", "reason"] if c in q.columns]
-    with st.expander("📋 Signal Details — entry, SL, target, quantity, risk and reason", expanded=False):
-        st.dataframe(q[cols].tail(100).iloc[::-1], width="stretch", hide_index=True, height=420)
-else:
-    st.info("No Strategy 2 signal decisions recorded today.")
+with st.expander("⏳ Waiting & Qualified Stocks", expanded=False):
+    waiting = d.get("waiting", {}) or {}
+    qualified = d.get("qualified", {}) or {}
+    waiting_rows = []
+    for side in ("BUY", "SELL"):
+        for symbol, item in (waiting.get(side, {}) or {}).items():
+            waiting_rows.append({"Side": side, "Stock": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
+    if waiting_rows:
+        wdf = pd.DataFrame(waiting_rows)
+        wdf["Gap %"] = pd.to_numeric(wdf["Gap %"], errors="coerce")
+        st.dataframe(wdf.sort_values("Gap %", key=lambda x: x.abs(), ascending=False), width="stretch", hide_index=True, height=320)
+    else:
+        st.info("No Strategy 2 stocks are currently waiting for the next state transition.")
 
-st.subheader("📍 Open Positions")
-positions = (state().get("open_positions", {}) or {})
+    qualified_rows = []
+    for side in ("BUY", "SELL"):
+        for symbol, item in (qualified.get(side, {}) or {}).items():
+            qualified_rows.append({"Side": side, "Stock": symbol, "Qualified": item.get("qualified_at", "—"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
+    if qualified_rows:
+        qdf = pd.DataFrame(qualified_rows)
+        qdf["Gap %"] = pd.to_numeric(qdf["Gap %"], errors="coerce")
+        st.dataframe(qdf.sort_values("Gap %", key=lambda x: x.abs(), ascending=False), width="stretch", hide_index=True, height=260)
+    else:
+        st.info("No Strategy 2 candidate has completed its extension → reversal sequence yet.")
+
+with st.expander("🏆 Gap Board — Largest Absolute Gap First", expanded=False):
+    if gap.empty:
+        st.info("Strategy 2 GAP board has not been prepared yet.")
+    else:
+        board = gap.copy()
+        for c in ["TodayOpen", "PDH", "PDL", "Gap", "GapPercentFromPreviousClose"]:
+            if c in board.columns:
+                board[c] = pd.to_numeric(board[c], errors="coerce")
+        if "GapPercentFromPreviousClose" in board.columns:
+            board["Priority"] = board["GapPercentFromPreviousClose"].abs()
+            board = board.sort_values("Priority", ascending=False)
+        cols = [c for c in ["Symbol", "TodayOpen", "PDH", "PDL", "PreviousDayClose", "Gap", "GapPercentFromPreviousClose", "GapType", "OpeningSetup"] if c in board.columns]
+        view = board[cols].head(50).copy()
+        for c in ["TodayOpen", "PDH", "PDL", "PreviousDayClose", "Gap"]:
+            if c in view.columns:
+                view[c] = view[c].map(format_price)
+        if "GapPercentFromPreviousClose" in view.columns:
+            view["GapPercentFromPreviousClose"] = view["GapPercentFromPreviousClose"].map(format_pct)
+        st.dataframe(view, width="stretch", hide_index=True, height=360)
+
+with st.expander("🚨 Today's Approved Signals", expanded=False):
+    if not sig.empty:
+        frame = sig.copy()
+        if "approved" in frame.columns:
+            approved = frame["approved"].astype(str).str.lower().isin(["true", "1", "yes"])
+            frame = frame[approved]
+        cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "entry", "stop_loss", "target", "quantity", "actual_risk", "risk_reward", "priority_rank", "reason"] if c in frame.columns]
+        if not frame.empty and cols:
+            st.dataframe(frame[cols].tail(25).iloc[::-1], width="stretch", hide_index=True)
+        else:
+            st.info("No approved Strategy 2 signals today.")
+    else:
+        st.info("No Strategy 2 signal records today.")
+
+st.subheader("📍 Open Paper Positions")
 if positions:
     rows = []
     for symbol, p in positions.items():
-        rows.append({"Stock": symbol, "Side": p.get("signal"), "Entry": format_price(p.get("entry")), "SL": format_price(p.get("stop_loss")), "Target": format_price(p.get("target")), "Qty": p.get("quantity"), "Risk": format_price(p.get("actual_risk", p.get("risk"))), "Gap %": format_pct(p.get("gap_percent")), "Entry Time": p.get("entry_time", "—")})
+        rows.append({"Stock": symbol, "Strategy": p.get("strategy", "STRATEGY_2"), "Side": p.get("signal"), "Entry": format_price(p.get("entry")), "LTP": format_price(p.get("ltp")), "SL": format_price(p.get("stop_loss")), "Target": format_price(p.get("target")), "Qty": p.get("quantity", "—"), "Risk": format_price(p.get("actual_risk", p.get("risk"))), "Entry Time": p.get("entry_time", "—")})
     st.dataframe(pd.DataFrame(rows).astype(str), width="stretch", hide_index=True)
 else:
     st.info("No open Strategy 2 paper positions.")
 
-rejections = d.get("rejections", {}) or {}
-with st.expander("🚫 Rejection Audit", expanded=False):
-    if rejections:
-        rejection_rows = [{"Reason": str(k), "Count": str(v)} for k, v in sorted(rejections.items(), key=lambda x: int(x[1] or 0), reverse=True)]
-        st.dataframe(pd.DataFrame(rejection_rows).astype(str), width="stretch", hide_index=True)
-    else:
-        st.info("No rejections recorded in the latest scan cycle.")
-
-st.caption("Auto-refresh 5s • single paper-bot scan cycle 30s • paper trading only • live orders disabled")
+st.caption(f"Worker heartbeat: {s.get('heartbeat', '—')} • Last scan: {s.get('last_scan', '—')} • Scan error: {s.get('last_error') or 'None'} • Auto-refresh 5s • Paper trading only")
 render_daily_footer()
