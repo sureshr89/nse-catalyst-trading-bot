@@ -1,7 +1,7 @@
 """Strategy 2 current trading dashboard.
 
-This page mirrors the Strategy 1 Current Trading layout and section order.
-Only the underlying Strategy 2 data sources and rules differ.
+This page intentionally mirrors the Strategy 1 Current Trading layout and
+section order. Only the underlying Strategy 2 data sources and reversal logic differ.
 """
 from pathlib import Path
 import sys
@@ -20,6 +20,7 @@ from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
 from bot_runner import ensure_bot_running
 from dashboard.strategy2_data import status, diagnostics, state, gaps, signals, format_price, format_pct
+from market.price_data import PriceData
 from strategy.contracts import strategy_metadata
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
@@ -59,14 +60,55 @@ def read_gap_board():
         return pd.DataFrame()
 
 
-def as_side_map(value):
-    """Return only the expected BUY/SELL mapping; diagnostics counters may use the same key."""
-    if not isinstance(value, dict):
-        return {"BUY": {}, "SELL": {}}
-    return {
-        "BUY": value.get("BUY", {}) if isinstance(value.get("BUY", {}), dict) else {},
-        "SELL": value.get("SELL", {}) if isinstance(value.get("SELL", {}), dict) else {},
-    }
+def live_position_values(positions):
+    """Return live LTP/P&L for S2 positions using the same calculation as S1.
+
+    This is display-only. It never changes paper state, stops, targets, entries,
+    quantities, or any execution decision.
+    """
+    result = []
+    try:
+        price_data = PriceData()
+    except Exception:
+        price_data = None
+
+    for symbol, position in (positions or {}).items():
+        ltp = None
+        if price_data is not None:
+            try:
+                latest = price_data.get_latest_market_price(symbol)
+                ltp = latest.get("Close") if latest else None
+            except Exception:
+                ltp = None
+
+        entry = position.get("entry")
+        side = str(position.get("signal", "")).upper()
+        pnl = None
+        try:
+            qty = float(position.get("quantity", 0) or 0)
+            if ltp is not None and entry is not None and qty:
+                if side == "BUY":
+                    pnl = (float(ltp) - float(entry)) * qty
+                elif side == "SELL":
+                    pnl = (float(entry) - float(ltp)) * qty
+        except Exception:
+            pnl = None
+
+        result.append({
+            "Stock": symbol,
+            "Strategy": position.get("strategy", "STRATEGY_2"),
+            "Side": side,
+            "Entry": format_price(entry),
+            "LTP": format_price(ltp),
+            "Live P&L": format_price(pnl),
+            "SL": format_price(position.get("stop_loss")),
+            "Target": format_price(position.get("target")),
+            "Qty": position.get("quantity", "—"),
+            "Risk": format_price(position.get("actual_risk", position.get("risk"))),
+            "Entry Time": position.get("entry_time", "—"),
+        })
+    return result
+
 
 s = status() or {}
 d = diagnostics() or {}
@@ -130,13 +172,18 @@ with st.expander(f"{meta['strategy']} — {meta['name']} — v{meta['version']}"
     st.dataframe(pd.DataFrame(rules, columns=["Rule", "Definition"]), width="stretch", hide_index=True)
 
 with st.expander("⏳ Waiting & Qualified Stocks", expanded=False):
-    # Some S2 diagnostics use numeric counters named 'qualified'. Never call
-    # .get() on that counter. Candidate maps, when present, are normalized here.
-    waiting = as_side_map(d.get("waiting", {}))
-    qualified = as_side_map(d.get("qualified", {}))
+    waiting = d.get("waiting", {}) or {}
+    qualified = d.get("qualified", {}) or {}
+    waiting = waiting if isinstance(waiting, dict) else {}
+    qualified = qualified if isinstance(qualified, dict) else {}
     waiting_rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in waiting[side].items():
+        side_items = waiting.get(side, {})
+        if not isinstance(side_items, dict):
+            side_items = {}
+        for symbol, item in side_items.items():
+            if not isinstance(item, dict):
+                continue
             waiting_rows.append({"Side": side, "Stock": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
     if waiting_rows:
         wdf = pd.DataFrame(waiting_rows)
@@ -147,7 +194,12 @@ with st.expander("⏳ Waiting & Qualified Stocks", expanded=False):
 
     qualified_rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in qualified[side].items():
+        side_items = qualified.get(side, {})
+        if not isinstance(side_items, dict):
+            side_items = {}
+        for symbol, item in side_items.items():
+            if not isinstance(item, dict):
+                continue
             qualified_rows.append({"Side": side, "Stock": symbol, "Qualified": item.get("qualified_at", "—"), "Gap %": item.get("gap_percent", 0), "Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl"))})
     if qualified_rows:
         qdf = pd.DataFrame(qualified_rows)
@@ -190,19 +242,7 @@ with st.expander("🚨 Today's Approved Signals", expanded=False):
 
 st.subheader("📍 Open Paper Positions")
 if positions:
-    rows = []
-    for symbol, position in positions.items():
-        rows.append({
-            "Stock": symbol,
-            "Strategy": position.get("strategy", "STRATEGY_2"),
-            "Side": position.get("signal"),
-            "Entry": format_price(position.get("entry")),
-            "SL": format_price(position.get("stop_loss")),
-            "Target": format_price(position.get("target")),
-            "Qty": position.get("quantity"),
-            "Risk": format_price(position.get("actual_risk", position.get("risk"))),
-            "Entry Time": position.get("entry_time", "—"),
-        })
+    rows = live_position_values(positions)
     st.dataframe(pd.DataFrame(rows).astype(str), width="stretch", hide_index=True)
 else:
     st.info("No open Strategy 2 paper positions.")
