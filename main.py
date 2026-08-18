@@ -190,13 +190,22 @@ class TradingBot:
         journal_ok=self._retry_closed_journal(); self.strategy2.square_off_all(); self.square_off_done=(not bool(self.paper_engine.open_positions)) and journal_ok and not bool(self.strategy2.paper_engine.open_positions)
     def scan_for_entries(self):
         now=self.current_time()
-        if now<TRADING_START or now>LAST_ENTRY_TIME or self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:return
-        signals=self.scanner.scan() or []
-        for signal in signals:
-            if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:break
-            self.process_signal(signal)
-        try:self.strategy2.scan()
-        except Exception as error:print(f"Strategy 2 scan failed: {type(error).__name__}: {error}")
+        if now<TRADING_START or now>LAST_ENTRY_TIME:
+            return
+
+        # Strategy 1 keeps its own daily limit, cooldown and two-position limit.
+        # Strategy 2 is independent and must still scan when Strategy 1 is full or stopped.
+        if not self.daily_limit_reached() and not self.cooldown_active() and len(self.paper_engine.open_positions)<MAX_OPEN_POSITIONS:
+            signals=self.scanner.scan() or []
+            for signal in signals:
+                if self.daily_limit_reached() or self.cooldown_active() or len(self.paper_engine.open_positions)>=MAX_OPEN_POSITIONS:
+                    break
+                self.process_signal(signal)
+
+        try:
+            self.strategy2.scan()
+        except Exception as error:
+            print(f"Strategy 2 scan failed: {type(error).__name__}: {error}")
     def latest_1m_candle(self,symbol):
         try:return self.price_data.get_latest_available_1m(symbol)
         except Exception as error:print(symbol,"1-minute data error:",error);return None
