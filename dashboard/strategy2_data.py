@@ -17,6 +17,7 @@ S2_DIAGNOSTICS = OUTPUTS / "strategy2_diagnostics.json"
 S2_STATE = OUTPUTS / "strategy2_paper_engine_state.json"
 GAPS = OUTPUTS / "strategy2_gap_analysis.csv"
 BOT_STATUS = OUTPUTS / "bot_status.json"
+SCANNER_DIAGNOSTICS = OUTPUTS / "scanner_diagnostics.json"
 
 STARTING_CAPITAL = 250000.0
 
@@ -36,7 +37,31 @@ def read_csv(path):
 
 
 def diagnostics():
-    return read_json(S2_DIAGNOSTICS)
+    """Return S2 diagnostics plus the shared scanner's current data-quality metrics.
+
+    Both strategies use the same NIFTY 500 scanner/market-data snapshot. S2 keeps
+    its own strategy counters, while the shared scanner supplies universe, reference
+    data, opening-setup and 1-minute coverage metrics for the dashboard.
+    """
+    diag = read_json(S2_DIAGNOSTICS)
+    shared = read_json(SCANNER_DIAGNOSTICS)
+    if not isinstance(diag, dict):
+        diag = {}
+    if not isinstance(shared, dict):
+        shared = {}
+
+    merged = dict(diag)
+    merged.setdefault("stocks_scanned", shared.get("stocks_scanned", diag.get("candidates", 0)))
+    merged.setdefault("reference_data_count", shared.get("reference_data_count", 0))
+    merged.setdefault("opening_setup_passed", shared.get("opening_setup_passed", diag.get("candidates", 0)))
+    merged.setdefault("market_data_coverage", shared.get("market_data_coverage", 0.0))
+    merged.setdefault("coverage_required", shared.get("coverage_required", 0.60))
+
+    # Strategy 2 intentionally uses a SOFT NIFTY 500 filter, not Strategy 1's
+    # hard alignment gate. Keep the dashboard wording faithful to that rule.
+    merged["market_alignment_passed"] = "SOFT FILTER"
+    merged["market_alignment_note"] = "Blocks only strong opposite NIFTY 500 movement"
+    return merged
 
 
 def state():
