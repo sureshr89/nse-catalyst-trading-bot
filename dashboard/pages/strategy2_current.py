@@ -1,7 +1,6 @@
 from pathlib import Path
 import sys
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
@@ -34,77 +33,46 @@ cards[4].metric("BUY Qualified", int(d.get("buy_qualified", 0) or 0))
 cards[5].metric("SELL Qualified", int(d.get("sell_qualified", 0) or 0))
 if s.get("message"): st.info(str(s["message"]))
 
-st.subheader("⚡ Exact Strategy 2 Rules")
-rules_df = pd.DataFrame([
-    ("SELL setup", "Today's Open > PDH"),
-    ("SELL extension", "After 09:45, price trades above Today's Open"),
-    ("SELL trigger", "First completed 1-minute CLOSE below Today's Open"),
-    ("SELL SL / Target", "Today's High at trigger / PDH; tight SL is widened only when needed to target ₹1,450 risk"),
-    ("BUY setup", "Today's Open < PDL"),
-    ("BUY extension", "After 09:45, price trades below Today's Open"),
-    ("BUY trigger", "First completed 1-minute CLOSE above Today's Open"),
-    ("BUY SL / Target", "Today's Low at trigger / PDL; tight SL is widened only when needed to target ₹1,450 risk"),
-    ("Priority", "Largest absolute opening GAP % from Previous Day Close first"),
-    ("NIFTY", "Soft protective filter: clearly bullish blocks SELL; clearly bearish blocks BUY"),
-    ("Risk", "₹1,400–₹1,500 actual risk • adaptive tight-stop target ₹1,450 • minimum 1.25R"),
-    ("Capital", "Separate ₹2,50,000 paper account"),
-], columns=["Condition", "Rule"])
-st.dataframe(rules_df.astype(str), width="stretch", hide_index=True)
+with st.expander("⚡ Exact Strategy 2 Rules", expanded=False):
+    rules_df = pd.DataFrame([
+        ("SELL setup", "Today's Open > PDH"),
+        ("SELL extension", "After 09:45, price trades above Today's Open"),
+        ("SELL trigger", "First completed 1-minute CLOSE below Today's Open"),
+        ("SELL SL / Target", "Today's High at trigger / PDH; tight SL is widened only when needed to target ₹1,450 risk"),
+        ("BUY setup", "Today's Open < PDL"),
+        ("BUY extension", "After 09:45, price trades below Today's Open"),
+        ("BUY trigger", "First completed 1-minute CLOSE above Today's Open"),
+        ("BUY SL / Target", "Today's Low at trigger / PDL; tight SL is widened only when needed to target ₹1,450 risk"),
+        ("Priority", "Largest absolute opening GAP % from Previous Day Close first"),
+        ("NIFTY", "Soft protective filter: clearly bullish blocks SELL; clearly bearish blocks BUY"),
+        ("Risk", "₹1,400–₹1,500 actual risk • adaptive tight-stop target ₹1,450 • minimum 1.25R"),
+        ("Capital", "Separate ₹2,50,000 paper account"),
+    ], columns=["Condition", "Rule"])
+    st.dataframe(rules_df.astype(str), width="stretch", hide_index=True)
 
-st.subheader("📡 Live Scan State")
-scan_rows = [
-    ("Last scan", str(s.get("last_scan") or "Not scanned yet")),
-    ("Signals in last scan", str(int(s.get("last_signal_count", 0) or 0))),
-    ("Opening GAP candidates", str(int(d.get("candidates", 0) or 0))),
-    ("BUY candidates", str(int(d.get("buy_candidates", 0) or 0))),
-    ("SELL candidates", str(int(d.get("sell_candidates", 0) or 0))),
-    ("BUY qualified", str(int(d.get("buy_qualified", 0) or 0))),
-    ("SELL qualified", str(int(d.get("sell_qualified", 0) or 0))),
-    ("Risk-adjusted signals", str(int(d.get("risk_adjusted", 0) or 0))),
-    ("Approved signals", str(int(d.get("signals", 0) or 0))),
-]
-st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]).astype(str), width="stretch", hide_index=True)
+with st.expander("📡 Live Scan State", expanded=False):
+    scan_rows = [
+        ("Last scan", str(s.get("last_scan") or "Not scanned yet")),
+        ("Signals in last scan", str(int(s.get("last_signal_count", 0) or 0))),
+        ("Opening GAP candidates", str(int(d.get("candidates", 0) or 0))),
+        ("BUY candidates", str(int(d.get("buy_candidates", 0) or 0))),
+        ("SELL candidates", str(int(d.get("sell_candidates", 0) or 0))),
+        ("BUY qualified", str(int(d.get("buy_qualified", 0) or 0))),
+        ("SELL qualified", str(int(d.get("sell_qualified", 0) or 0))),
+        ("Risk-adjusted signals", str(int(d.get("risk_adjusted", 0) or 0))),
+        ("Approved signals", str(int(d.get("signals", 0) or 0))),
+    ]
+    st.dataframe(pd.DataFrame(scan_rows, columns=["Metric", "Value"]).astype(str), width="stretch", hide_index=True)
 
 st.subheader("🎯 Today's Qualified / Approved Signals")
 q = today_signals()
 if not q.empty:
     numeric_cols = ["risk_reward", "actual_risk", "estimated_risk", "gap_percent", "entry", "stop_loss", "target"]
     for c in numeric_cols:
-        if c in q.columns:
-            q[c] = pd.to_numeric(q[c], errors="coerce")
-
-    # These charts are read-only. They use the existing S2 signal journal and
-    # never alter, close, reopen, or recalculate an open paper position.
-    chart_data = q.copy()
-    chart_data["Risk"] = chart_data.get("actual_risk", pd.Series(index=chart_data.index, dtype=float))
-    if "estimated_risk" in chart_data.columns:
-        chart_data["Risk"] = chart_data["Risk"].fillna(chart_data["estimated_risk"])
-    if "symbol" in chart_data.columns:
-        chart_data["Symbol"] = chart_data["symbol"].astype(str)
-
-    a, b = st.columns(2)
-    with a:
-        risk_plot = chart_data.dropna(subset=["Risk"]).tail(30)
-        if not risk_plot.empty:
-            fig = px.bar(risk_plot, x="Symbol", y="Risk", hover_data=[c for c in ["signal", "entry", "stop_loss", "target", "risk_reward", "risk_adjusted"] if c in risk_plot.columns], title="Risk per Decision (₹1,400–₹1,500 band)")
-            fig.add_hline(y=1400, line_dash="dash", annotation_text="Min ₹1,400")
-            fig.add_hline(y=1500, line_dash="dash", annotation_text="Max ₹1,500")
-            fig.update_layout(template="plotly_dark", height=330, margin=dict(l=8, r=8, t=48, b=8))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="s2_current_risk_chart")
-        else:
-            st.info("Risk values will appear after the next S2 risk evaluation.")
-    with b:
-        rr_plot = chart_data.dropna(subset=["risk_reward"])
-        if not rr_plot.empty:
-            fig = px.scatter(rr_plot, x="risk_reward", y="entry", hover_data=[c for c in ["symbol", "signal", "stop_loss", "target", "Risk", "risk_adjusted"] if c in rr_plot.columns], title="Risk:Reward vs Entry")
-            fig.add_vline(x=1.25, line_dash="dash", annotation_text="Minimum 1.25R")
-            fig.update_layout(template="plotly_dark", height=330, margin=dict(l=8, r=8, t=48, b=8))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="s2_current_rr_chart")
-        else:
-            st.info("Risk:Reward values will appear after the next S2 risk evaluation.")
-
+        if c in q.columns: q[c] = pd.to_numeric(q[c], errors="coerce")
     cols = [c for c in ["timestamp", "symbol", "signal", "gap_percent", "today_open", "pdh", "pdl", "trigger_close", "entry", "original_stop_loss", "stop_loss", "target", "risk_adjusted", "estimated_quantity", "estimated_risk", "actual_risk", "risk_reward", "priority_rank", "approved", "reason"] if c in q.columns]
-    st.dataframe(q[cols].tail(100).iloc[::-1], width="stretch", hide_index=True, height=420)
+    with st.expander("📋 Signal Details — entry, SL, target, quantity, risk and reason", expanded=False):
+        st.dataframe(q[cols].tail(100).iloc[::-1], width="stretch", hide_index=True, height=420)
 else:
     st.info("No Strategy 2 signal decisions recorded today.")
 
@@ -118,13 +86,13 @@ if positions:
 else:
     st.info("No open Strategy 2 paper positions.")
 
-st.subheader("🚫 Rejection Audit")
 rejections = d.get("rejections", {}) or {}
-if rejections:
-    rejection_rows = [{"Reason": str(k), "Count": str(v)} for k, v in sorted(rejections.items(), key=lambda x: int(x[1] or 0), reverse=True)]
-    st.dataframe(pd.DataFrame(rejection_rows).astype(str), width="stretch", hide_index=True)
-else:
-    st.info("No rejections recorded in the latest scan cycle.")
+with st.expander("🚫 Rejection Audit", expanded=False):
+    if rejections:
+        rejection_rows = [{"Reason": str(k), "Count": str(v)} for k, v in sorted(rejections.items(), key=lambda x: int(x[1] or 0), reverse=True)]
+        st.dataframe(pd.DataFrame(rejection_rows).astype(str), width="stretch", hide_index=True)
+    else:
+        st.info("No rejections recorded in the latest scan cycle.")
 
 st.caption("Auto-refresh 5s • single paper-bot scan cycle 30s • paper trading only • live orders disabled")
 render_daily_footer()
