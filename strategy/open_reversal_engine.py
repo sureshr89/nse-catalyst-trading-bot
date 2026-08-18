@@ -79,7 +79,13 @@ class OpenReversalEngine:
             return None
 
     def update_state(self, state, today_open, pdh, pdl, completed_close=None, stamp=None):
-        """Evaluate ONLY the current live LTP; candle arguments are ignored."""
+        """Advance the setup from the current live LTP only.
+
+        BUY: Open > PDH. First the live price must fall to/touch PDH; only after
+        that state is reached can a live return to/above Open qualify the setup.
+        SELL is the mirror image: Open < PDL, first rise to/touch PDL, then
+        return to/below Open. Candle arguments are intentionally ignored.
+        """
         state = dict(state)
         side = str(state.get("side", "")).upper()
         open_price = float(today_open)
@@ -97,10 +103,8 @@ class OpenReversalEngine:
             return state
 
         now = datetime.now(INDIA_TZ).isoformat(timespec="milliseconds")
-        # BUY setup: today's open is already above PDH. The stock must first
-        # cross/reach PDH from below, then return to/above today's Open.
         if side == "BUY":
-            if not state.get("pdh_breached") and ltp >= pdh:
+            if not state.get("pdh_breached") and ltp <= pdh:
                 state["pdh_breached"] = True
                 state["pdh_breach_time"] = now
                 state["breach_price"] = ltp
@@ -109,10 +113,8 @@ class OpenReversalEngine:
                 state["qualified_time"] = now
                 state["qualified_ltp"] = ltp
                 state["trigger_price"] = ltp
-        # SELL setup: today's open is already below PDL. The stock must first
-        # cross/reach PDL from above, then return to/below today's Open.
         elif side == "SELL":
-            if not state.get("pdl_breached") and ltp <= pdl:
+            if not state.get("pdl_breached") and ltp >= pdl:
                 state["pdl_breached"] = True
                 state["pdl_breach_time"] = now
                 state["breach_price"] = ltp
