@@ -6,17 +6,17 @@ from zoneinfo import ZoneInfo
 from config.settings import (
     PAPER_TRADING, LIVE_TRADING, TRADING_START, LAST_ENTRY_TIME, SQUARE_OFF_TIME,
     MARKET_CLOSE, MAX_OPEN_POSITIONS, MIN_REQUIRED_RISK, MAX_RISK_PER_TRADE,
-    MIN_RR_RATIO,
+    MIN_RR_RATIO, STRATEGY2_TOTAL_CAPITAL,
 )
 from papertrade.paper_trade_engine import PaperTradeEngine
 from market.price_data import PriceData
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
-STRATEGY2_CAPITAL = 250000.0
+STRATEGY2_CAPITAL = float(STRATEGY2_TOTAL_CAPITAL)
 
 
 class Strategy2PaperTradeEngine(PaperTradeEngine):
-    """Paper execution isolated from Strategy 1's ₹2.5 lakh capital/state."""
+    """Paper execution isolated from Strategy 1's configured Strategy 2 capital/state."""
 
     def __init__(self):
         self.paper_trading = bool(PAPER_TRADING)
