@@ -5,8 +5,8 @@ STRATEGY_1_NAME = "PDH/PDL + Open Return"
 STRATEGY_2_NAME = "Gap Extension Reversal"
 
 STRATEGY_1_RULES = (
-    ("BUY", "Today's Open > PDH → live LTP first reaches/crosses PDH from above? → live LTP returns to/above Today's Open"),
-    ("SELL", "Today's Open < PDL → live LTP first reaches/crosses PDL from below? → live LTP returns to/below Today's Open"),
+    ("BUY", "Today's Open > PDH → live LTP reaches/crosses PDH from above → live LTP returns to/above Today's Open"),
+    ("SELL", "Today's Open < PDL → live LTP reaches/crosses PDL from below → live LTP returns to/below Today's Open"),
     ("Market filter", "NIFTY 500 must meet the configured BUY/SELL threshold"),
     ("Entry", "Immediate current LTP when the return-to-Open condition is reached; no candle-close confirmation"),
     ("Stop loss", "BUY = PDH • SELL = PDL"),
