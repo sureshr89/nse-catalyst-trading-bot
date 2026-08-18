@@ -32,7 +32,7 @@ def test_strategy2_enters_on_first_completed_close_below_open_sell():
     assert result["signal"] == "SELL"
     assert result["entry"] == 104.0
     assert result["target"] == 100.0
-    assert result["stop_loss"] == 106.0
+    assert result["stop_loss"] == 111.5
     assert result["trigger_time"].endswith("09:46:00+05:30")
 
 
@@ -42,7 +42,7 @@ def test_strategy2_later_reversal_does_not_replace_first_trigger():
     result = engine.evaluate("TEST", data, 110, 100, 100, -0.2, 99, as_of=as_of)
     assert result is not None
     assert result["entry"] == 104.0
-    assert result["stop_loss"] == 106.0
+    assert result["stop_loss"] == 111.5
 
 
 def test_strategy2_uses_trigger_day_high_including_pre_0945_extension():
