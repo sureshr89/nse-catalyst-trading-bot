@@ -57,3 +57,13 @@ class Strategy2PaperTradeEngine(PaperTradeEngine):
             path_obj.write_text(json.dumps(state, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         except Exception as error:
             print(f"Strategy 2 paper state save skipped: {type(error).__name__}: {error}")
+
+    def process_candle(self, symbol, candle):
+        """Use live LTP for exits; completed candle remains the fallback."""
+        try:
+            live = self.price_data.get_latest_live_price(symbol, max_age_seconds=3)
+            if live is not None:
+                return self.process_live_price(symbol, live.get("Close"), live.get("Datetime"))
+        except Exception:
+            pass
+        return super().process_candle(symbol, candle)

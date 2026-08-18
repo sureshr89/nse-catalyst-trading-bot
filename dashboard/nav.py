@@ -2,21 +2,25 @@ import streamlit as st
 
 
 def _link(label, page):
-    """Use Streamlit's native page navigation."""
     st.page_link(page, label=label)
 
 
 def _row(left, right):
-    """Two-column row; CSS keeps the columns side-by-side on phones."""
     cols = st.columns(2, gap="small")
     with cols[0]:
-        _link(left[0], left[1])
+        if left[0]:
+            _link(left[0], left[1])
     with cols[1]:
-        _link(right[0], right[1])
+        if right[0]:
+            _link(right[0], right[1])
 
 
 def render_nav(top_offset=0):
-    """Compact 2x2 navigation for desktop and mobile. News is intentionally absent."""
+    """Compact navigation with exactly three visible pages per strategy.
+
+    Scanner pages are removed from navigation; their useful live information is
+    shown inside each strategy's Current Trading page.
+    """
     if top_offset:
         st.write("")
         st.write("")
@@ -25,55 +29,25 @@ def render_nav(top_offset=0):
     <style>
     .nse-nav-title{font-size:.72rem;font-weight:800;letter-spacing:.05em;margin:8px 0 6px;text-transform:uppercase}
     .nse-nav-title.main{color:#A9B7CA}.nse-nav-title.s1{color:#79B4FF}.nse-nav-title.s2{color:#FF9292}
-
-    /* Keep Streamlit's two columns at 50/50 even on narrow mobile screens. */
     @media(max-width:700px){
-      [data-testid="stHorizontalBlock"]{
-        display:flex!important;
-        flex-direction:row!important;
-        flex-wrap:nowrap!important;
-        width:100%!important;
-        gap:.5rem!important;
-      }
-      [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{
-        flex:1 1 0!important;
-        width:calc(50% - .25rem)!important;
-        min-width:0!important;
-        max-width:none!important;
-      }
+      [data-testid="stHorizontalBlock"]{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;width:100%!important;gap:.5rem!important}
+      [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 0!important;width:calc(50% - .25rem)!important;min-width:0!important;max-width:none!important}
     }
-
     [data-testid="stPageLink"]{width:100%!important;margin:0!important}
-    [data-testid="stPageLink"] a{
-      width:100%!important;
-      min-height:50px!important;
-      border:1px solid #303A4B!important;
-      border-radius:12px!important;
-      background:#151B26!important;
-      padding:7px 5px!important;
-      box-sizing:border-box!important;
-      display:flex!important;
-      align-items:center!important;
-      justify-content:center!important;
-      white-space:nowrap!important;
-      overflow:hidden!important;
-      text-overflow:ellipsis!important;
-    }
+    [data-testid="stPageLink"] a{width:100%!important;min-height:50px!important;border:1px solid #303A4B!important;border-radius:12px!important;background:#151B26!important;padding:7px 5px!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis}
     [data-testid="stPageLink"] a:hover{border-color:#59769F!important;background:#192233!important}
     [data-testid="stPageLink"] a p{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;margin:0!important}
-    @media(max-width:700px){
-      [data-testid="stPageLink"] a{min-height:50px!important;padding:6px 4px!important;font-size:.74rem!important}
-    }
+    @media(max-width:700px){[data-testid="stPageLink"] a{min-height:50px!important;padding:6px 4px!important;font-size:.74rem!important}}
     </style>
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="nse-nav-title main">🏠 MAIN</div>', unsafe_allow_html=True)
-    _row(("🔵 STRATEGY 1", "pages/current_trading.py"), ("🔴 STRATEGY 2", "pages/strategy2.py"))
+    _row(("🔵 STRATEGY 1", "pages/current_trading.py"), ("🔴 STRATEGY 2", "pages/strategy2_current.py"))
 
     st.markdown('<div class="nse-nav-title s1">🔵 STRATEGY 1 — PDH/PDL RETURN</div>', unsafe_allow_html=True)
     _row(("📌 CURRENT", "pages/current_trading.py"), ("📊 ANALYSIS", "pages/analysis.py"))
-    _row(("🔎 SCANNER", "pages/stock_scanner.py"), ("⬇️ DOWNLOADS", "pages/downloads.py"))
+    _row(("⬇️ DOWNLOADS", "pages/downloads.py"), ("", "pages/current_trading.py"))
 
     st.markdown('<div class="nse-nav-title s2">🔴 STRATEGY 2 — GAP EXTENSION REVERSAL</div>', unsafe_allow_html=True)
     _row(("📌 CURRENT", "pages/strategy2_current.py"), ("📊 ANALYSIS", "pages/strategy2_analysis.py"))
-    _row(("🔎 SCANNER", "pages/strategy2_scanner.py"), ("⬇️ DOWNLOADS", "pages/strategy2_downloads.py"))
+    _row(("⬇️ DOWNLOADS", "pages/strategy2_downloads.py"), ("", "pages/strategy2_current.py"))
