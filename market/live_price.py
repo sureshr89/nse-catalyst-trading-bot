@@ -47,10 +47,21 @@ def _groww_live(symbol):
         value = float(value)
         if value <= 0:
             return None
-        now = datetime.now(INDIA_TZ)
-        return {"Close": value, "Datetime": now, "Open": None, "High": None, "Low": None, "price_source": "GROWW_REALTIME_LTP"}
+        return {"Close": value, "Datetime": datetime.now(INDIA_TZ), "Open": None, "High": None, "Low": None, "price_source": "GROWW_REALTIME_LTP"}
     except Exception:
         return None
+
+
+def _fallback_live(self, symbol, max_age_seconds=2):
+    latest = _ORIGINAL_LIVE(self, symbol, max_age_seconds=max_age_seconds)
+    if latest is None:
+        return None
+    latest = dict(latest)
+    # Yahoo's 1-minute bar timestamp is the bar start, not the trigger time.
+    # For journal accuracy record the local observation time separately.
+    latest["Datetime"] = datetime.now(INDIA_TZ)
+    latest["price_source"] = latest.get("price_source", "YAHOO_LIVE_1M_BAR")
+    return latest
 
 
 def get_current_market_price(symbol, timeout=10):
@@ -59,10 +70,7 @@ def get_current_market_price(symbol, timeout=10):
     if live is not None:
         return live
     try:
-        latest = _ORIGINAL_LIVE(_PRICE_DATA, symbol, max_age_seconds=2)
-        if latest is not None:
-            latest["price_source"] = latest.get("price_source", "LIVE_1M_BAR")
-            return latest
+        return _fallback_live(_PRICE_DATA, symbol, max_age_seconds=2)
     except Exception as error:
         print(f"Current market price failed for {symbol}: {type(error).__name__}: {error}")
     return None
@@ -73,7 +81,7 @@ def _patched_get_latest_live_price(self, symbol, max_age_seconds=8):
     live = _groww_live(symbol)
     if live is not None:
         return live
-    return _ORIGINAL_LIVE(self, symbol, max_age_seconds=max_age_seconds)
+    return _fallback_live(self, symbol, max_age_seconds=max_age_seconds)
 
 
 # Scanner imports this module during application startup. Patch the shared
