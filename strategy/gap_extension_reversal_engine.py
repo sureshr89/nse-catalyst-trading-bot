@@ -90,10 +90,11 @@ class GapExtensionReversalEngine:
         candles = today[(today["Datetime"].dt.time >= self.start) & (today["Datetime"].dt.time <= self.end)].copy()
         if candles.empty:
             return None
+        pre_trigger = today[today["Datetime"].dt.time < self.start]
 
         if open_price > pdh and pdc < open_price:
             extended = False
-            day_high = open_price
+            day_high = max([open_price] + (pd.to_numeric(pre_trigger["High"], errors="coerce").dropna().tolist() if not pre_trigger.empty else []))
             for _, candle in candles.iterrows():
                 high, close = float(candle["High"]), float(candle["Close"])
                 day_high = max(day_high, high)
@@ -102,14 +103,12 @@ class GapExtensionReversalEngine:
                 if extended and close < open_price:
                     if float(nifty_change_pct) > NIFTY_BLOCK_PCT:
                         return None
-                    # First completed trigger is authoritative; do not replace it
-                    # with a later reversal candle.
                     return self._base(symbol, "SELL", close, open_price, pdc, pdh, pdl, day_high, pdh, candle, nifty_change_pct)
             return None
 
         if pdl is not None and open_price < pdl and pdc > open_price:
             extended = False
-            day_low = open_price
+            day_low = min([open_price] + (pd.to_numeric(pre_trigger["Low"], errors="coerce").dropna().tolist() if not pre_trigger.empty else []))
             for _, candle in candles.iterrows():
                 low, close = float(candle["Low"]), float(candle["Close"])
                 day_low = min(day_low, low)
@@ -118,8 +117,6 @@ class GapExtensionReversalEngine:
                 if extended and close > open_price:
                     if float(nifty_change_pct) < -NIFTY_BLOCK_PCT:
                         return None
-                    # First completed trigger is authoritative; do not replace it
-                    # with a later reversal candle.
                     return self._base(symbol, "BUY", close, open_price, pdc, pdh, pdl, day_low, pdl, candle, nifty_change_pct)
             return None
         return None
