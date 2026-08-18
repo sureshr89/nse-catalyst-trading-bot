@@ -49,13 +49,14 @@ def test_strategy2_uses_trigger_day_high_including_pre_0945_extension():
     engine = GapExtensionReversalEngine("09:45", "14:00", 1.25)
     base = datetime.now(IST).replace(hour=9, minute=30, second=0, microsecond=0)
     data = pd.DataFrame([
-        {"Datetime": base, "Open": 110, "High": 105, "Low": 109, "Close": 110},
+        {"Datetime": base, "Open": 110, "High": 115, "Low": 109, "Close": 112},
         {"Datetime": base + pd.Timedelta(minutes=15), "Open": 110, "High": 111, "Low": 109, "Close": 111},
         {"Datetime": base + pd.Timedelta(minutes=16), "Open": 111, "High": 110, "Low": 108, "Close": 109},
     ])
     result = engine.evaluate("TEST", data, 110, 100, 100, -0.2, 99, as_of=base + pd.Timedelta(minutes=17))
     assert result is not None
-    assert result["stop_loss"] == 111.0
+    assert result["entry"] == 109.0
+    assert result["stop_loss"] == 115.0
 
 
 def test_strategy2_small_positive_nifty_is_allowed_for_sell():
