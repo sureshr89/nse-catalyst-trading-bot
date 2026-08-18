@@ -39,17 +39,22 @@ paper = state() or {}
 positions = paper.get("open_positions", {}) or {}
 now = datetime.now(INDIA_TZ)
 
-waiting = d.get("waiting", {}) or {}
-qualified = d.get("qualified", {}) or {}
+# Diagnostics can contain numeric counters as well as candidate dictionaries.
+# Never call .get() on a numeric counter.
+def as_side_map(value):
+    return value if isinstance(value, dict) else {}
+
+waiting = as_side_map(d.get("waiting", {})) if isinstance(d, dict) else {}
+qualified = as_side_map(d.get("qualified", {})) if isinstance(d, dict) else {}
 
 st.title("🔎 Strategy 2 — Stock Scanner")
 st.caption("Workflow: highest qualifying GAP first → extension → reversal → strategy/risk validation → paper entry")
 
 metric_cards = [
-    ("BUY waiting", len(waiting.get("BUY", {}) or {})),
-    ("SELL waiting", len(waiting.get("SELL", {}) or {})),
-    ("BUY qualified", len(qualified.get("BUY", {}) or {})),
-    ("SELL qualified", len(qualified.get("SELL", {}) or {})),
+    ("BUY waiting", len(as_side_map(waiting.get("BUY", {})))),
+    ("SELL waiting", len(as_side_map(waiting.get("SELL", {})))),
+    ("BUY qualified", len(as_side_map(qualified.get("BUY", {})))),
+    ("SELL qualified", len(as_side_map(qualified.get("SELL", {})))),
 ]
 html = "<div class='metric-grid'>" + "".join(f"<div class='metric-card'><small>{a}</small><b>{b}</b></div>" for a, b in metric_cards) + "</div>"
 st.markdown(html, unsafe_allow_html=True)
@@ -88,7 +93,10 @@ with st.expander("🏆 Priority Ranking — Highest Gap First", expanded=False):
 with st.expander("⏳ Waiting Stocks", expanded=False):
     rows = []
     for side in ("BUY", "SELL"):
-        for symbol, item in (waiting.get(side, {}) or {}).items():
+        side_items = as_side_map(waiting.get(side, {}))
+        for symbol, item in side_items.items():
+            if not isinstance(item, dict):
+                continue
             rows.append({"Side": side, "Symbol": symbol, "State": item.get("state", "WAITING"), "Gap %": item.get("gap_percent", 0), "Today's Open": format_price(item.get("today_open")), "PDH": format_price(item.get("pdh")), "PDL": format_price(item.get("pdl")), "Created": item.get("created_at", "—")})
     if rows:
         wdf = pd.DataFrame(rows)
