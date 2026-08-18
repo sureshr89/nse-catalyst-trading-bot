@@ -1,8 +1,11 @@
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+import pandas as pd
 import streamlit as st
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parents[1]
 
 QUOTES = [
     "Trade the setup, not the emotion.",
@@ -26,6 +29,58 @@ QUOTES = [
     "Stay calm when the market moves fast.",
     "Capital preserved today gives you opportunities tomorrow.",
 ]
+
+
+def _read_csv(path):
+    try:
+        return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _unified_csv(kind):
+    """Build one CSV containing both Strategy 1 and Strategy 2 records."""
+    if kind == "trades":
+        paths = (ROOT / "outputs" / "trades.csv", ROOT / "outputs" / "strategy2_trades.csv")
+    else:
+        paths = (ROOT / "outputs" / "signals.csv", ROOT / "outputs" / "strategy2_signals.csv")
+
+    frames = []
+    for path in paths:
+        frame = _read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "strategy" not in frame.columns:
+            strategy = "STRATEGY_2" if "strategy2" in path.name else "STRATEGY_1"
+            frame.insert(0, "strategy", strategy)
+        frames.append(frame)
+
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
+# Both Strategy 1 and Strategy 2 pages use Streamlit's download_button.
+# Intercept only trade/signal CSV downloads so the downloaded file is always
+# the same combined S1 + S2 dataset instead of separate strategy CSVs.
+if not getattr(st, "_nse_catalyst_unified_download_patch", False):
+    _original_download_button = st.download_button
+
+    def _unified_download_button(label, data=None, *args, **kwargs):
+        text = str(label or "").upper()
+        file_name = str(kwargs.get("file_name") or "").lower()
+        is_trades = "TRADES CSV" in text or file_name in {"nifty500_trades.csv", "strategy2_trades.csv"}
+        is_signals = "SIGNALS CSV" in text or file_name in {"nifty500_signals.csv", "strategy2_signals.csv"}
+        if is_trades or is_signals:
+            kind = "trades" if is_trades else "signals"
+            combined = _unified_csv(kind)
+            data = combined.to_csv(index=False).encode("utf-8")
+            label = "⬇️ ALL STRATEGIES TRADES CSV" if kind == "trades" else "⬇️ ALL STRATEGIES SIGNALS CSV"
+            kwargs["file_name"] = "NSE_CATALYST_ALL_TRADES.csv" if kind == "trades" else "NSE_CATALYST_ALL_SIGNALS.csv"
+            kwargs["mime"] = "text/csv"
+        return _original_download_button(label, data, *args, **kwargs)
+
+    st.download_button = _unified_download_button
+    st._nse_catalyst_unified_download_patch = True
 
 
 def render_daily_footer():
