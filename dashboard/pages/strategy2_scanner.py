@@ -9,18 +9,18 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from dashboard.nav import render_nav
 from dashboard.style import load_css
 from dashboard.daily_footer import render_daily_footer
-from strategy2_worker import ensure_strategy2_running, get_strategy2_status
-from dashboard.strategy2_data import diagnostics, gaps, signals, format_price, format_pct
+from bot_runner import ensure_bot_running
+from dashboard.strategy2_data import status, diagnostics, gaps, signals, format_price, format_pct
 
 st.set_page_config(page_title="NSE Catalyst | Strategy 2 Scanner", page_icon="🔎", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(load_css(), unsafe_allow_html=True)
 st_autorefresh(interval=10000, key="s2_scanner_live")
-ensure_strategy2_running()
+ensure_bot_running()
 render_nav()
 
 st.title("🔎 Strategy 2 — Stock Scanner")
 st.caption("NIFTY 500 • BUY + SELL gap-extension candidates • largest absolute opening GAP first • reversal state")
-s = get_strategy2_status() or {}
+s = status() or {}
 d = diagnostics() or {}
 
 gap = gaps()
@@ -58,7 +58,7 @@ else:
 
 st.subheader("📡 Scanner Diagnostics")
 st.dataframe(pd.DataFrame([
-    ("Worker status", s.get("status", "STARTING")),
+    ("Bot status", s.get("status", "STARTING")),
     ("Last scan", s.get("last_scan") or "Not scanned yet"),
     ("Opening candidates", d.get("candidates", 0)),
     ("BUY candidates", d.get("buy_candidates", 0)),
