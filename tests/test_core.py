@@ -31,14 +31,14 @@ def test_risk_engine_rejects_wrong_side_stop():
 def test_buy_state_requires_breach_then_return_to_open(monkeypatch):
     from strategy import open_reversal_engine as module
     class FakeLive:
-        def __init__(self): self.price = 99.5
+        def __init__(self): self.price = 101.0
         def get_latest_live_price(self, symbol, max_age_seconds=2): return {"Close": self.price}
     fake = FakeLive(); monkeypatch.setattr(module, "_LIVE", fake)
     engine = OpenReversalEngine("00:00", "23:59", 1.25)
     state = {"symbol": "TEST", "side": "BUY", "pdh_breached": False, "open_returned": False}
-    state = engine.update_state(state, 105.0, 100.0, 95.0, 99.5)
+    state = engine.update_state(state, 105.0, 100.0, 95.0, 101.0)
     assert state["pdh_breached"] is False
-    fake.price = 100.5; state = engine.update_state(state, 105.0, 100.0, 95.0, 105.0)
+    fake.price = 99.5; state = engine.update_state(state, 105.0, 100.0, 95.0, 99.5)
     assert state["pdh_breached"] is True
     assert state.get("open_returned", False) is False
     fake.price = 105.0; state = engine.update_state(state, 105.0, 100.0, 95.0, 105.0)
@@ -48,14 +48,14 @@ def test_buy_state_requires_breach_then_return_to_open(monkeypatch):
 def test_sell_state_requires_breach_then_return_to_open(monkeypatch):
     from strategy import open_reversal_engine as module
     class FakeLive:
-        def __init__(self): self.price = 101.0
+        def __init__(self): self.price = 99.0
         def get_latest_live_price(self, symbol, max_age_seconds=2): return {"Close": self.price}
     fake = FakeLive(); monkeypatch.setattr(module, "_LIVE", fake)
     engine = OpenReversalEngine("00:00", "23:59", 1.25)
     state = {"symbol": "TEST", "side": "SELL", "pdl_breached": False, "open_returned": False}
-    state = engine.update_state(state, 90.0, 105.0, 100.0, 101.0)
+    state = engine.update_state(state, 90.0, 105.0, 100.0, 99.0)
     assert state["pdl_breached"] is False
-    fake.price = 99.0; state = engine.update_state(state, 90.0, 105.0, 100.0, 90.5)
+    fake.price = 100.5; state = engine.update_state(state, 90.0, 105.0, 100.0, 100.5)
     assert state["pdl_breached"] is True
     assert state.get("open_returned", False) is False
     fake.price = 89.0; state = engine.update_state(state, 90.0, 105.0, 100.0, 90.0)
