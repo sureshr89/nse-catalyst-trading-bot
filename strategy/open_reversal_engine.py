@@ -1,15 +1,21 @@
-"""NIFTY 500 PDH/PDL + Today's Open return state strategy."""
+"""NIFTY 500 PDH/PDL + Today's Open return strategy.
+
+ENTRY RULES ARE LIVE-PRICE RULES. Candle CLOSE is never required for the
+breach or return-to-open trigger.
+"""
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 from config.settings import ENABLE_LONG, ENABLE_SHORT, NIFTY500_MIN_CHANGE_PCT
 from strategy.contracts import STRATEGY_VERSION, STRATEGY_1_NAME
+from market.price_data import PriceData
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
+_LIVE = PriceData()
 
 
 class OpenReversalEngine:
-    """State-based setup evaluator using completed 1-minute CLOSE data only."""
+    """PDH/PDL + Today's Open reversal using live LTP trigger conditions."""
 
     strategy_id = "STRATEGY_1"
     strategy_name = STRATEGY_1_NAME
@@ -64,48 +70,74 @@ class OpenReversalEngine:
             return "SELL"
         return None
 
+    @staticmethod
+    def _live(symbol):
+        try:
+            if not symbol:
+                return None
+            return _LIVE.get_latest_live_price(str(symbol), max_age_seconds=2)
+        except Exception:
+            return None
+
     def update_state(self, state, today_open, pdh, pdl, completed_close, stamp=None):
+        """Update setup state from history, then ALWAYS check current live LTP.
+
+        The historical close is used only to reconstruct an already-observed
+        breach after restart. The actual breach/return trigger is evaluated from
+        current LTP, so no candle-close confirmation is required.
+        """
         state = dict(state)
-        if stamp is None:
-            stamp = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
-            validate_stamp = False
-        else:
-            validate_stamp = True
-
-        if validate_stamp:
-            stamp_dt = pd.to_datetime(stamp, errors="coerce")
-            if pd.notna(stamp_dt):
-                if stamp_dt.tzinfo is None:
-                    stamp_dt = stamp_dt.tz_localize(INDIA_TZ)
-                else:
-                    stamp_dt = stamp_dt.tz_convert(INDIA_TZ)
-                current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
-                if stamp_dt >= current_minute:
-                    return state
-
-        side = state.get("side")
-        close = float(completed_close)
+        side = str(state.get("side", "")).upper()
         open_price = float(today_open)
         pdh = float(pdh)
         pdl = float(pdl)
-        if side == "BUY":
-            breached_now = False
-            if not state.get("pdh_breached") and close < pdh:
-                state["pdh_breached"] = True
-                state["pdh_breach_time"] = stamp
-                breached_now = True
-            if state.get("pdh_breached") and not breached_now and close >= open_price:
-                state["open_returned"] = True
-                state["qualified_time"] = stamp
-        elif side == "SELL":
-            breached_now = False
-            if not state.get("pdl_breached") and close > pdl:
-                state["pdl_breached"] = True
-                state["pdl_breach_time"] = stamp
-                breached_now = True
-            if state.get("pdl_breached") and not breached_now and close <= open_price:
-                state["open_returned"] = True
-                state["qualified_time"] = stamp
+
+        # Historical recovery: never use a current/future candle as confirmation.
+        if stamp is not None:
+            stamp_dt = pd.to_datetime(stamp, errors="coerce")
+            if pd.notna(stamp_dt):
+                stamp_dt = stamp_dt.tz_localize(INDIA_TZ) if stamp_dt.tzinfo is None else stamp_dt.tz_convert(INDIA_TZ)
+                current_minute = datetime.now(INDIA_TZ).replace(second=0, microsecond=0)
+                if stamp_dt < current_minute:
+                    close = float(completed_close)
+                    if side == "BUY" and not state.get("pdh_breached") and close <= pdh:
+                        state["pdh_breached"] = True
+                        state["pdh_breach_time"] = stamp_dt.isoformat()
+                    elif side == "SELL" and not state.get("pdl_breached") and close >= pdl:
+                        state["pdl_breached"] = True
+                        state["pdl_breach_time"] = stamp_dt.isoformat()
+
+        # LIVE trigger: current price can change the state immediately.
+        symbol = str(state.get("symbol", "")).strip().upper()
+        live = self._live(symbol)
+        ltp = None
+        if live is not None:
+            try:
+                ltp = float(live.get("Close"))
+            except (TypeError, ValueError):
+                ltp = None
+
+        if ltp is not None:
+            now = datetime.now(INDIA_TZ).isoformat(timespec="milliseconds")
+            if side == "BUY":
+                if not state.get("pdh_breached") and ltp <= pdh:
+                    state["pdh_breached"] = True
+                    state["pdh_breach_time"] = now
+                if state.get("pdh_breached") and ltp >= open_price:
+                    state["open_returned"] = True
+                    state["qualified_time"] = now
+                    state["qualified_ltp"] = ltp
+                    state["trigger_price"] = ltp
+            elif side == "SELL":
+                if not state.get("pdl_breached") and ltp >= pdl:
+                    state["pdl_breached"] = True
+                    state["pdl_breach_time"] = now
+                if state.get("pdl_breached") and ltp <= open_price:
+                    state["open_returned"] = True
+                    state["qualified_time"] = now
+                    state["qualified_ltp"] = ltp
+                    state["trigger_price"] = ltp
+
         return state
 
     def market_aligned(self, side, nifty_change_pct):
@@ -119,13 +151,16 @@ class OpenReversalEngine:
         if risk <= 0:
             return None
         target = entry + risk * self.rr if side == "BUY" else entry - risk * self.rr
+        now = datetime.now(INDIA_TZ)
         signal = {
             "symbol": str(symbol).upper(),
             "strategy": self.strategy_id,
             "strategy_name": self.strategy_name,
             "strategy_version": self.strategy_version,
             "signal": side,
-            "entry_time": datetime.now(INDIA_TZ).isoformat(timespec="seconds"),
+            "entry_time": now.isoformat(timespec="milliseconds"),
+            "trigger_entry_time": now.isoformat(timespec="milliseconds"),
+            "market_entry_time": now.isoformat(timespec="milliseconds"),
             "entry": round(entry, 4),
             "open_cross_level": round(float(today_open), 4),
             "stop_loss": round(stop, 4),
@@ -137,9 +172,10 @@ class OpenReversalEngine:
             "today_open": round(float(today_open), 4),
             "nifty500_change_pct": round(float(nifty_change_pct), 4),
             "market_direction": "BULLISH" if side == "BUY" else "BEARISH",
-            "setup_type": "NIFTY_500_PDH_PDL_OPEN_RETURN_1M_CLOSE",
+            "setup_type": "NIFTY_500_PDH_PDL_OPEN_RETURN_LIVE_LTP",
             "pdh_pdl_reached": True,
-            "entry_source": "CURRENT_MARKET_PRICE",
+            "entry_source": "LIVE_LTP",
+            "trigger_price": round(entry, 4),
         }
         if metrics:
             signal.update({k: v for k, v in metrics.items() if "atr" not in str(k).lower() and "average_true_range" not in str(k).lower()})
@@ -157,10 +193,13 @@ class OpenReversalEngine:
         side = self.initial_side(open_price, pdh, pdl)
         if side is None or not self.market_aligned(side, nifty_change_pct):
             return None
-        state = {"side": side, "pdh_breached": False, "pdl_breached": False, "open_returned": False}
+        state = {"symbol": symbol, "side": side, "pdh_breached": False, "pdl_breached": False, "open_returned": False}
         for _, row in today_data.iterrows():
             state = self.update_state(state, open_price, pdh, pdl, row["Close"], row["Datetime"].isoformat())
+            if state.get("open_returned"):
+                break
         if not state.get("open_returned"):
             return None
-        trigger = today_data.iloc[-1]
-        return self.build_signal(symbol, side, float(trigger["Close"]), open_price, pdh, pdl, nifty_change_pct)
+        live = self._live(symbol)
+        entry = float(live["Close"]) if live else float(state.get("qualified_ltp", today_data.iloc[-1]["Close"]))
+        return self.build_signal(symbol, side, entry, open_price, pdh, pdl, nifty_change_pct)
