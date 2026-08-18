@@ -1,10 +1,13 @@
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import io
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from config.settings import MAX_RISK_PER_TRADE, MIN_REQUIRED_RISK, MIN_RR_RATIO
+from dashboard.dashboard_utils import build_single_sheet_master_excel
 from papertrade.paper_trade_engine import PaperTradeEngine
 from strategy.candidate_metrics import metrics, sort_key
 from strategy.open_reversal_engine import OpenReversalEngine
@@ -96,6 +99,21 @@ def test_equal_gap_has_equal_priority():
 def test_paper_pnl_buy_and_sell():
     assert PaperTradeEngine.calculate_pnl("BUY", 100, 102.5, 10) == 25.0
     assert PaperTradeEngine.calculate_pnl("SELL", 100, 97.5, 10) == 25.0
+
+
+def test_single_sheet_master_excel_contains_one_sheet_and_all_record_types():
+    trades = pd.DataFrame([{"strategy": "STRATEGY_1", "symbol": "ABC", "signal": "BUY", "entry": 100, "pnl": 25}])
+    signals = pd.DataFrame([{"strategy": "STRATEGY_2", "symbol": "XYZ", "signal": "SELL", "approved": True}])
+    gaps = pd.DataFrame([{"Symbol": "LMN", "TodayOpen": 110, "PDH": 100, "GapType": "GAP_UP"}])
+    data = build_single_sheet_master_excel(trades, signals, gaps)
+    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    assert workbook.sheetnames == ["ALL DATA"]
+    rows = list(workbook["ALL DATA"].iter_rows(values_only=True))
+    header = rows[0]
+    record_index = header.index("Record Type")
+    strategy_index = header.index("strategy")
+    assert {row[record_index] for row in rows[1:]} == {"TRADE", "SIGNAL", "GAP_BOARD"}
+    assert {row[strategy_index] for row in rows[1:] if row[strategy_index]} == {"STRATEGY_1", "STRATEGY_2"}
 
 
 def test_strategy_uses_completed_minute_close_not_forming_candle():
