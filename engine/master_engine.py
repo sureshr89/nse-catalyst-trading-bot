@@ -14,6 +14,7 @@ from papertrade.paper_trade_engine import PaperTradeEngine
 from papertrade.trade_journal_clean import TradeJournal
 from strategy.nifty500_price_action_strategies import evaluate,STRATEGY_DEFINITIONS
 IST=ZoneInfo("Asia/Kolkata");OUTPUT=Path("outputs")
+
 class MasterEngine:
     """One worker, one 15-second snapshot, five strategies, one paper journal."""
     def __init__(self):
@@ -24,7 +25,8 @@ class MasterEngine:
     def daily_pnl(self):return round(sum(self.daily_pnl_by_strategy.values()),2)
     @staticmethod
     def now():return datetime.now(IST)
-    def _empty_diagnostics(self):return {"timestamp":None,"strategy":"S1-S5","strategy_version":"2026.08.19.v3","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{}}
+    def _empty_diagnostics(self):
+        return {"timestamp":None,"strategy":"S1-S5","strategy_version":"2026.08.19.v3","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{}}
     def _refresh_reference_data(self,force=False):
         today=self.now().date()
         if not force and self._session_date==today and not self.references.empty:return
@@ -67,7 +69,8 @@ class MasterEngine:
     def _market_snapshot(self):
         self._refresh_reference_data()
         if self.references.empty:
-            self.last_snapshot={"intraday":{},"prices":pd.DataFrame(),"sector":{},"nifty_change":None,"ad_ratio":None,"ad_complete":False};self.diagnostics["ad_coverage"]="0/500";self._write_diagnostics();return self.last_snapshot
+            self.last_snapshot={"intraday":{},"prices":pd.DataFrame(),"sector":{},"nifty_change":None,"ad_ratio":None,"ad_complete":False,"buy_alignment":False,"sell_alignment":False}
+            self.diagnostics["ad_coverage"]="0/500";self.diagnostics["buy_alignment"]=False;self.diagnostics["sell_alignment"]=False;self._write_diagnostics();return self.last_snapshot
         symbols=self.references["Symbol"].drop_duplicates().tolist()
         try:intraday=self.price_data.get_multi_1m(symbols)
         except Exception:intraday={}
@@ -84,8 +87,11 @@ class MasterEngine:
         try:nifty_change=self.price_data.get_index_change_pct("^CRSLDX")
         except Exception:nifty_change=None
         if nifty_change is None and complete:nifty_change=float(prices["change_pct"].mean())
-        sector_change=sector.get("alignment_pct") if sector.get("available") else None;buy=bool(complete and sector.get("available") and nifty_change is not None and nifty_change>0 and sector_change>0 and ad_ratio>1);sell=bool(complete and sector.get("available") and nifty_change is not None and nifty_change<0 and sector_change<0 and ad_ratio<1)
-        self.last_snapshot={"intraday":intraday,"prices":prices,"sector":sector,"nifty_change":nifty_change,"ad_ratio":ad_ratio,"ad_complete":complete};self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":len(symbols),"reference_data_count":len(self.references),"market_data_coverage":f"{available}/500","nifty500_change_pct":nifty_change,"sector_change_pct":sector_change,"sector_available":bool(sector.get("available")),"sector_mapping":f"{sector.get('mapped',0)}/500","sector_priced":f"{sector.get('priced',0)}/500","ad_ratio":ad_ratio,"ad_advances":advances,"ad_declines":declines,"ad_coverage":f"{len(prices)}/500","buy_alignment":buy,"sell_alignment":sell});return self.last_snapshot
+        sector_change=sector.get("alignment_pct") if sector.get("available") else None
+        buy=bool(complete and sector.get("available") and nifty_change is not None and nifty_change>0 and sector_change is not None and sector_change>0 and ad_ratio>1)
+        sell=bool(complete and sector.get("available") and nifty_change is not None and nifty_change<0 and sector_change is not None and sector_change<0 and ad_ratio<1)
+        self.last_snapshot={"intraday":intraday,"prices":prices,"sector":sector,"nifty_change":nifty_change,"ad_ratio":ad_ratio,"ad_complete":complete,"buy_alignment":buy,"sell_alignment":sell}
+        self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":len(symbols),"reference_data_count":len(self.references),"market_data_coverage":f"{available}/500","nifty500_change_pct":nifty_change,"sector_change_pct":sector_change,"sector_available":bool(sector.get("available")),"sector_mapping":f"{sector.get('mapped',0)}/500","sector_priced":f"{sector.get('priced',0)}/500","ad_ratio":ad_ratio,"ad_advances":advances,"ad_declines":declines,"ad_coverage":f"{len(prices)}/500","buy_alignment":buy,"sell_alignment":sell});return self.last_snapshot
     @staticmethod
     def _prior_range(d):
         if d is None or len(d)<2:return None,None
