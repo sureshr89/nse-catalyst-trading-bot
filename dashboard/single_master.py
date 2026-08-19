@@ -8,7 +8,10 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS = ROOT / "outputs"
 IST = ZoneInfo("Asia/Kolkata")
-REFRESH = 15
+# Refresh once per minute instead of every 15 seconds. Dhan Quote API itself is
+# rate-limited to 1 quote request/second, so a 15-second full dashboard rerun is
+# unnecessary for this reference/analysis page.
+REFRESH = 60
 STRATEGIES = {
     "S1": "PDH/PDL Sweep + Open Reclaim",
     "S2": "PDH/PDL Breakout + Retest",
@@ -20,7 +23,7 @@ STRATEGIES = {
 st.set_page_config(page_title="NSE Catalyst", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=REFRESH * 1000, key="master_15s")
+    st_autorefresh(interval=REFRESH * 1000, key="master_60s")
 except Exception:
     pass
 
@@ -107,7 +110,7 @@ st.markdown(f"<div class='status'><span class='{status_class}'><b>● {status_te
 st.markdown("<div class='grid4'>" + "".join([
     card("🟢 BUY GATE", "PASS ✓" if buy else "WAIT"),
     card("🔴 SELL GATE", "PASS ✓" if sell else "WAIT"),
-    card("📡 DATA", f"Dhan {evaln}/500"), card("🔄 REFRESH", "15 sec")
+    card("📡 DATA", f"Dhan {evaln}/500"), card("🔄 REFRESH", "60 sec")
 ]) + "</div>", unsafe_allow_html=True)
 
 tab_close, tab_today, tab_pnl, tab_research = st.tabs([
@@ -203,7 +206,7 @@ st.markdown("<div class='grid2'>" + "".join([
 st.markdown("<div class='sec'>🔒 Fixed Paper-Trading Rules</div>", unsafe_allow_html=True)
 st.markdown("<div class='grid6'>" + "".join([
     card("CAPITAL / TRADE", "₹250,000"), card("RISK / TRADE", "₹1,400–₹1,500"), card("TARGET / TRADE", "1.25R"),
-    card("MAX TRADES / STRATEGY", "1 / day"), card("DAILY LOSS / TRADE", "₹1,500"), card("REFRESH", "15 sec")
+    card("MAX TRADES / STRATEGY", "1 / day"), card("DAILY LOSS / TRADE", "₹1,500"), card("REFRESH", "60 sec")
 ]) + "</div>", unsafe_allow_html=True)
 
 st.caption("NSE Catalyst • one-page dashboard • paper trading only • no real orders")
