@@ -9,6 +9,7 @@ import pandas as pd
 from config.settings import ENABLE_LONG, ENABLE_SHORT, NIFTY500_MIN_CHANGE_PCT
 from strategy.contracts import STRATEGY_VERSION, STRATEGY_1_NAME
 from market.price_data import PriceData
+from market.nifty500_breadth import BREADTH
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 _LIVE = PriceData()
@@ -127,7 +128,9 @@ class OpenReversalEngine:
 
     def market_aligned(self, side, nifty_change_pct):
         change = float(nifty_change_pct)
-        return change >= NIFTY500_MIN_CHANGE_PCT if side == "BUY" else change <= -NIFTY500_MIN_CHANGE_PCT
+        nifty_ok = change >= NIFTY500_MIN_CHANGE_PCT if side == "BUY" else change <= -NIFTY500_MIN_CHANGE_PCT
+        ad_ok, _ = BREADTH.allows(side)
+        return nifty_ok and ad_ok
 
     def build_signal(self, symbol, side, entry, today_open, pdh, pdl, nifty_change_pct, metrics=None):
         entry = float(entry)
@@ -137,6 +140,13 @@ class OpenReversalEngine:
             return None
         target = entry + risk * self.rr if side == "BUY" else entry - risk * self.rr
         now = datetime.now(INDIA_TZ)
+        breadth = BREADTH.snapshot()
+        if not breadth.get("complete"):
+            return None
+        if side == "BUY" and breadth.get("advances", 0) <= breadth.get("declines", 0):
+            return None
+        if side == "SELL" and breadth.get("declines", 0) <= breadth.get("advances", 0):
+            return None
         signal = {
             "symbol": str(symbol).upper(),
             "strategy": self.strategy_id,
@@ -156,6 +166,10 @@ class OpenReversalEngine:
             "pdl": round(float(pdl), 4),
             "today_open": round(float(today_open), 4),
             "nifty500_change_pct": round(float(nifty_change_pct), 4),
+            "nifty500_ad_ratio": breadth.get("ad_ratio"),
+            "nifty500_advances": breadth.get("advances"),
+            "nifty500_declines": breadth.get("declines"),
+            "nifty500_ad_evaluated": breadth.get("evaluated"),
             "market_direction": "BULLISH" if side == "BUY" else "BEARISH",
             "setup_type": "NIFTY_500_PDH_PDL_OPEN_RETURN_LIVE_LTP",
             "pdh_pdl_reached": True,
