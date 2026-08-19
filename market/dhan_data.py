@@ -1,18 +1,16 @@
 """DhanHQ market-data adapter used by the paper-trading scanner.
 
 Credentials are read only from Streamlit Secrets or environment variables.
-This module never submits orders. It provides instrument mapping, live OHLC/LTP
-snapshots, and daily historical candles for PDH/PDL/PDC.
+This module never submits orders. It provides instrument mapping, live quote/OHLC
+snapshots, previous-close data, and daily historical candles for PDH/PDL/PDC.
 """
 from __future__ import annotations
-
 from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
 import os
 import threading
 import time
-
 import pandas as pd
 import requests
 
@@ -21,7 +19,6 @@ MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 CACHE_DIR = Path("data")
 MASTER_CACHE = CACHE_DIR / "dhan_scrip_master.csv"
 IST = "Asia/Kolkata"
-
 _LOCK = threading.RLock()
 _QUOTE_CACHE: dict[str, dict] = {}
 _QUOTE_CACHE_AT = 0.0
@@ -46,12 +43,7 @@ def configured() -> bool:
 
 
 def _headers() -> dict[str, str]:
-    return {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "access-token": _secret("DHAN_ACCESS_TOKEN"),
-        "client-id": _secret("DHAN_CLIENT_ID"),
-    }
+    return {"Accept": "application/json", "Content-Type": "application/json", "access-token": _secret("DHAN_ACCESS_TOKEN"), "client-id": _secret("DHAN_CLIENT_ID")}
 
 
 def _post(path: str, payload: dict, timeout: int = 15) -> dict:
@@ -129,15 +121,15 @@ def map_nifty500(symbols, force: bool = False) -> pd.DataFrame:
     return frame[["Symbol", "SecurityId", "ExchangeSegment", "Instrument"]].drop_duplicates("Symbol")
 
 
-def _marketfeed(exchange_segment: str, security_ids: list[str], cache_seconds: int = 10) -> dict:
+def _marketfeed(exchange_segment: str, security_ids: list[str], endpoint: str = "/marketfeed/quote") -> dict:
     if not configured() or not security_ids:
         return {}
     payload = {exchange_segment: [int(x) for x in security_ids[:1000]]}
-    return _post("/marketfeed/ohlc", payload)
+    return _post(endpoint, payload)
 
 
 def market_quote(mapping: pd.DataFrame, cache_seconds: int = 10) -> pd.DataFrame:
-    """Get LTP + today's OHLC + previous close for up to 1000 NSE equities."""
+    """Get LTP, day OHLC and previous close from Dhan Quote API."""
     global _QUOTE_CACHE, _QUOTE_CACHE_AT
     if mapping is None or mapping.empty or not configured():
         return pd.DataFrame()
@@ -146,7 +138,7 @@ def market_quote(mapping: pd.DataFrame, cache_seconds: int = 10) -> pd.DataFrame
         if _QUOTE_CACHE and now - _QUOTE_CACHE_AT <= cache_seconds:
             return pd.DataFrame(list(_QUOTE_CACHE.values()))
     ids = pd.to_numeric(mapping["SecurityId"], errors="coerce").dropna().astype(int).astype(str).tolist()
-    response = _marketfeed("NSE_EQ", ids, cache_seconds)
+    response = _marketfeed("NSE_EQ", ids, "/marketfeed/quote")
     data = response.get("data", {}).get("NSE_EQ", {}) if response else {}
     rows = []
     by_id = dict(zip(mapping["SecurityId"].astype(str), mapping["Symbol"].astype(str)))
@@ -155,16 +147,10 @@ def market_quote(mapping: pd.DataFrame, cache_seconds: int = 10) -> pd.DataFrame
             continue
         ohlc = item.get("ohlc") or {}
         try:
-            rows.append({
-                "Symbol": by_id.get(str(security_id), str(security_id)),
-                "SecurityId": str(security_id),
-                "LTP": float(item.get("last_price") or 0),
-                "TodayOpen": float(ohlc.get("open") or 0),
-                "TodayHigh": float(ohlc.get("high") or 0),
-                "TodayLow": float(ohlc.get("low") or 0),
-                "PreviousClose": float(ohlc.get("close") or 0),
-                "UpdatedAt": datetime.now().isoformat(timespec="seconds"),
-            })
+            ltp = float(item.get("last_price") or 0)
+            net_change = float(item.get("net_change") or 0)
+            previous_close = ltp - net_change if ltp > 0 else 0.0
+            rows.append({"Symbol": by_id.get(str(security_id), str(security_id)), "SecurityId": str(security_id), "LTP": ltp, "TodayOpen": float(ohlc.get("open") or 0), "TodayHigh": float(ohlc.get("high") or 0), "TodayLow": float(ohlc.get("low") or 0), "TodayClose": float(ohlc.get("close") or 0), "PreviousClose": previous_close, "NetChange": net_change, "Volume": float(item.get("volume") or 0), "UpdatedAt": datetime.now().isoformat(timespec="seconds")})
         except (TypeError, ValueError):
             continue
     result = pd.DataFrame(rows)
@@ -176,7 +162,7 @@ def market_quote(mapping: pd.DataFrame, cache_seconds: int = 10) -> pd.DataFrame
 
 
 def index_quote(index_name: str = "NIFTY 500") -> dict | None:
-    """Return a Dhan index LTP/OHLC snapshot for the named index."""
+    """Return Dhan index LTP/OHLC and previous close derived from net_change."""
     master = load_instrument_master()
     if master.empty or not configured():
         return None
@@ -199,13 +185,16 @@ def index_quote(index_name: str = "NIFTY 500") -> dict | None:
     if match.empty:
         return None
     security_id = str(match.iloc[0][security_col]).strip()
-    response = _marketfeed("IDX_I", [security_id])
+    response = _marketfeed("IDX_I", [security_id], "/marketfeed/quote")
     item = (response.get("data", {}).get("IDX_I", {}) if response else {}).get(security_id)
     if not isinstance(item, dict):
         return None
     ohlc = item.get("ohlc") or {}
     try:
-        return {"LTP": float(item.get("last_price") or 0), "Open": float(ohlc.get("open") or 0), "High": float(ohlc.get("high") or 0), "Low": float(ohlc.get("low") or 0), "PreviousClose": float(ohlc.get("close") or 0), "SecurityId": security_id}
+        ltp = float(item.get("last_price") or 0)
+        net_change = float(item.get("net_change") or 0)
+        previous_close = ltp - net_change if ltp > 0 else 0.0
+        return {"LTP": ltp, "Open": float(ohlc.get("open") or 0), "High": float(ohlc.get("high") or 0), "Low": float(ohlc.get("low") or 0), "Close": float(ohlc.get("close") or 0), "PreviousClose": previous_close, "NetChange": net_change, "SecurityId": security_id}
     except (TypeError, ValueError):
         return None
 
