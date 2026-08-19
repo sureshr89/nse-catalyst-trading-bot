@@ -47,8 +47,8 @@ TOTAL_CAPITAL = 1250000
 MAX_OPEN_POSITIONS = 5
 
 # Daily controls are per strategy, not global.
-MAX_TRADES_PER_STRATEGY_PER_DAY = 2
-DAILY_MAX_LOSS_PER_STRATEGY = 3000
+MAX_TRADES_PER_STRATEGY_PER_DAY = 1
+DAILY_MAX_LOSS_PER_STRATEGY = 1500
 MAX_TRADES_PER_STOCK = 1
 
 # Compatibility aliases used by older risk/worker code.
