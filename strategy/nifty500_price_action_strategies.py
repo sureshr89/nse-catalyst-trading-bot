@@ -6,7 +6,7 @@ RR=1.25; MIN_RISK=1400.0; MAX_RISK=1500.0; CAPITAL_PER_TRADE=250000.0
 class TradeSignal:
     strategy:str; side:str; symbol:str; entry:float; stop_loss:float; target:float; risk_per_share:float; quantity:int; actual_risk:float; capital_used:float; rr:float; nifty500_change_pct:float; sector_alignment_pct:float; ad_ratio:float; previous_candle_open:float; previous_candle_close:float; previous_candle_color:str; entry_reason:str; exit_rules:str
     def to_dict(self)->Dict[str,Any]:
-        data=asdict(self); data["signal"]=data["side"]; return data
+        data=asdict(self); data.update({"signal":data["side"],"setup_type":data["strategy"],"reason":data["entry_reason"]}); return data
 
 def _finite_positive(v):
     try:
