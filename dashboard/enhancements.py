@@ -1,4 +1,4 @@
-"""Master dashboard enhancements: sector analysis, permanent S1-S5 rules, diagnostics and final downloads."""
+"""Master dashboard enhancements: sector analysis, permanent S1-S5 rules and diagnostics."""
 from pathlib import Path
 import os
 from io import StringIO
@@ -14,7 +14,6 @@ STRATEGIES={
 "S3":{"name":"PDL/PDH Sweep + Open Reclaim","entry":"BUY: Open > PDL, sweep below PDL, reclaim Open. SELL: Open < PDH, sweep above PDH, reject below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate; partial breadth never qualifies.","notes":"Previous completed candle confirmation is mandatory."},
 "S4":{"name":"Intraday High/Low Breakout","entry":"BUY = break previously formed intraday High. SELL = break previously formed intraday Low.","sl":"BUY = previous intraday Low; SELL = previous intraday High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Master NIFTY 500, sector and A/D alignment must be valid before eligibility.","notes":"Do not use the current unformed candle extreme as the reference."},
 "S5":{"name":"Direct PDH/PDL Breakout","entry":"BUY = LTP breaks PDH. SELL = LTP breaks PDL.","sl":"BUY = PDH; SELL = PDL.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate and 500/500 breadth verification.","notes":"Previous completed candle must agree; paper trading only."}}
-
 def _secret(name):
  v=os.getenv(name,"")
  if v:return str(v).strip()
@@ -42,7 +41,7 @@ def _test_10_stocks():
  except Exception as e:return pd.DataFrame(),f"{type(e).__name__}: {e}"
 def _sector_frame(quotes,universe):
  if quotes is None or quotes.empty or universe is None or universe.empty:return pd.DataFrame()
- u=universe[[c for c in ["Symbol","Sector","Industry"] if c in universe.columns]].copy();
+ u=universe[[c for c in ["Symbol","Sector","Industry"] if c in universe.columns]].copy()
  if "Sector" not in u.columns:u["Sector"]=u.get("Industry","UNKNOWN")
  u["Symbol"]=u.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False);q=quotes.copy();q["Symbol"]=q.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False);q["change_pct"]=pd.to_numeric(q.get("change_pct"),errors="coerce")
  m=u.merge(q[["Symbol","change_pct"]],on="Symbol",how="inner").dropna(subset=["change_pct"])
@@ -53,9 +52,8 @@ def _dhan_profile():
  if not cid or not token:return "NOT CONFIGURED","Credentials missing"
  try:
   r=requests.get("https://api.dhan.co/v2/profile",headers={"Accept":"application/json","access-token":token,"client-id":cid},timeout=10);b=r.json() if r.content else {}
-  return ("PROFILE OK",f"Token {b.get('tokenValidity','—')} • Data plan {b.get('dataPlan','—')}") if r.status_code==200 else ("ERROR",f"{b.get('errorCode') or r.status_code}: {b.get('errorMessage') or b.get('message') or r.text[:160]}")
+  return ("PROFILE OK",f"Token {b.get('tokenValidity','—')} • Data plan {b.get('dataPlan','—')}" ) if r.status_code==200 else ("ERROR",f"{b.get('errorCode') or r.status_code}: {b.get('errorMessage') or b.get('message') or r.text[:160]}" )
  except Exception as e:return "REQUEST ERROR",f"{type(e).__name__}: {e}"
-
 def render_enhancements():
  now=datetime.now(IST)
  try:
@@ -77,23 +75,17 @@ def render_enhancements():
    past_df,past=load_saved()
   except Exception as e:past_df=pd.DataFrame();past={"complete":False,"reason":str(e),"coverage":"0/500"}
   if not past_df.empty:
-   pq=past_df.copy();pq["Symbol"]=pq.Symbol.astype(str).str.upper();
+   pq=past_df.copy();pq["Symbol"]=pq.Symbol.astype(str).str.upper()
    if "change_pct" not in pq.columns and {"Close","PreviousClose"}.issubset(pq.columns):pq["change_pct"]=(pq.Close-pq.PreviousClose)/pq.PreviousClose*100
    ps=_sector_frame(pq,universe);st.caption(f"Past session: {past.get('session_date','—')} • coverage {len(pq)}/500 • A/D {past.get('ad_ratio','—')}")
    if ps.empty:st.warning("Past sector mapping is not verified yet.")
    else:st.dataframe(ps,width="stretch",hide_index=True)
-  else:
-   st.warning(f"Past 500-stock session not stored yet • coverage {past.get('coverage','0/500')}")
-   st.caption("No artificial A/D or sector values are shown. Use the closed-session verification in the data engine when the market is closed.")
-
- st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Library — permanent rules</div>",unsafe_allow_html=True)
- st.caption("Collapse/expand each strategy. These are strategy definitions, not a daily trade list.")
+  else:st.warning(f"Past 500-stock session not stored yet • coverage {past.get('coverage','0/500')}")
+ st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Library — permanent rules</div>",unsafe_allow_html=True);st.caption("Collapse/expand each strategy. These are strategy definitions, not a daily trade list.")
  for s,r in STRATEGIES.items():
   with st.expander(f"{s} • {r['name']}",expanded=False):
    st.write(f"**ENTRY:** {r['entry']}");st.write(f"**EXIT / TARGET:** {r['target']} • exit immediately at SL or target • force square-off 15:00 IST.");st.write(f"**STOP LOSS:** {r['sl']}");st.write(f"**TIME:** {r['time']}");st.write(f"**SECTOR ANALYSIS:** {r['sector']}");st.write(f"**NOTES:** {r['notes']}");st.write("**Risk model:** ₹1,400–₹1,500 actual risk per trade • capital allocation up to ₹2,50,000 • RR 1:1.25.")
- st.subheader("Strategy Timing / Risk Summary")
- st.dataframe(pd.DataFrame([{"Strategy":s,"Entry":"09:45–14:00","Square-off":"15:00","RR":"1:1.25","Risk":"₹1,400–₹1,500","Sector gate":"MANDATORY","Breadth":"500/500"} for s in STRATEGIES]),width="stretch",hide_index=True)
-
+ st.subheader("Strategy Timing / Risk Summary");st.dataframe(pd.DataFrame([{"Strategy":s,"Entry":"09:45–14:00","Square-off":"15:00","RR":"1:1.25","Risk":"₹1,400–₹1,500","Sector gate":"MANDATORY","Breadth":"500/500"} for s in STRATEGIES]),width="stretch",hide_index=True)
  st.markdown("<div class='sec'>🧰 Dhan Data Diagnostics</div>",unsafe_allow_html=True);st.caption("Manual diagnostics only; no automatic screen refresh.")
  if st.button("🔎 TEST DHAN — 10 STOCKS",type="primary",key="dhan10"):
   with st.spinner("Requesting 10 NSE stocks from Dhan…"):df,msg=_test_10_stocks()
@@ -105,17 +97,6 @@ def render_enhancements():
   s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
  if "dhan_auth_result" in st.session_state:
   a=st.session_state["dhan_auth_result"];st.write(f"**Dhan authentication:** {a['status']} — {a['detail']}")
-
- st.markdown("<div class='sec'>⬇️ Downloads — last section</div>",unsafe_allow_html=True)
- q=lq.copy()
- if not q.empty:st.download_button("⬇️ Download NIFTY 500 Dhan Quotes CSV",q.to_csv(index=False).encode(),f"nifty500_dhan_quotes_{now.date()}.csv","text/csv",use_container_width=True)
- master=_csv("strategy_journal_master.csv")
- if master.empty:master=_csv("master_journal.csv")
- if not master.empty:st.download_button("⬇️ Download Master Journal CSV",master.to_csv(index=False).encode(),f"nse_catalyst_master_journal_{now.date()}.csv","text/csv",use_container_width=True)
- for name,label in [("trades.csv","Actual Trades"),("signals.csv","All Signals")]:
-  p=OUTPUTS/name
-  if p.exists():st.download_button(f"⬇️ Download {label} CSV",p.read_bytes(),name,"text/csv",use_container_width=True)
  st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True)
  qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."]
- st.info(f"“{qs[now.date().toordinal()%len(qs)]}”")
- st.caption("NSE Catalyst • paper trading only • no automatic screen refresh")
+ st.info(f"“{qs[now.date().toordinal()%len(qs)]}”");st.caption("NSE Catalyst • paper trading only • no automatic screen refresh")
