@@ -25,7 +25,9 @@ def _test_10_stocks():
  h={"Accept":"application/json","Content-Type":"application/json","access-token":token,"client-id":cid};wanted=["TCS","RELIANCE","HDFCBANK","INFY","ICICIBANK","SBIN","ITC","BHARTIARTL","LT","AXISBANK"]
  try:
   r=requests.get(MASTER_URL,timeout=15);r.raise_for_status();m=pd.read_csv(StringIO(r.text),low_memory=False);cols={str(c).strip().upper():c for c in m.columns}
-  sc=next((cols[k] for k in ["SEM_TRADING_SYMBOL","SYMBOL_NAME","SM_SYMBOL_NAME"] if k in cols),None);sid=next((cols[k] for k in ["SEM_SECURITY_ID","SECURITY_ID"] if k in cols),None);ex=next((cols[k] for k in ["SEM_EXM_EXCH_ID","EXCH_ID"] if k in cols),None);seg=next((cols[k] for k in ["SEM_SEGMENT","SEGMENT"] if k in cols),None)
+  sc=next((cols[k] for k in ["SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"] if k in cols),None)
+  sid=next((cols[k] for k in ["SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"] if k in cols),None)
+  ex=next((cols[k] for k in ["SEM_EXM_EXCH_ID","EXCH_ID"] if k in cols),None);seg=next((cols[k] for k in ["SEM_SEGMENT","SEGMENT"] if k in cols),None)
   if not sc or not sid:return pd.DataFrame(),f"Dhan master columns found: {list(m.columns)[:12]} — trading symbol/security ID not recognised"
   x=m.copy();x["_sym"]=x[sc].astype(str).str.upper().str.strip()
   if ex:x=x[x[ex].astype(str).str.upper().eq("NSE")]
@@ -59,8 +61,7 @@ def render_enhancements():
  if st.button("Test Dhan Authentication",key="dhan_auth"):
   s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
  auth=st.session_state.get("dhan_auth_result")
- if auth:
-  st.markdown(f"**Dhan authentication:** {auth.get('status','UNKNOWN')} — {auth.get('detail','')}")
+ if auth:st.markdown(f"**Dhan authentication:** {auth.get('status','UNKNOWN')} — {auth.get('detail','')}")
  st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Comparison</div>",unsafe_allow_html=True)
  trades=_csv("trades.csv");rows=[]
  for s,name in STRATEGIES.items():
