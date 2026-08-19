@@ -8,10 +8,6 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 IST = ZoneInfo("Asia/Kolkata")
-CAPITAL = 250000
-RISK_MIN = 1400
-RISK_MAX = 1500
-RR = 1.25
 STRATEGIES = {"S1":"PDH/PDL Sweep + Open Reclaim","S2":"PDH/PDL Breakout + Retest","S3":"PDL/PDH Sweep + Open Reclaim","S4":"Intraday High/Low Breakout","S5":"Direct PDH/PDL Breakout"}
 
 st.set_page_config(page_title="Analysis | NSE Catalyst", page_icon="📈", layout="wide")
@@ -46,9 +42,7 @@ def norm_strategy(v):
 
 def closed_trades(df):
     if df.empty: return df
-    if "status" in df.columns:
-        d = df[df["status"].astype(str).str.upper().eq("CLOSED")].copy()
-    else: d = df.copy()
+    d = df[df["status"].astype(str).str.upper().eq("CLOSED")].copy() if "status" in df.columns else df.copy()
     if "pnl" in d.columns: d["pnl"] = pd.to_numeric(d["pnl"], errors="coerce").fillna(0.0)
     return d
 
@@ -60,7 +54,7 @@ def drawdown(series):
 def strategy_stats(df):
     rows=[]
     for s in STRATEGIES:
-        d=df[df["strategy"].eq(s)] if not df.empty else pd.DataFrame()
+        d=df[df["strategy"].eq(s)] if not df.empty and "strategy" in df.columns else pd.DataFrame()
         pnl=pd.to_numeric(d.get("pnl",pd.Series(dtype=float)),errors="coerce").fillna(0.0)
         wins=int((pnl>0).sum()); losses=int((pnl<0).sum()); total=len(pnl)
         gross_win=float(pnl[pnl>0].sum()); gross_loss=abs(float(pnl[pnl<0].sum()))
@@ -71,10 +65,12 @@ now=datetime.now(IST)
 trades=read_csv("trades.csv")
 signals=read_csv("signals.csv")
 if not trades.empty:
-    trades["strategy"]=trades.get("strategy","").map(norm_strategy)
+    trade_strategy = trades["strategy"] if "strategy" in trades.columns else pd.Series([""]*len(trades),index=trades.index)
+    trades["strategy"] = trade_strategy.map(norm_strategy)
     trades=closed_trades(trades)
 if not signals.empty:
-    signals["strategy"]=signals.get("strategy",signals.get("setup_type","")).map(norm_strategy)
+    signal_strategy = signals["strategy"] if "strategy" in signals.columns else (signals["setup_type"] if "setup_type" in signals.columns else pd.Series([""]*len(signals),index=signals.index))
+    signals["strategy"] = signal_strategy.map(norm_strategy)
     if "approved" in signals.columns:
         approved=signals[signals["approved"].astype(str).str.lower().isin(["true","1","yes","approved"])].copy()
     else: approved=signals.copy()
@@ -82,7 +78,6 @@ else: approved=pd.DataFrame()
 
 st.markdown("<div class='title'>📈 NSE Catalyst — Analysis Center</div>",unsafe_allow_html=True)
 st.markdown(f"<div class='sub'>Two permanent analysis views • actual trades are kept separate from all eligible opportunities • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>",unsafe_allow_html=True)
-
 actual_tab, research_tab = st.tabs(["1 · TODAY / ACTUAL TRADING", "2 · ALL OPPORTUNITIES / RESEARCH"])
 
 with actual_tab:
@@ -101,14 +96,13 @@ with actual_tab:
         st.dataframe(today[show] if show else today,use_container_width=True,hide_index=True)
         st.download_button("⬇️ Download Today's Actual Trades CSV",today.to_csv(index=False).encode(),f"actual_trades_{now.date()}.csv","text/csv")
     else: st.info("No closed actual trades recorded today.")
-    st.markdown("<div class='note'><b>Actual account view:</b> this tab uses only trades actually taken. It never mixes untraded signals into your real/paper account P&L.</div>",unsafe_allow_html=True)
+    st.markdown("<div class='note'><b>Actual account view:</b> this tab uses only trades actually taken. It never mixes untraded signals into your account P&L.</div>",unsafe_allow_html=True)
 
 with research_tab:
     st.markdown("<div class='sec'>🧪 All Eligible Opportunities</div>",unsafe_allow_html=True)
     if not approved.empty:
-        # A signal is considered taken only when its candidate/symbol/time matches an actual trade.
-        taken_ids=set(trades.get("candidate_id",pd.Series(dtype=str)).astype(str)) if not trades.empty else set()
-        approved["Taken"] = approved.get("candidate_id",pd.Series([""]*len(approved))).astype(str).isin(taken_ids)
+        trade_ids=set(trades["candidate_id"].astype(str)) if "candidate_id" in trades.columns else set()
+        approved["Taken"] = approved["candidate_id"].astype(str).isin(trade_ids) if "candidate_id" in approved.columns else False
         if "research_outcome" not in approved.columns: approved["research_outcome"]="PENDING"
         outcome=approved["research_outcome"].astype(str).str.upper()
         wins=int(outcome.eq("WIN").sum()); losses=int(outcome.eq("LOSS").sum()); known=wins+losses
@@ -119,14 +113,13 @@ with research_tab:
         a,b=st.columns(2)
         with a: st.plotly_chart(px.bar(stats,x="Strategy",y="Opportunities",title="Eligible Opportunities",text_auto=True),use_container_width=True)
         with b: st.plotly_chart(px.bar(stats,x="Strategy",y="Win %",title="Research Win Rate",text_auto=".1f"),use_container_width=True)
-        # Daily cumulative actual P&L, plus research table ready for outcome updates.
         if not trades.empty and "exit_time" in trades.columns:
             td=trades.copy();td["Date"]=pd.to_datetime(td["exit_time"],errors="coerce").dt.date;daily=td.groupby("Date",as_index=False)["pnl"].sum();daily["Cumulative P&L"]=daily["pnl"].cumsum()
             a,b=st.columns(2)
             with a: st.plotly_chart(px.bar(daily,x="Date",y="pnl",title="Actual Daily P&L",text_auto=True),use_container_width=True)
             with b: st.plotly_chart(px.line(daily,x="Date",y="Cumulative P&L",title="Actual Cumulative P&L",markers=True),use_container_width=True)
         st.download_button("⬇️ Download All Eligible Opportunities CSV",approved.to_csv(index=False).encode(),"all_eligible_opportunities.csv","text/csv")
-        st.markdown("<div class='note'><b>Research rule:</b> every eligible signal is stored separately from actual trades. A research WIN/LOSS is only counted after a subsequent price path proves target or SL; pending signals are not treated as wins or losses. This prevents a one-trade sample from deciding which strategy is best.</div>",unsafe_allow_html=True)
+        st.markdown("<div class='note'><b>Research rule:</b> every eligible signal is stored separately from actual trades. A research WIN/LOSS is counted only after a subsequent price path proves target or SL; pending signals are not treated as wins or losses.</div>",unsafe_allow_html=True)
     else:
         st.markdown("<div class='grid'>"+"".join([card("ELIGIBLE",0),card("TAKEN",0),card("NOT TAKEN",0),card("RESEARCH WINS",0),card("RESEARCH LOSSES",0),card("KNOWN WIN %","PENDING")])+"</div>",unsafe_allow_html=True)
         st.info("No approved opportunity history is available yet. The research ledger will populate when S1–S5 record eligible signals.")
@@ -135,5 +128,4 @@ st.markdown("<div class='sec'>📦 Data Downloads</div>",unsafe_allow_html=True)
 for name,label in [("trades.csv","Actual trades"),("signals.csv","All scanner signals"),("MASTER_TRADES.csv","Master trades"),("MASTER_DAILY_SUMMARY.csv","Daily master summary")]:
     p=ROOT/"outputs"/name
     if p.exists(): st.download_button(f"⬇️ {label}",p.read_bytes(),name,"text/csv",key=f"dl_{name}")
-
 st.caption("Paper trading only • No real orders • Research results are based only on recorded market outcomes; no artificial win rates are generated.")
