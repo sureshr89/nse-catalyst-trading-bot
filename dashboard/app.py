@@ -15,8 +15,9 @@ st.download_button=lambda *args,**kwargs:None
 st.set_page_config=lambda *args,**kwargs:None
 try:
  runpy.run_path(str(ROOT/"dashboard"/"single_master.py"),run_name="__nse_catalyst_dashboard__")
- # Restore downloads before the new final section renders them.
  st.download_button=_original_download
+ from dashboard.strategy_lab import render_strategy_lab
+ render_strategy_lab()
  from dashboard.enhancements import render_enhancements
  render_enhancements()
 except Exception as exc:
