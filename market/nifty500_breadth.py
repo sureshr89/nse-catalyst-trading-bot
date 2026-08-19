@@ -1,5 +1,5 @@
 """NIFTY 500 breadth and sector alignment using DhanHQ market data."""
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 import threading
 import time
@@ -11,6 +11,8 @@ from market.dhan_data import configured as dhan_configured, map_nifty500, market
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 CACHE_SECONDS = 15
+MARKET_OPEN = dt_time(9, 15)
+MARKET_CLOSE = dt_time(15, 30)
 
 
 class Nifty500Breadth:
@@ -46,39 +48,62 @@ class Nifty500Breadth:
         self._mapping_at = now
         return mapping
 
+    @staticmethod
+    def _closed_session_mode(now):
+        """After 15:30, use today's completed OHLC close; otherwise use prior close."""
+        t = now.timetz().replace(tzinfo=None)
+        return t >= MARKET_CLOSE or t < MARKET_OPEN
+
     def snapshot(self, force=False):
-        now = time.monotonic()
+        now = datetime.now(INDIA_TZ)
+        use_closed_today = self._closed_session_mode(now)
+        cache_key = "closed" if use_closed_today else "live"
+        mono = time.monotonic()
         with self._lock:
-            if not force and self._cached is not None and now - self._cached_at < CACHE_SECONDS:
+            if not force and self._cached is not None and now.date() == self._cached.get("_cache_date") and cache_key == self._cached.get("_cache_mode") and mono - self._cached_at < CACHE_SECONDS:
                 return dict(self._cached)
 
         universe = self._get_universe()
         if universe is None or universe.empty or "Symbol" not in universe.columns:
-            return self._store(self._unknown("NIFTY_500_UNIVERSE_UNAVAILABLE"))
+            return self._store(self._unknown("NIFTY_500_UNIVERSE_UNAVAILABLE", cache_key, now))
 
         symbols = universe["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).drop_duplicates().tolist()
         if len(symbols) != 500:
-            return self._store(self._unknown(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}", len(symbols)))
+            return self._store(self._unknown(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}", cache_key, now, len(symbols)))
 
         if not dhan_configured():
-            return self._store(self._unknown("DHAN_NOT_CONFIGURED", 0))
+            return self._store(self._unknown("DHAN_NOT_CONFIGURED", cache_key, now, 0))
 
         mapping = self._get_mapping(symbols)
         if len(mapping) != 500:
-            return self._store(self._unknown(f"DHAN_SECURITY_MAPPING_{len(mapping)}/500", len(mapping)))
+            return self._store(self._unknown(f"DHAN_SECURITY_MAPPING_{len(mapping)}/500", cache_key, now, len(mapping)))
 
         quotes = market_quote(mapping, cache_seconds=10)
         if quotes.empty or len(quotes) != 500:
-            return self._store(self._unknown(f"DHAN_MARKET_DATA_{len(quotes)}/500", len(quotes)))
+            return self._store(self._unknown(f"DHAN_MARKET_DATA_{len(quotes)}/500", cache_key, now, len(quotes)))
 
         quotes["LTP"] = pd.to_numeric(quotes["LTP"], errors="coerce")
         quotes["PreviousClose"] = pd.to_numeric(quotes["PreviousClose"], errors="coerce")
-        quotes = quotes.dropna(subset=["LTP", "PreviousClose"])
-        quotes = quotes[(quotes["LTP"] > 0) & (quotes["PreviousClose"] > 0)]
-        if len(quotes) != 500:
-            return self._store(self._unknown(f"DHAN_VALID_PRICE_DATA_{len(quotes)}/500", len(quotes)))
+        quotes["TodayClose"] = pd.to_numeric(quotes.get("TodayClose"), errors="coerce")
 
-        quotes["change_pct"] = (quotes["LTP"] - quotes["PreviousClose"]) / quotes["PreviousClose"] * 100
+        # During/after the session, breadth is based on the completed session close
+        # once the market is closed. Before close, use the previous-day close so the
+        # dashboard never pretends an unfinished session is a closed session.
+        if use_closed_today:
+            quotes["SessionClose"] = quotes["TodayClose"]
+            if quotes["SessionClose"].isna().all() or (quotes["SessionClose"] <= 0).sum() > 100:
+                quotes["SessionClose"] = quotes["LTP"]
+            session_basis = "completed-session close"
+        else:
+            quotes["SessionClose"] = quotes["PreviousClose"]
+            session_basis = "previous completed-session close"
+
+        quotes = quotes.dropna(subset=["SessionClose", "PreviousClose"])
+        quotes = quotes[(quotes["SessionClose"] > 0) & (quotes["PreviousClose"] > 0)]
+        if len(quotes) != 500:
+            return self._store(self._unknown(f"DHAN_VALID_CLOSED_PRICE_DATA_{len(quotes)}/500", cache_key, now, len(quotes)))
+
+        quotes["change_pct"] = (quotes["SessionClose"] - quotes["PreviousClose"]) / quotes["PreviousClose"] * 100
         advances = int((quotes["change_pct"] > 0).sum())
         declines = int((quotes["change_pct"] < 0).sum())
         unchanged = int((quotes["change_pct"] == 0).sum())
@@ -101,10 +126,24 @@ class Nifty500Breadth:
             }
 
         nifty = index_quote("NIFTY 500")
-        if not nifty or not nifty.get("PreviousClose") or not nifty.get("LTP"):
-            return self._store(self._unknown("DHAN_NIFTY500_INDEX_UNAVAILABLE", 500, quotes, sector))
+        if not nifty:
+            return self._store(self._unknown("DHAN_NIFTY500_INDEX_UNAVAILABLE", cache_key, now, 500, quotes, sector))
 
-        nifty_change = (float(nifty["LTP"]) - float(nifty["PreviousClose"])) / float(nifty["PreviousClose"]) * 100
+        if use_closed_today:
+            index_close = float(nifty.get("Close") or 0)
+            index_prev_close = float(nifty.get("PreviousClose") or 0)
+            if index_close <= 0:
+                index_close = float(nifty.get("LTP") or 0)
+        else:
+            index_close = float(nifty.get("PreviousClose") or 0)
+            index_prev_close = float(nifty.get("PreviousClose") or 0)
+
+        if index_close <= 0 or index_prev_close <= 0:
+            return self._store(self._unknown("DHAN_NIFTY500_CLOSED_PRICE_UNAVAILABLE", cache_key, now, 500, quotes, sector))
+
+        nifty_change = (index_close - index_prev_close) / index_prev_close * 100
+        session_label = "Latest completed NSE session" if use_closed_today else "Previous completed NSE session"
+        close_time = "15:30 IST"
 
         result = {
             "universe": "NIFTY 500",
@@ -117,10 +156,14 @@ class Nifty500Breadth:
             "direction": "BULLISH" if advances > declines else "BEARISH" if declines > advances else "NEUTRAL",
             "complete": True,
             "reason": "OK",
-            "updated_at": datetime.now(INDIA_TZ).isoformat(timespec="seconds"),
+            "updated_at": now.isoformat(timespec="seconds"),
             "nifty500_change_pct": nifty_change,
-            "nifty500_ltp": float(nifty["LTP"]),
-            "nifty500_previous_close": float(nifty["PreviousClose"]),
+            "nifty500_ltp": index_close,
+            "nifty500_previous_close": index_close,
+            "nifty500_reference_close": index_prev_close,
+            "closed_session_label": session_label,
+            "closed_session_basis": session_basis,
+            "market_close_time": close_time,
             "sector_alignment_pct": sector.get("alignment_pct"),
             "sector_complete": bool(sector.get("available")),
             "sector_coverage": sector.get("coverage", "0/500"),
@@ -130,6 +173,8 @@ class Nifty500Breadth:
             "positive_sectors": sector.get("positive_sectors", 0),
             "negative_sectors": sector.get("negative_sectors", 0),
             "market_data_source": "DHAN",
+            "_cache_date": now.date(),
+            "_cache_mode": cache_key,
         }
         return self._store(result)
 
@@ -140,7 +185,7 @@ class Nifty500Breadth:
         return dict(result)
 
     @staticmethod
-    def _unknown(reason, evaluated=0, quotes=None, sector=None):
+    def _unknown(reason, mode, now, evaluated=0, quotes=None, sector=None):
         sector = sector or {}
         return {
             "universe": "NIFTY 500",
@@ -153,10 +198,14 @@ class Nifty500Breadth:
             "direction": "UNKNOWN",
             "complete": False,
             "reason": reason,
-            "updated_at": datetime.now(INDIA_TZ).isoformat(timespec="seconds"),
+            "updated_at": now.isoformat(timespec="seconds"),
             "nifty500_change_pct": None,
             "nifty500_ltp": None,
             "nifty500_previous_close": None,
+            "nifty500_reference_close": None,
+            "closed_session_label": "Latest completed NSE session",
+            "closed_session_basis": "waiting for Dhan closed-session data",
+            "market_close_time": "15:30 IST",
             "sector_alignment_pct": sector.get("alignment_pct"),
             "sector_complete": bool(sector.get("available")),
             "sector_coverage": sector.get("coverage", f"{evaluated}/500"),
@@ -166,6 +215,8 @@ class Nifty500Breadth:
             "positive_sectors": sector.get("positive_sectors", 0),
             "negative_sectors": sector.get("negative_sectors", 0),
             "market_data_source": "DHAN" if dhan_configured() else "UNCONFIGURED",
+            "_cache_date": now.date(),
+            "_cache_mode": mode,
         }
 
     def allows(self, side):
