@@ -11,6 +11,7 @@ from market.dhan_data import configured as dhan_configured, map_nifty500, market
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 CACHE_SECONDS = 15
+INITIAL_LOAD_GRACE_SECONDS = 2
 
 
 class Nifty500Breadth:
@@ -22,6 +23,7 @@ class Nifty500Breadth:
         self._mapping = pd.DataFrame()
         self._mapping_at = 0.0
         self._universe = pd.DataFrame()
+        self._created_at = time.monotonic()
 
     def _get_universe(self):
         # Streamlit cloud starts without the generated CSV cache. Download once,
@@ -53,6 +55,11 @@ class Nifty500Breadth:
         with self._lock:
             if not force and self._cached is not None and now - self._cached_at < CACHE_SECONDS:
                 return dict(self._cached)
+            # Do not make a network/universe request during the first seconds of
+            # the Streamlit session. This lets the dashboard render immediately;
+            # the normal 15-second refresh performs the real Dhan scan afterward.
+            if not force and self._cached is None and now - self._created_at < INITIAL_LOAD_GRACE_SECONDS:
+                return self._unknown("DATA_LOADING")
 
         universe = self._get_universe()
         if universe is None or universe.empty or "Symbol" not in universe.columns:
