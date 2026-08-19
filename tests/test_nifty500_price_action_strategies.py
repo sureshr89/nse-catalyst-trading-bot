@@ -14,9 +14,9 @@ def test_market_gate_buy_and_sell_are_strict():
     assert not market_gate("SELL", -0.1, 1.0)
 
 
-def test_risk_band_rejects_when_no_integer_quantity_fits():
+def test_risk_band_accepts_only_valid_integer_quantity():
     assert position_size(100.0, 99.0) == (1400, 1.0, 1400.0)
-    assert position_size(100.0, 0.0) is None  # risk/share ₹100; 14 shares = ₹1,400
+    assert position_size(100.0, 0.0) == (14, 100.0, 1400.0)
     # A ₹1,600 one-share risk cannot be reduced into the allowed band.
     assert position_size(2000.0, 400.0) is None
 
