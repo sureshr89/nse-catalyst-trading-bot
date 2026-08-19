@@ -5,7 +5,8 @@ RR=1.25; MIN_RISK=1400.0; MAX_RISK=1500.0; CAPITAL_PER_TRADE=250000.0
 @dataclass(frozen=True)
 class TradeSignal:
     strategy:str; side:str; symbol:str; entry:float; stop_loss:float; target:float; risk_per_share:float; quantity:int; actual_risk:float; capital_used:float; rr:float; nifty500_change_pct:float; sector_alignment_pct:float; ad_ratio:float; previous_candle_open:float; previous_candle_close:float; previous_candle_color:str; entry_reason:str; exit_rules:str
-    def to_dict(self)->Dict[str,Any]: return asdict(self)
+    def to_dict(self)->Dict[str,Any]:
+        data=asdict(self); data["signal"]=data["side"]; return data
 
 def _finite_positive(v):
     try:
@@ -55,8 +56,7 @@ def make_signal(strategy,side,symbol,entry,stop_loss,nifty500_change_pct,sector_
 def evaluate_s1(symbol,side,today_open,pdh,pdl,today_low,today_high,ltp,pdh_swept_down=False,pdl_swept_up=False,pdh_swept=False,pdl_swept=False,**g):
     po,pc=g.get("previous_candle_open"),g.get("previous_candle_close")
     if po is None or pc is None:return None
-    down_pdh=bool(pdh_swept_down or (pdh_swept and today_low<float(pdh)))
-    up_pdl=bool(pdl_swept_up or (pdl_swept and today_high>float(pdl)))
+    down_pdh=bool(pdh_swept_down or (pdh_swept and today_low<float(pdh)));up_pdl=bool(pdl_swept_up or (pdl_swept and today_high>float(pdl)))
     if side=="BUY" and today_open>pdh and down_pdh and ltp>=today_open:return make_signal("S1",side,symbol,ltp,today_low,reason="Open > PDH -> sweep below PDH -> reclaim Open",previous_candle_open=po,previous_candle_close=pc,**g)
     if side=="SELL" and today_open<pdl and up_pdl and ltp<=today_open:return make_signal("S1",side,symbol,ltp,today_high,reason="Open < PDL -> sweep above PDL -> reject Open",previous_candle_open=po,previous_candle_close=pc,**g)
     return None
@@ -71,8 +71,7 @@ def evaluate_s2(symbol,side,pdh,pdl,pullback_low,pullback_high,ltp,breakout_seen
 def evaluate_s3(symbol,side,today_open,pdh,pdl,today_low,today_high,ltp,pdl_swept_down=False,pdh_swept_up=False,pdh_swept=False,pdl_swept=False,**g):
     po,pc=g.get("previous_candle_open"),g.get("previous_candle_close")
     if po is None or pc is None:return None
-    down_pdl=bool(pdl_swept_down or (pdl_swept and today_low<float(pdl)))
-    up_pdh=bool(pdh_swept_up or (pdh_swept and today_high>float(pdh)))
+    down_pdl=bool(pdl_swept_down or (pdl_swept and today_low<float(pdl)));up_pdh=bool(pdh_swept_up or (pdh_swept and today_high>float(pdh)))
     if side=="BUY" and today_open>pdl and down_pdl and ltp>=today_open:return make_signal("S3",side,symbol,ltp,today_low,reason="Open > PDL -> sweep below PDL -> reclaim Open",previous_candle_open=po,previous_candle_close=pc,**g)
     if side=="SELL" and today_open<pdh and up_pdh and ltp<=today_open:return make_signal("S3",side,symbol,ltp,today_high,reason="Open < PDH -> sweep above PDH -> reject Open",previous_candle_open=po,previous_candle_close=pc,**g)
     return None
@@ -91,13 +90,7 @@ def evaluate_s5(symbol,side,pdh,pdl,ltp,**g):
     if side=="SELL" and ltp<pdl:return make_signal("S5",side,symbol,ltp,pdl,reason="LTP broke below PDL",previous_candle_open=po,previous_candle_close=pc,**g)
     return None
 
-STRATEGY_DEFINITIONS={
- "S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"Open beyond PDH/PDL -> directional sweep -> reclaim/reject Open","sl":"Today's Low / High at entry","target":"1.25R"},
- "S2":{"name":"PDH/PDL Breakout + Retest","entry":"Break PDH/PDL -> retest -> reclaim/fail","sl":"Retest Low / High","target":"1.25R"},
- "S3":{"name":"Opposite PDH/PDL Sweep + Open Reclaim","entry":"Sweep opposite prior-day level -> reclaim/reject Open","sl":"Today's Low / High at entry","target":"1.25R"},
- "S4":{"name":"Intraday High/Low Breakout","entry":"Break previously formed intraday High/Low","sl":"Previous intraday Low / High","target":"1.25R"},
- "S5":{"name":"Direct PDH/PDL Breakout","entry":"Break PDH / PDL","sl":"PDH / PDL","target":"1.25R"},
-}
+STRATEGY_DEFINITIONS={"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"Open beyond PDH/PDL -> directional sweep -> reclaim/reject Open","sl":"Today's Low / High at entry","target":"1.25R"},"S2":{"name":"PDH/PDL Breakout + Retest","entry":"Break PDH/PDL -> retest -> reclaim/fail","sl":"Retest Low / High","target":"1.25R"},"S3":{"name":"Opposite PDH/PDL Sweep + Open Reclaim","entry":"Sweep opposite prior-day level -> reclaim/reject Open","sl":"Today's Low / High at entry","target":"1.25R"},"S4":{"name":"Intraday High/Low Breakout","entry":"Break previously formed intraday High/Low","sl":"Previous intraday Low / High","target":"1.25R"},"S5":{"name":"Direct PDH/PDL Breakout","entry":"Break PDH / PDL","sl":"PDH / PDL","target":"1.25R"}}
 def evaluate(strategy,**kwargs):
     fn={"S1":evaluate_s1,"S2":evaluate_s2,"S3":evaluate_s3,"S4":evaluate_s4,"S5":evaluate_s5}.get(str(strategy).upper().strip())
     if fn is None:raise ValueError(f"Unknown price-action strategy: {strategy}")
