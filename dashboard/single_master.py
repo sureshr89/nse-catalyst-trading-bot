@@ -38,12 +38,13 @@ def card(label,value):
 
 st.markdown("""
 <style>
-.stApp{background:#000!important;color:#f5f7fb}.block-container{max-width:1450px;padding:.7rem .8rem 2rem}
-.title{font-size:clamp(1.5rem,4vw,2.4rem);font-weight:900;color:#f5f7fb}.sub{font-size:.78rem;color:#9fb1ca;margin-bottom:10px}
-.sec{font-size:1.15rem;font-weight:900;margin:15px 0 8px;color:#fff}.grid6{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
-.card,.status{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:10px}.card{min-height:60px}.label{font-size:.6rem;font-weight:850;color:#9fb1ca;text-transform:uppercase}.value{font-size:1rem;font-weight:850;margin-top:4px}.status{margin:7px 0;color:#d9e3f1;font-size:.8rem}
-.strategy{background:#0b1422;border:1px solid #294367;border-radius:12px;padding:10px;margin:7px 0}.strategy-title{font-weight:900;font-size:.95rem;margin-bottom:7px}.state{float:right;font-weight:900;font-size:.72rem;padding:4px 7px;border-radius:7px;background:#162943}
-.trade-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}.trade-cell{background:#101b2b;border-radius:7px;padding:6px}.trade-label{font-size:.62rem;color:#8499b4;text-transform:uppercase}.trade-value{font-size:.78rem;font-weight:800;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tip{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700}
+.stApp{background:#000!important;color:#fff}.block-container{max-width:1450px;padding:.7rem .8rem 2rem}
+.title{font-size:clamp(1.5rem,4vw,2.4rem);font-weight:900;color:#fff}.sub{font-size:.75rem;color:#fff;margin-bottom:10px}
+.sec{font-size:1.1rem;font-weight:900;margin:15px 0 8px;color:#fff}.grid6{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
+.card,.status{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:10px}.card{min-height:60px}.label{font-size:.56rem;font-weight:850;color:#fff;text-transform:uppercase}.value{font-size:.95rem;font-weight:850;margin-top:4px;color:#fff}.status{margin:7px 0;color:#fff;font-size:.76rem}
+.strategy{background:#0b1422;border:1px solid #294367;border-radius:12px;padding:10px;margin:7px 0}.strategy-title{font-weight:900;font-size:.88rem;margin-bottom:7px;color:#fff}.state{float:right;font-weight:900;font-size:.68rem;padding:4px 7px;border-radius:7px;background:#162943}
+.trade-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}.trade-cell{background:#101b2b;border-radius:7px;padding:6px}.trade-label{font-size:.5rem;color:#fff;text-transform:uppercase}.trade-value{font-size:.7rem;font-weight:800;margin-top:2px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tip{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700;color:#fff}
+.stCaption,.stCaption p{color:#fff!important}.stMarkdown,.stMarkdown p{color:#fff}
 @media(max-width:900px){.grid6{grid-template-columns:repeat(3,1fr)}.trade-grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:600px){.grid6{grid-template-columns:repeat(2,1fr)}.trade-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
 """,unsafe_allow_html=True)
@@ -109,7 +110,7 @@ def live_dashboard():
             state="SIGNAL"; stock=first(signal_row,"symbol","stock"); side=first(signal_row,"buy_sell","side","signal"); signal_time=first(signal_row,"timestamp","entry_time","logged_at"); entry=first(signal_row,"entry","entry_price"); sl=first(signal_row,"stop_loss"); target=first(signal_row,"target"); exit_price=pnl=""; rr=first(signal_row,"risk_reward","rr","reward"); qty=first(signal_row,"quantity"); exit_reason=""
         else:
             state="WAITING"; stock=side=signal_time=entry=sl=target=exit_price=pnl=rr=qty=exit_reason=""
-        color="#67e8a5" if state=="CLOSED" else "#5ec8ff" if state=="SIGNAL" else "#ffd166" if state=="TRADE OPEN" else "#9fb1ca"
+        color="#67e8a5" if state=="CLOSED" else "#5ec8ff" if state=="SIGNAL" else "#ffd166" if state=="TRADE OPEN" else "#fff"
         cells=[("Stock",stock),("BUY / SELL",side),("Signal Time",signal_time),("Entry",fmt(entry)),("Stop Loss",fmt(sl)),("Target",fmt(target)),("Exit",fmt(exit_price)),("P&L",fmt(pnl)),("Risk / Reward",fmt(rr)),("Quantity",fmt(qty)),("Exit Reason",exit_reason or "—")]
         html=''.join(f'<div class="trade-cell"><div class="trade-label">{l}</div><div class="trade-value">{v or "—"}</div></div>' for l,v in cells)
         st.markdown(f'<div class="strategy"><span class="state" style="color:{color}">{state}</span><div class="strategy-title">{strategy}</div><div class="trade-grid">{html}</div></div>',unsafe_allow_html=True)
