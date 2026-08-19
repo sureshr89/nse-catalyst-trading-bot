@@ -4,8 +4,7 @@ from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
 import os, threading, time
-import pandas as pd
-import requests
+import pandas as pd, requests
 BASE_URL="https://api.dhan.co/v2"; MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"; MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"; CACHE_DIR=Path("data"); MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv"; IST="Asia/Kolkata"; _LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0
 _LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
 def _secret(name):
@@ -22,16 +21,14 @@ def _headers():return {"Accept":"application/json","Content-Type":"application/j
 def _post(path,payload,timeout=15):
  if not configured():_set_status(ok=False,stage="CONFIG",message="DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN missing");return {}
  try:
-  r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
-  try:b=r.json()
-  except Exception:b={}
+  r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout); b=r.json() if r.content else {}
   if r.status_code!=200:
    code=(b.get("errorCode") or b.get("error_code") or b.get("code")) if isinstance(b,dict) else None;msg=(b.get("errorMessage") or b.get("error_message") or b.get("message")) if isinstance(b,dict) else r.text[:300];_set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg),requested=sum(len(v) for v in payload.values() if isinstance(v,list)));return {}
   _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return b if isinstance(b,dict) else {}
  except Exception as exc:_set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
 def _valid_master(x):
  if x is None or x.empty:return False
- cols={str(c).strip().upper() for c in x.columns};return bool(({"SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"}&cols) and ({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols))
+ cols={str(c).strip().upper() for c in x.columns};return bool(({"SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"}&cols) and ({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols))
 def load_instrument_master(force=False):
  CACHE_DIR.mkdir(parents=True,exist_ok=True)
  if MASTER_CACHE.exists() and not force:
@@ -50,7 +47,7 @@ def _col(frame,names):
 def map_nifty500(symbols,force=False):
  wanted={str(s).strip().upper().replace(".NS","") for s in symbols if str(s).strip()};m=load_instrument_master(force)
  if m.empty or not wanted:return pd.DataFrame(columns=["Symbol","SecurityId","ExchangeSegment","Instrument"])
- sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"));ser=_col(m,("SEM_SERIES","SERIES"))
+ sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"));ser=_col(m,("SEM_SERIES","SERIES"))
  if not sc or not ic:return pd.DataFrame(columns=["Symbol","SecurityId","ExchangeSegment","Instrument"])
  x=m.copy();x["_symbol"]=x[sc].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
  if seg:x=x[x[seg].astype(str).str.upper().eq("E")]
@@ -71,7 +68,7 @@ def market_quote(mapping,cache_seconds=10):
   if not isinstance(item,dict):continue
   o=item.get("ohlc") or {}
   try:
-   ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);ohlc_close=float(o.get("close") or 0);rows.append({"Symbol":by_id.get(str(sid),str(sid)),"SecurityId":str(sid),"LTP":ltp,"TodayOpen":float(o.get("open") or 0),"TodayHigh":float(o.get("high") or 0),"TodayLow":float(o.get("low") or 0),"TodayClose":ohlc_close,"PreviousClose":ohlc_close,"NetChange":nc,"Volume":float(item.get("volume") or 0),"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
+   ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0);rows.append({"Symbol":by_id.get(str(sid),str(sid)),"SecurityId":str(sid),"LTP":ltp,"TodayOpen":float(o.get("open") or 0),"TodayHigh":float(o.get("high") or 0),"TodayLow":float(o.get("low") or 0),"TodayClose":c,"PreviousClose":c,"NetChange":nc,"Volume":float(item.get("volume") or 0),"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
   except (TypeError,ValueError):pass
  _set_status(received=len(rows),requested=len(ids),ok=len(rows)>0,stage="/marketfeed/quote",message=f"Received {len(rows)}/{len(ids)} quotes" if rows else _LAST_DHAN_STATUS.get("message","No quotes returned"));result=pd.DataFrame(rows)
  if not result.empty:
@@ -80,7 +77,7 @@ def market_quote(mapping,cache_seconds=10):
 def index_quote(index_name="NIFTY 500"):
  m=load_instrument_master()
  if m.empty or not configured():return None
- nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"))
+ nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"))
  if not nc or not ic:return None
  x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();mask=x["_name"].eq(index_name.upper())
  if not mask.any():mask=x["_name"].str.contains(index_name.upper(),regex=False,na=False)
@@ -92,7 +89,7 @@ def index_quote(index_name="NIFTY 500"):
  if not isinstance(item,dict):return None
  o=item.get("ohlc") or {}
  try:
-  ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);ohlc_close=float(o.get("close") or 0);return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":ohlc_close,"PreviousClose":ohlc_close,"NetChange":nc,"SecurityId":sid}
+  ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0);return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":c,"PreviousClose":c,"NetChange":nc,"SecurityId":sid}
  except (TypeError,ValueError):return None
 def daily_history(security_id,from_date,to_date):
  response=_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20)
