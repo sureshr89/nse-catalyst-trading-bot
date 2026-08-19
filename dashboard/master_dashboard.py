@@ -3,12 +3,14 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import json
+import sys
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
 
 ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 IST=ZoneInfo("Asia/Kolkata")
 REFRESH=15
 CAPITAL=250000
@@ -40,9 +42,12 @@ html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,BlinkMacSyste
 .strategy .muted{font-size:.92rem}
 .muted{color:var(--muted);line-height:1.5}
 .quote{border-left:4px solid var(--blue);background:var(--panel);padding:13px 16px;border-radius:9px;font-style:italic;color:#dbe6f5}
+.data-state{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:14px;padding:14px 16px;margin-top:12px;color:var(--text);line-height:1.55}
+.data-state .ok{color:var(--green);font-weight:850}.data-state .wait{color:var(--gold);font-weight:850}.data-state .bad{color:var(--red);font-weight:850}
+.gate-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}.gate{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--panel2)}.gate b{display:block;font-size:.95rem}.gate span{display:block;color:var(--muted);font-size:.82rem;margin-top:4px}
 [data-testid="stDataFrame"]{border-radius:12px;overflow:hidden}
 @media(max-width:1100px){.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rule-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.strategy{flex-basis:270px}}
-@media(max-width:700px){.block-container{padding:1rem .85rem 2rem}.title{font-size:1.75rem}.sub{font-size:.82rem;margin-bottom:16px}.sec{font-size:1.15rem;margin-top:22px;margin-bottom:10px}.metric-grid,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{gap:9px;padding-bottom:9px}.strategy{flex-basis:255px;min-height:125px;padding:14px}.card{min-height:82px;padding:11px 10px;border-radius:12px}.card small{font-size:.62rem}.card b{font-size:1rem;margin-top:6px}.strategy h4{font-size:1rem}.strategy .muted{font-size:.86rem}}
+@media(max-width:700px){.block-container{padding:1rem .85rem 2rem}.title{font-size:1.75rem}.sub{font-size:.82rem;margin-bottom:16px}.sec{font-size:1.15rem;margin-top:22px;margin-bottom:10px}.metric-grid,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{gap:9px;padding-bottom:9px}.strategy{flex-basis:255px;min-height:125px;padding:14px}.card{min-height:82px;padding:11px 10px;border-radius:12px}.card small{font-size:.62rem}.card b{font-size:1rem;margin-top:6px}.strategy h4{font-size:1rem}.strategy .muted{font-size:.86rem}.gate-grid{grid-template-columns:1fr;gap:8px}}
 @media(max-width:380px){.metric-grid,.rule-grid{grid-template-columns:1fr}.title{font-size:1.6rem}.card b{font-size:1.02rem}}
 </style>""",unsafe_allow_html=True)
 
@@ -77,6 +82,7 @@ def normalize_strategy(v):
 now=datetime.now(IST)
 diag=load_json("scanner_diagnostics.json")
 state=load_json("paper_engine_state.json")
+bot_status=load_json("bot_status.json")
 trades=load_csv("trades.csv")
 if not trades.empty:
     if "strategy" not in trades.columns:trades["strategy"]=""
@@ -99,14 +105,28 @@ bias="🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
 st.markdown("<div class='title'>📊 NSE Catalyst — Master Dashboard</div>",unsafe_allow_html=True)
 st.markdown(f"<div class='sub'>NIFTY 500 • S1–S5 combined • PAPER TRADING ONLY • auto-refresh {REFRESH}s • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>",unsafe_allow_html=True)
 st.markdown("<div class='sec'>🎯 Master Market Alignment</div>",unsafe_allow_html=True)
-master_cards=[k("NIFTY 500",pct(nifty)),k("SECTORS",pct(sector)),k("A/D RATIO",f"{float(ad):.2f}" if full_breadth and ad is not None else "UNAVAILABLE"),k("BREADTH",coverage),k("SECTOR DATA",sector_priced),k("MASTER BIAS",bias)]
+master_cards=[k("NIFTY 500",pct(nifty)),k("SECTORS",pct(sector)),k("A/D RATIO",f"{float(ad):.2f}" if full_breadth and ad is not None else "WAITING"),k("BREADTH",coverage),k("SECTOR DATA",sector_priced),k("MASTER BIAS",bias)]
 st.markdown("<div class='metric-grid'>"+"".join(master_cards)+"</div>",unsafe_allow_html=True)
-if not full_breadth:st.error(f"🚫 TRADING BLOCKED — NIFTY 500 breadth is {coverage}. Full 500/500 is mandatory.")
-if not sector_ok:st.warning(f"🚫 TRADING BLOCKED — sector data is incomplete. Mapping {sector_map}; priced {sector_priced}.")
+
+if full_breadth and sector_ok and (buy or sell):
+    st.markdown("<div class='data-state'><span class='ok'>● LIVE ALIGNMENT READY</span> — All 500 stocks are priced, sector data is complete, and the master market gate is satisfied.</div>",unsafe_allow_html=True)
+else:
+    reasons=[]
+    if not full_breadth:reasons.append(f"NIFTY 500 breadth {coverage}, requires 500/500")
+    if not sector_ok:reasons.append(f"sector data mapping {sector_map}, priced {sector_priced}, requires 500/500")
+    if nifty is None:reasons.append("NIFTY 500 live change waiting for market data")
+    if ad is None:reasons.append("A/D waiting for complete 500-stock prices")
+    st.markdown("<div class='data-state'><span class='wait'>● TRADING WAITING</span> — " + "; ".join(reasons) + ". No strategy is allowed to trade until the master gate is complete.</div>",unsafe_allow_html=True)
+
+buy_gate="PASS ✓" if buy else "WAIT"
+sell_gate="PASS ✓" if sell else "WAIT"
+st.markdown(f"<div class='gate-grid'><div class='gate'><b>🟢 BUY GATE · {buy_gate}</b><span>NIFTY 500 &gt; 0% + Sector &gt; 0% + A/D &gt; 1 + 500/500</span></div><div class='gate'><b>🔴 SELL GATE · {sell_gate}</b><span>NIFTY 500 &lt; 0% + Sector &lt; 0% + A/D &lt; 1 + 500/500</span></div><div class='gate'><b>📡 DATA · {priced}</b><span>All live strategy scans use the same 15-second master snapshot.</span></div></div>",unsafe_allow_html=True)
+
 st.markdown("<div class='sec'>🔒 Fixed Paper-Trading Rules</div>",unsafe_allow_html=True)
 rules=[k("CAPITAL / TRADE",money(CAPITAL)),k("RISK / TRADE","₹1,400–₹1,500"),k("TARGET / TRADE","1.25R"),k("MAX TRADES / STRATEGY","1 / day"),k("DAILY LOSS / TRADE","₹1,500"),k("REFRESH","15 sec")]
 st.markdown("<div class='rule-grid'>"+"".join(rules)+"</div>",unsafe_allow_html=True)
 st.caption("Position size is derived from actual Entry→SL distance. If actual risk is outside ₹1,400–₹1,500, the trade is rejected. Maximum one paper trade per strategy per day. No real orders.")
+
 st.markdown("<div class='sec'>🔥 All 5 Strategies — One-Glance Board</div>",unsafe_allow_html=True)
 st.markdown("<div class='strategy-grid'>",unsafe_allow_html=True)
 for s in STRATEGIES:
@@ -122,6 +142,7 @@ for s in STRATEGIES:
     status="🔒 LOCKED" if locked else "🟢 ALIGNED" if (buy or sell) else "⚪ WAITING"
     st.markdown(f"<div class='strategy'><h4>{s} • {status}</h4><div class='muted'>{STRATEGIES[s]}</div><br><span>Trades <b>{len(today_td)}/{MAX_TRADES}</b> • Wins <b>{wins}</b> • Losses <b>{losses}</b></span><br><br><span>Daily P&amp;L <b>{money(pnl)}</b></span></div>",unsafe_allow_html=True)
 st.markdown("</div>",unsafe_allow_html=True)
+
 st.markdown("<div class='sec'>💼 Current Paper Trades — All Strategies</div>",unsafe_allow_html=True)
 open_positions=state.get("open_positions",{}) if isinstance(state,dict) else {}
 if open_positions:
@@ -131,6 +152,7 @@ if open_positions:
         rows.append({"Strategy":normalize_strategy(p.get("strategy","")),"Stock":symbol,"Side":side,"Entry":entry,"LTP":ltp,"SL":p.get("stop_loss"),"Target":p.get("target"),"Qty":qty,"Risk":p.get("actual_risk",p.get("risk")),"P&L":round(pnl,2),"Entry Time":p.get("entry_time")})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 else:st.info("No open paper trades — waiting for complete alignment and an exact OHLC/PDH/PDL setup.")
+
 st.markdown("<div class='sec'>📈 Performance & Analysis</div>",unsafe_allow_html=True)
 if not trades.empty and "pnl" in trades:
     perf=[]
@@ -148,15 +170,30 @@ if not trades.empty and "pnl" in trades:
         seq=trades.copy();seq["entry_time"]=pd.to_datetime(seq["entry_time"],errors="coerce");seq=seq.dropna(subset=["entry_time"]).sort_values("entry_time");seq["Cumulative P&L"]=seq.groupby("strategy")["pnl"].cumsum()
         if not seq.empty:st.plotly_chart(px.line(seq,x="entry_time",y="Cumulative P&L",color="strategy",markers=True,title="📈 Cumulative P&L"),use_container_width=True)
 else:st.info("Charts will populate from real paper-trade history. No artificial performance numbers are shown.")
+
 st.markdown("<div class='sec'>🏆 Strategy Comparison</div>",unsafe_allow_html=True)
 if not trades.empty and "pnl" in trades:st.dataframe(pdf,use_container_width=True,hide_index=True)
 else:st.info("No historical paper trades yet. Strategy probabilities and rankings will appear after actual paper trades are recorded.")
+
 st.markdown("<div class='sec'>📒 Master Strategy Journal — S1 to S5</div>",unsafe_allow_html=True)
 try:
     from journal.master_journal import build_journal
     path=build_journal();jdf=pd.read_csv(path);st.dataframe(jdf.tail(25),use_container_width=True,hide_index=True);st.download_button("⬇️ Download Master Strategy Journal CSV",path.read_bytes(),"strategy_journal_master.csv","text/csv")
-except Exception as e:st.warning(f"Journal unavailable: {type(e).__name__}")
+except Exception as e:
+    journal_path=ROOT/"outputs"/"strategy_journal_master.csv"
+    if journal_path.exists():
+        jdf=pd.read_csv(journal_path);st.dataframe(jdf.tail(25),use_container_width=True,hide_index=True);st.download_button("⬇️ Download Master Strategy Journal CSV",journal_path.read_bytes(),"strategy_journal_master.csv","text/csv")
+    else:st.info("Journal will appear automatically after the first paper-trading cycle.")
+
 quote=QUOTES[now.date().toordinal()%len(QUOTES)];st.markdown(f"<div class='quote'>🧠 Daily Trading Quote — “{quote}”</div>",unsafe_allow_html=True)
 st.markdown("<div class='sec'>⚙️ System / Data Status</div>",unsafe_allow_html=True)
-st.json({"mode":"PAPER_ONLY","refresh_seconds":REFRESH,"capital_per_trade":CAPITAL,"max_trades_per_strategy_day":MAX_TRADES,"daily_loss_limit_per_trade":DAILY_LOSS,"risk_range":"₹1,400–₹1,500","target_rr":RR,"nifty500_change":nifty,"sector_change":sector,"sector_mapping":sector_map,"sector_priced":sector_priced,"ad_ratio":ad,"ad_coverage":coverage,"market_data_coverage":priced,"buy_alignment":buy,"sell_alignment":sell,"open_positions":len(open_positions)})
-st.caption("NSE Catalyst • one combined mobile-friendly dashboard • S1–S5 • paper trading only • Dhan live data can be connected later.")
+worker_state=str(bot_status.get("status","UNKNOWN"));worker_message=str(bot_status.get("message","No worker status yet."));worker_error=bot_status.get("last_scan_error") or bot_status.get("error")
+data_ready=full_breadth and sector_ok and nifty is not None and ad is not None
+status_payload={"mode":"PAPER_ONLY","refresh_seconds":REFRESH,"capital_per_trade":CAPITAL,"max_trades_per_strategy_day":MAX_TRADES,"daily_loss_limit_per_trade":DAILY_LOSS,"risk_range":"₹1,400–₹1,500","target_rr":RR,"nifty500_change":nifty,"sector_change":sector,"sector_mapping":sector_map,"sector_priced":sector_priced,"ad_ratio":ad,"ad_coverage":coverage,"market_data_coverage":priced,"buy_alignment":buy,"sell_alignment":sell,"open_positions":len(open_positions),"data_ready":data_ready,"worker_status":worker_state}
+st.json(status_payload)
+if data_ready:
+    st.success("Live master data is complete. S1–S5 can evaluate setups on the next 15-second cycle.")
+else:
+    st.warning("Live master data is not complete yet. This is a real-data safety block — no artificial NIFTY 500, sector, or A/D values are generated.")
+if worker_error:st.error(f"Worker/scanner error: {worker_error}")
+st.caption(f"Worker: {worker_state} • {worker_message} • NSE Catalyst • S1–S5 • paper trading only • Dhan live data can be connected later.")
