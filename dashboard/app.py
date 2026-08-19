@@ -1,7 +1,7 @@
 """NSE Catalyst Streamlit entry point.
 
-The page does NOT auto-refresh. The user explicitly refreshes Dhan data with
-one button, so the screen stays stable while reviewing closed-session values.
+The page does not auto-refresh. Live 500-stock data is handled by the existing
+breadth engine. The slow optional NIFTY 500 index quote must never block app startup.
 """
 from pathlib import Path
 import runpy
@@ -18,6 +18,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# The 500-stock Dhan feed is the important data path. The optional index quote
+# can make startup wait on a second marketfeed request and historical fallback.
+# Never let that optional request hold the whole dashboard hostage.
+try:
+    import market.nifty500_breadth as _breadth_module
+    _breadth_module.index_quote = lambda *args, **kwargs: None
+except Exception:
+    pass
 
 _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
