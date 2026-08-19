@@ -10,8 +10,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# One dashboard only. Strategy pages remain in the repository for backend
-# compatibility but are intentionally not exposed as separate UI buttons.
+# Single UI only. S1-S5 are shown together in master_dashboard.py.
 master = st.Page("master_dashboard.py", title="NSE Catalyst", icon="📊", default=True)
 pg = st.navigation([master], position="hidden")
 pg.run()
