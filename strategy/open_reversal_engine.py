@@ -1,12 +1,11 @@
 """NIFTY 500 PDH/PDL + Today's Open return strategy.
 
-All active triggers are LIVE LTP rules. Completed candles are never used as
-entry confirmation, breach confirmation, return confirmation, SL, or target.
+S1 uses live-LTP triggers only. No candle-close confirmation is used.
 """
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
-from config.settings import ENABLE_LONG, ENABLE_SHORT, NIFTY500_MIN_CHANGE_PCT
+from config.settings import ENABLE_LONG, ENABLE_SHORT
 from strategy.contracts import STRATEGY_VERSION, STRATEGY_1_NAME
 from market.price_data import PriceData
 from market.nifty500_breadth import BREADTH
@@ -16,7 +15,7 @@ _LIVE = PriceData()
 
 
 class OpenReversalEngine:
-    """PDH/PDL + Today's Open reversal using live LTP trigger conditions."""
+    """S1: PDH/PDL sweep and live return to Today's Open."""
     strategy_id = "STRATEGY_1"
     strategy_name = STRATEGY_1_NAME
     strategy_version = STRATEGY_VERSION
@@ -80,18 +79,14 @@ class OpenReversalEngine:
             return None
 
     def update_state(self, state, today_open, pdh, pdl, completed_close=None, stamp=None):
-        """Advance the setup from the current live LTP only.
+        """Update S1 entirely from the current live LTP.
 
-        BUY: Open > PDH. First the live price must fall to/touch PDH; only after
-        that state is reached can a live return to/above Open qualify the setup.
-        SELL is the mirror image: Open < PDL, first rise to/touch PDL, then
-        return to/below Open. Candle arguments are intentionally ignored.
+        BUY: Open > PDH -> live Low/touch below PDH -> live price returns to Open.
+        SELL: Open < PDL -> live High/touch above PDL -> live price returns to Open.
         """
         state = dict(state)
         side = str(state.get("side", "")).upper()
-        open_price = float(today_open)
-        pdh = float(pdh)
-        pdl = float(pdl)
+        open_price, pdh, pdl = float(today_open), float(pdh), float(pdl)
         symbol = str(state.get("symbol", "")).strip().upper()
         live = self._live(symbol)
         if live is None:
@@ -104,6 +99,23 @@ class OpenReversalEngine:
             return state
 
         now = datetime.now(INDIA_TZ).isoformat(timespec="milliseconds")
+        # Persist today's running extremes using the live quote. These are the
+        # only values allowed to become the S1 stop at the entry moment.
+        try:
+            day_low = float(live.get("Low"))
+            if day_low > 0:
+                old_low = state.get("today_low")
+                state["today_low"] = min(float(old_low), day_low) if old_low is not None else day_low
+        except (TypeError, ValueError):
+            pass
+        try:
+            day_high = float(live.get("High"))
+            if day_high > 0:
+                old_high = state.get("today_high")
+                state["today_high"] = max(float(old_high), day_high) if old_high is not None else day_high
+        except (TypeError, ValueError):
+            pass
+
         if side == "BUY":
             if not state.get("pdh_breached") and ltp <= pdh:
                 state["pdh_breached"] = True
@@ -127,14 +139,17 @@ class OpenReversalEngine:
         return state
 
     def market_aligned(self, side, nifty_change_pct):
+        """Hard S1 market confirmation: BUY >0% + A/D>1; SELL <0% + A/D<1."""
         change = float(nifty_change_pct)
-        nifty_ok = change >= NIFTY500_MIN_CHANGE_PCT if side == "BUY" else change <= -NIFTY500_MIN_CHANGE_PCT
+        nifty_ok = change > 0.0 if side == "BUY" else change < 0.0
         ad_ok, _ = BREADTH.allows(side)
         return nifty_ok and ad_ok
 
-    def build_signal(self, symbol, side, entry, today_open, pdh, pdl, nifty_change_pct, metrics=None):
+    def build_signal(self, symbol, side, entry, today_open, pdh, pdl, nifty_change_pct, metrics=None, today_low=None, today_high=None):
         entry = float(entry)
-        stop = float(pdh) if side == "BUY" else float(pdl)
+        stop = float(today_low) if side == "BUY" else float(today_high)
+        if stop <= 0:
+            return None
         risk = entry - stop if side == "BUY" else stop - entry
         if risk <= 0:
             return None
@@ -143,38 +158,30 @@ class OpenReversalEngine:
         breadth = BREADTH.snapshot()
         if not breadth.get("complete"):
             return None
-        if side == "BUY" and breadth.get("advances", 0) <= breadth.get("declines", 0):
+        if side == "BUY" and breadth.get("ad_ratio", 0) <= 1:
             return None
-        if side == "SELL" and breadth.get("declines", 0) <= breadth.get("advances", 0):
+        if side == "SELL" and breadth.get("ad_ratio", 0) >= 1:
             return None
         signal = {
-            "symbol": str(symbol).upper(),
-            "strategy": self.strategy_id,
-            "strategy_name": self.strategy_name,
-            "strategy_version": self.strategy_version,
-            "signal": side,
-            "entry_time": now.isoformat(timespec="milliseconds"),
+            "symbol": str(symbol).upper(), "strategy": self.strategy_id,
+            "strategy_name": self.strategy_name, "strategy_version": self.strategy_version,
+            "signal": side, "entry_time": now.isoformat(timespec="milliseconds"),
             "trigger_entry_time": now.isoformat(timespec="milliseconds"),
             "market_entry_time": now.isoformat(timespec="milliseconds"),
-            "entry": round(entry, 4),
-            "open_cross_level": round(float(today_open), 4),
-            "stop_loss": round(stop, 4),
-            "target": round(target, 4),
-            "risk_per_share": round(risk, 4),
-            "risk_reward": self.rr,
-            "pdh": round(float(pdh), 4),
-            "pdl": round(float(pdl), 4),
+            "entry": round(entry, 4), "open_cross_level": round(float(today_open), 4),
+            "stop_loss": round(stop, 4), "target": round(target, 4),
+            "risk_per_share": round(risk, 4), "risk_reward": self.rr,
+            "pdh": round(float(pdh), 4), "pdl": round(float(pdl), 4),
             "today_open": round(float(today_open), 4),
+            "today_low_at_entry": round(float(today_low), 4),
+            "today_high_at_entry": round(float(today_high), 4),
             "nifty500_change_pct": round(float(nifty_change_pct), 4),
             "nifty500_ad_ratio": breadth.get("ad_ratio"),
-            "nifty500_advances": breadth.get("advances"),
-            "nifty500_declines": breadth.get("declines"),
+            "nifty500_advances": breadth.get("advances"), "nifty500_declines": breadth.get("declines"),
             "nifty500_ad_evaluated": breadth.get("evaluated"),
             "market_direction": "BULLISH" if side == "BUY" else "BEARISH",
             "setup_type": "NIFTY_500_PDH_PDL_OPEN_RETURN_LIVE_LTP",
-            "pdh_pdl_reached": True,
-            "entry_source": "LIVE_LTP",
-            "trigger_price": round(entry, 4),
+            "pdh_pdl_reached": True, "entry_source": "LIVE_LTP", "trigger_price": round(entry, 4),
         }
         if metrics:
             signal.update({k: v for k, v in metrics.items() if "atr" not in str(k).lower() and "average_true_range" not in str(k).lower()})
@@ -200,4 +207,4 @@ class OpenReversalEngine:
         if live is None:
             return None
         entry = float(live["Close"])
-        return self.build_signal(symbol, side, entry, open_price, pdh, pdl, nifty_change_pct)
+        return self.build_signal(symbol, side, entry, open_price, pdh, pdl, nifty_change_pct, today_low=state.get("today_low"), today_high=state.get("today_high"))
