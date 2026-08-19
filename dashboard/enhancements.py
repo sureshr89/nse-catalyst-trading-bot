@@ -57,13 +57,10 @@ def render_enhancements():
   msg=st.session_state["dhan10_msg"];st.success(msg) if not st.session_state["dhan10_df"].empty else st.error(msg)
   if not st.session_state["dhan10_df"].empty:st.dataframe(st.session_state["dhan10_df"],width="stretch",hide_index=True)
  if st.button("Test Dhan Authentication",key="dhan_auth"):
-  s,d=_dhan_profile();st.session_state["dhan_auth"]={"status":s,"detail":d}
- if "dhan_auth" in st.session_state:
-  auth=st.session_state["dhan_auth"]
-  if isinstance(auth,dict):s,d=auth.get("status","UNKNOWN"),auth.get("detail","")
-  elif isinstance(auth,(tuple,list)) and len(auth)>=2:s,d=auth[0],auth[1]
-  else:s,d="UNKNOWN",str(auth)
-  st.markdown(f"**Dhan authentication:** {s} — {d}")
+  s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
+ auth=st.session_state.get("dhan_auth_result")
+ if auth:
+  st.markdown(f"**Dhan authentication:** {auth.get('status','UNKNOWN')} — {auth.get('detail','')}")
  st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Comparison</div>",unsafe_allow_html=True)
  trades=_csv("trades.csv");rows=[]
  for s,name in STRATEGIES.items():
