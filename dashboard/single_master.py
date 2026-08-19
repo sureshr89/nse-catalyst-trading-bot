@@ -100,14 +100,16 @@ st.markdown("<div class='grid6'>" + "".join([
     card("A/D RATIO", f"{ad:.2f}" if ad is not None else "WAITING"),
     card("BREADTH", f"{evaln}/500"), card("SECTOR DATA", f"{sp}/500"), card("MASTER BIAS", bias)
 ]) + "</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='status'><span class='{'ok' if complete and scomplete else 'wait'}'><b>● {'DHAN DATA READY' if complete and scomplete else 'DATA WAITING'}</b></span> • Dhan configured: {'YES' if dhan_ok else 'NO'} • {market.get('reason','OK')} • stocks {evaln}/500 • sectors {sm}/500 mapped / {sp}/500 priced</div>", unsafe_allow_html=True)
+status_class = "ok" if complete and scomplete else "wait"
+status_text = "DHAN DATA READY" if complete and scomplete else "DATA WAITING"
+dhan_text = "YES" if dhan_ok else "NO"
+st.markdown(f"<div class='status'><span class='{status_class}'><b>● {status_text}</b></span> • Dhan configured: {dhan_text} • {market.get('reason','OK')} • stocks {evaln}/500 • sectors {sm}/500 mapped / {sp}/500 priced</div>", unsafe_allow_html=True)
 st.markdown("<div class='grid4'>" + "".join([
     card("🟢 BUY GATE", "PASS ✓" if buy else "WAIT"),
     card("🔴 SELL GATE", "PASS ✓" if sell else "WAIT"),
     card("📡 DATA", f"Dhan {evaln}/500"), card("🔄 REFRESH", "15 sec")
 ]) + "</div>", unsafe_allow_html=True)
 
-# One page only. These tabs are the requested three analysis records plus the compact closed reference.
 tab_close, tab_today, tab_pnl, tab_research = st.tabs([
     "📚 Previous Close", "1 · Today's Taken Trades", "2 · Actual P&L / Drawdown", "3 · All Eligible Opportunities"
 ])
@@ -147,7 +149,7 @@ with tab_today:
     if today.empty:
         st.info("No taken trades recorded today.")
     else:
-        st.dataframe(today, use_container_width=True, hide_index=True)
+        st.dataframe(today, width="stretch", hide_index=True)
         st.download_button("⬇️ CSV — Today's Taken Trades", today.to_csv(index=False).encode(), f"today_taken_{now.date()}.csv", "text/csv")
 
 with tab_pnl:
@@ -167,7 +169,7 @@ with tab_pnl:
         c1,c2 = st.columns(2)
         with c1: st.line_chart(daily.set_index("Date")["Cumulative P&L"], height=240)
         with c2: st.bar_chart(daily.set_index("Date")["pnl"], height=240)
-        st.dataframe(daily, use_container_width=True, hide_index=True)
+        st.dataframe(daily, width="stretch", hide_index=True)
         st.download_button("⬇️ CSV — Actual P&L History", daily.to_csv(index=False).encode(), "actual_pnl_daily.csv", "text/csv")
 
 with tab_research:
@@ -189,7 +191,7 @@ with tab_research:
             card("ELIGIBLE", len(r)), card("TAKEN", int(r.Taken.sum())), card("NOT TAKEN", int((~r.Taken).sum())),
             card("WINS", wins), card("LOSSES", losses), card("KNOWN WIN %", f"{wins/known*100:.1f}%" if known else "PENDING")
         ]) + "</div>", unsafe_allow_html=True)
-        st.dataframe(r, use_container_width=True, hide_index=True)
+        st.dataframe(r, width="stretch", hide_index=True)
         st.download_button("⬇️ CSV — All Eligible Opportunities", r.to_csv(index=False).encode(), "all_eligible_opportunities.csv", "text/csv")
 
 st.markdown("<div class='sec'>🔥 S1–S5 Status</div>", unsafe_allow_html=True)
