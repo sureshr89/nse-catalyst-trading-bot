@@ -1,4 +1,4 @@
-"""Daily PDH/PDL and previous-close reference data for the NIFTY 500 strategy."""
+"""Daily PDH/PDL/PDC reference data for the NIFTY 500 strategies."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -7,7 +7,9 @@ import threading
 import time
 import pandas as pd
 import yfinance as yf
+
 from market.price_data import PriceData
+from market.dhan_data import configured as dhan_configured, map_nifty500, market_quote, previous_day_references
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 _REF_LOCK = threading.RLock()
@@ -22,8 +24,6 @@ class ReferenceStore:
         self.batch_size = 50
         self.max_workers = 2
         self.minimum_coverage = 0.60
-        # A partial reference set is still usable. The scanner itself will show
-        # the actual coverage instead of stopping the whole Strategy 2 worker.
         self.fallback_coverage = 0.01
 
     @property
@@ -32,20 +32,16 @@ class ReferenceStore:
     def path(self): return self.folder / f"nifty500_open_reversal_{self.date_key}.csv"
 
     @staticmethod
-    def _clean_symbol(symbol):
-        return str(symbol).strip().upper().replace(".NS", "")
-
+    def _clean_symbol(symbol): return str(symbol).strip().upper().replace(".NS", "")
     @staticmethod
     def _ticker(symbol): return f"{ReferenceStore._clean_symbol(symbol)}.NS"
 
     def _coverage(self, df):
         if df is None or df.empty or self.universe.empty or "Symbol" not in df.columns: return 0.0
-        universe = {self._clean_symbol(x) for x in self.universe["Symbol"]}
-        found = {self._clean_symbol(x) for x in df["Symbol"]}
+        universe = {self._clean_symbol(x) for x in self.universe["Symbol"]}; found = {self._clean_symbol(x) for x in df["Symbol"]}
         return len(universe & found) / len(universe) if universe else 0.0
 
-    def _coverage_ok(self, df, minimum=None):
-        return self._coverage(df) >= (self.minimum_coverage if minimum is None else minimum)
+    def _coverage_ok(self, df, minimum=None): return self._coverage(df) >= (self.minimum_coverage if minimum is None else minimum)
 
     def _normalise_daily(self, data):
         if data is None or data.empty: return pd.DataFrame()
@@ -73,10 +69,7 @@ class ReferenceStore:
         return frame.dropna(subset=required).sort_values("Datetime").reset_index(drop=True)
 
     def _rows_from_daily_map(self, daily_map, symbols):
-        today = datetime.now(INDIA_TZ).date(); rows = []
-        # Accept both SYMBOL and SYMBOL.NS keys so the reference layer is not
-        # coupled to the exact key convention of the market-data provider.
-        normalised = {self._clean_symbol(k): v for k, v in (daily_map or {}).items()}
+        today = datetime.now(INDIA_TZ).date(); rows = []; normalised = {self._clean_symbol(k): v for k, v in (daily_map or {}).items()}
         for symbol in symbols:
             clean = self._clean_symbol(symbol)
             try:
@@ -84,12 +77,28 @@ class ReferenceStore:
                 if data.empty: continue
                 previous = data[data["Datetime"].dt.date < today]
                 if previous.empty: continue
-                current = data[data["Datetime"].dt.date == today]
-                prev = previous.iloc[-1]
-                pdc = float(prev["Close"]); volume = float(prev.get("Volume", 0) or 0)
+                current = data[data["Datetime"].dt.date == today]; prev = previous.iloc[-1]; pdc = float(prev["Close"]); volume = float(prev.get("Volume", 0) or 0)
                 rows.append({"Symbol": clean, "PDH": round(float(prev["High"]),4), "PDL": round(float(prev["Low"]),4), "PreviousDayClose": round(pdc,4), "PreviousDayVolume": volume, "PreviousDayTurnover": round(pdc*volume,2), "TodayOpen": float(current.iloc[0]["Open"]) if not current.empty else None})
             except Exception: continue
         return pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
+
+    def _prepare_with_dhan(self, symbols):
+        if not dhan_configured(): return pd.DataFrame()
+        try:
+            mapping = map_nifty500(symbols)
+            if len(mapping) != len(symbols): return pd.DataFrame()
+            refs = previous_day_references(mapping)
+            if refs.empty: return refs
+            quotes = market_quote(mapping, cache_seconds=10)
+            if not quotes.empty:
+                quotes = quotes[["Symbol","TodayOpen","TodayHigh","TodayLow","LTP","PreviousClose"]].copy()
+                refs = refs.merge(quotes, on="Symbol", how="left")
+                refs["TodayOpen"] = pd.to_numeric(refs["TodayOpen"], errors="coerce")
+            refs["PreviousDayTurnover"] = refs["PreviousDayClose"] * refs["PreviousDayVolume"]
+            return refs
+        except Exception as error:
+            print(f"Dhan reference preparation failed: {type(error).__name__}: {error}")
+            return pd.DataFrame()
 
     def _download_batch(self, tickers):
         global _LAST_CALL
@@ -97,8 +106,7 @@ class ReferenceStore:
             wait = 0.25 - (time.monotonic() - _LAST_CALL)
             if wait > 0: time.sleep(wait)
             _LAST_CALL = time.monotonic()
-        try:
-            return yf.download(tickers=tickers, period="10d", interval="1d", auto_adjust=False, progress=False, threads=False, group_by="ticker", timeout=10)
+        try: return yf.download(tickers=tickers, period="10d", interval="1d", auto_adjust=False, progress=False, threads=False, group_by="ticker", timeout=10)
         except Exception as error:
             print(f"Reference batch failed: {type(error).__name__}: {error}"); return pd.DataFrame()
 
@@ -156,8 +164,11 @@ class ReferenceStore:
             except Exception: pass
         symbols=self.universe["Symbol"].astype(str).str.upper().drop_duplicates().tolist()
         if not symbols: return pd.DataFrame()
-        result=self._prepare_with_price_data(symbols); best=result
-        if not self._coverage_ok(result):
+        best = self._prepare_with_dhan(symbols) if dhan_configured() else pd.DataFrame()
+        if not self._coverage_ok(best):
+            fallback=self._prepare_with_price_data(symbols)
+            if self._coverage(fallback)>self._coverage(best): best=fallback
+        if not self._coverage_ok(best):
             fallback=self._prepare_with_yfinance(symbols)
             if self._coverage(fallback)>self._coverage(best): best=fallback
         coverage=self._coverage(best)
