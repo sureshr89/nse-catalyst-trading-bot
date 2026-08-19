@@ -20,12 +20,17 @@ def load_saved(date=None):
     if not p.exists(): return pd.DataFrame(),{}
     try:return pd.read_csv(p),json.loads(_summary_file(d).read_text()) if _summary_file(d).exists() else {}
     except Exception:return pd.DataFrame(),{}
-def latest_saved_before(date=None):
-    d=date or datetime.now(IST).date(); files=sorted(STORE.glob("nifty500_closed_*.csv")); candidates=[]
+def _find_saved_before(date):
+    files=sorted(STORE.glob("nifty500_closed_*.csv")); candidates=[]
     for p in files:
         x=p.stem.replace("nifty500_closed_","")
-        if x<d.isoformat(): candidates.append(x)
+        if x<date.isoformat(): candidates.append(x)
     return load_saved(datetime.fromisoformat(candidates[-1]).date()) if candidates else (pd.DataFrame(),{})
+def latest_saved_before(date=None):
+    d=date or datetime.now(IST).date(); df,summary=_find_saved_before(d)
+    if not df.empty:return df,summary
+    # If no persistent history exists yet, actually obtain the latest completed quote snapshot now.
+    return build_closed_snapshot(force=True)
 
 def _universe():
     u=StockUniverse().get_dataframe(refresh=False)
@@ -34,34 +39,28 @@ def _universe():
     u=u.copy();u["Symbol"]=u["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False);return u.drop_duplicates("Symbol").head(500)
 
 def _completed_session_date(now):
-    # Used only as a label when Dhan quote OHLC is the last completed session.
-    # The dashboard stores the actual quote snapshot, never a fabricated price.
     d=now.date()
-    if now.time()<CLOSE:d=d-timedelta(days=1)
+    if now.time()<CLOSE:d-=timedelta(days=1)
     while d.weekday()>=5:d-=timedelta(days=1)
     return d
 
 def build_closed_snapshot(force=False):
     now=datetime.now(IST)
-    # CLOSED TABLE MUST STILL POPULATE before 09:15/15:30 from the latest completed Dhan OHLC.
-    # It must not simply return an empty local folder.
+    # Reuse an already saved completed session before making another Dhan request.
     if not force:
-        saved_df,saved_summary=latest_saved_before(now.date())
-        if not saved_df.empty and len(saved_df)>=500:
-            return saved_df,saved_summary
+        saved_df,saved_summary=_find_saved_before(now.date())
+        if not saved_df.empty and len(saved_df)>=500:return saved_df,saved_summary
     if not configured():
-        saved_df,saved_summary=latest_saved_before(now.date())
+        saved_df,saved_summary=_find_saved_before(now.date())
         return (saved_df,saved_summary) if not saved_df.empty else (pd.DataFrame(),{"complete":False,"reason":"Dhan credentials not configured","dhan_status":dhan_status()})
     u=_universe()
     if len(u)!=500:return pd.DataFrame(),{"complete":False,"reason":f"NIFTY 500 universe only {len(u)}/500","dhan_status":dhan_status()}
     mapping=map_nifty500(u.Symbol.tolist())
     if len(mapping)!=500:return pd.DataFrame(),{"complete":False,"reason":f"Dhan security mapping only {len(mapping)}/500","dhan_status":dhan_status()}
-
     # One batched Dhan quote request. Outside market hours TodayClose is the latest completed close.
     q=market_quote(mapping,cache_seconds=0)
     if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan returned no quotes for closed-session snapshot","dhan_status":dhan_status()}
-    q["Close"]=pd.to_numeric(q.get("TodayClose"),errors="coerce")
-    q["PreviousClose"]=pd.to_numeric(q.get("PreviousClose"),errors="coerce")
+    q["Close"]=pd.to_numeric(q.get("TodayClose"),errors="coerce");q["PreviousClose"]=pd.to_numeric(q.get("PreviousClose"),errors="coerce")
     q=q.dropna(subset=["Close","PreviousClose"]);q=q[(q.Close>0)&(q.PreviousClose>0)].copy()
     if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan quotes contained no usable closes","dhan_status":dhan_status()}
     q["ChangePct"]=(q.Close-q.PreviousClose)/q.PreviousClose*100
@@ -73,5 +72,6 @@ def build_closed_snapshot(force=False):
     session_date=_completed_session_date(now).isoformat()
     summary={"complete":len(q)>=500,"session_date":session_date,"market_close":"15:30 IST","nifty500_close":(idx or {}).get("Close"),"nifty500_previous_close":(idx or {}).get("PreviousClose"),"nifty500_change_pct":(idx or {}).get("NetChange"),"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad,"sector_alignment_pct":sector.get("alignment_pct"),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"coverage":f"{len(q)}/500","source":"Dhan closed OHLC snapshot","saved_at":now.isoformat(),"dhan_status":dhan_status()}
     out=q[[c for c in ["Symbol","SecurityId","Close","PreviousClose","TodayOpen","TodayHigh","TodayLow","Volume","ChangePct"] if c in q.columns]].copy()
-    out.to_csv(_file(now.date()),index=False);_summary_file(now.date()).write_text(json.dumps(summary,indent=2,default=str))
+    # Save under the actual completed-session date, not today's fetch date.
+    out.to_csv(_file(datetime.fromisoformat(session_date).date()),index=False);_summary_file(datetime.fromisoformat(session_date).date()).write_text(json.dumps(summary,indent=2,default=str))
     return out,summary
