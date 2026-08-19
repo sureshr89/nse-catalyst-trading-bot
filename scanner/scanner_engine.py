@@ -13,11 +13,10 @@ from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics, sort_key
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
-MIN_MARKET_DATA_COVERAGE = 0.60
 
 
 class ScannerEngine:
-    """Maintain BUY/SELL waiting states across 30-second control cycles."""
+    """Maintain BUY/SELL waiting states across short control cycles."""
     def __init__(self):
         self.universe_engine = StockUniverse()
         self.universe = self.universe_engine.get_dataframe(refresh=False)
@@ -64,7 +63,6 @@ class ScannerEngine:
             "nifty500_neutral": 0,
             "nifty500_coverage": 0,
             "market_data_coverage": 0.0,
-            "coverage_required": MIN_MARKET_DATA_COVERAGE,
             "data_quality": "UNKNOWN",
             "data_age_seconds": None,
             "buy_waiting": 0,
@@ -81,14 +79,7 @@ class ScannerEngine:
 
     @staticmethod
     def _candidate_id(symbol, side, today_open, pdh, pdl):
-        return "|".join([
-            pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d"),
-            str(symbol).upper(),
-            str(side).upper(),
-            f"{float(today_open):.4f}",
-            f"{float(pdh):.4f}",
-            f"{float(pdl):.4f}",
-        ])
+        return "|".join([pd.Timestamp.now(tz=INDIA_TZ).strftime("%Y-%m-%d"), str(symbol).upper(), str(side).upper(), f"{float(today_open):.4f}", f"{float(pdh):.4f}", f"{float(pdl):.4f}"])
 
     def _waiting_path(self):
         return Path(__file__).resolve().parents[1] / "outputs" / "waiting_candidates.json"
@@ -96,24 +87,15 @@ class ScannerEngine:
     def _load_waiting(self):
         try:
             payload = json.loads(self._waiting_path().read_text(encoding="utf-8"))
-            if payload.get("date") != self._today():
-                return
-            if payload.get("strategy_version") not in (None, self.strategy.strategy_version):
-                return
-            self.waiting = payload.get("waiting", {"BUY": {}, "SELL": {}})
-            self.qualified = payload.get("qualified", {"BUY": {}, "SELL": {}})
-            self._activated = payload.get("activated", {"BUY": False, "SELL": False})
-            self._activated_at = payload.get("activated_at", {"BUY": None, "SELL": None})
-        except Exception:
-            pass
+            if payload.get("date") != self._today() or payload.get("strategy_version") not in (None, self.strategy.strategy_version): return
+            self.waiting = payload.get("waiting", {"BUY": {}, "SELL": {}}); self.qualified = payload.get("qualified", {"BUY": {}, "SELL": {}}); self._activated = payload.get("activated", {"BUY": False, "SELL": False}); self._activated_at = payload.get("activated_at", {"BUY": None, "SELL": None})
+        except Exception: pass
 
     def _save_waiting(self):
         path = self._waiting_path(); path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_suffix(".tmp")
         try:
-            tmp.write_text(json.dumps({"date": self._today(), "updated_at": datetime.now(INDIA_TZ).isoformat(timespec="seconds"), "strategy": self.strategy.strategy_id, "strategy_version": self.strategy.strategy_version, "activated": self._activated, "activated_at": self._activated_at, "waiting": self.waiting, "qualified": self.qualified}, indent=2, default=str), encoding="utf-8")
-            tmp.replace(path)
-        except Exception as error:
-            print("Could not persist waiting candidates:", error)
+            tmp.write_text(json.dumps({"date": self._today(), "updated_at": datetime.now(INDIA_TZ).isoformat(timespec="seconds"), "strategy": self.strategy.strategy_id, "strategy_version": self.strategy.strategy_version, "activated": self._activated, "activated_at": self._activated_at, "waiting": self.waiting, "qualified": self.qualified}, indent=2, default=str), encoding="utf-8"); tmp.replace(path)
+        except Exception as error: print("Could not persist waiting candidates:", error)
 
     def _write_diagnostics(self):
         self.diagnostics.update({"buy_waiting": len(self.waiting["BUY"]), "sell_waiting": len(self.waiting["SELL"]), "buy_qualified": len(self.qualified["BUY"]), "sell_qualified": len(self.qualified["SELL"])})
@@ -132,8 +114,11 @@ class ScannerEngine:
         if not force and self._prepared_date == today and not self.references.empty: return self.references
         self.universe = self.universe_engine.get_dataframe(refresh=True)
         refs = ReferenceStore(self.universe).prepare()
-        if refs is None or refs.empty: self.references = pd.DataFrame(); self._prepared_date = None; return self.references
-        self.references = refs; self._prepared_date = today; self.diagnostics["reference_data_count"] = len(refs); return refs
+        if refs is None or refs.empty:
+            self.references = pd.DataFrame(); self._prepared_date = None
+            self.diagnostics["rejections"]["reference_data"] = "REFERENCE_DATA_UNAVAILABLE"
+            return self.references
+        self.references = refs; self._prepared_date = today; self.diagnostics["reference_data_count"] = len(refs); self.diagnostics["nifty500_coverage"] = round(len(refs) / max(len(self.universe), 1), 4); return refs
 
     def _industry_for_symbol(self, symbol):
         try:
@@ -209,7 +194,7 @@ class ScannerEngine:
 
     def _activate_side(self, side, change):
         active = self.strategy.market_aligned(side, change)
-        if active and not self._activated[side]: self._activated[side] = True; self._activated_at[side] = datetime.now(INDIA_TZ).isoformat(timespec="seconds")
+        if active and not self._activated[side]: self._activated[side] = True; self._activated_at[side] = datetime.now(INDIA_TZ).isoformat()
         return active
 
     def _seed_and_update(self, side, change, market_data):
@@ -262,11 +247,9 @@ class ScannerEngine:
         self.diagnostics = self._empty_diagnostics(); refs = self.prepare_reference_data()
         if refs.empty: self.diagnostics["rejections"]["missing_data"] = "REFERENCE_DATA_UNAVAILABLE"; return self._finish([])
         symbols = refs["Symbol"].astype(str).str.upper().drop_duplicates().tolist(); self.diagnostics["stocks_scanned"] = len(symbols); self.diagnostics["reference_data_count"] = len(refs)
-        data = self._market_snapshot(symbols); self.universe_market_data = data; available = sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"] = round(available / len(symbols), 4) if symbols else 0.0; self.diagnostics["coverage_required"] = MIN_MARKET_DATA_COVERAGE
-        self.diagnostics["data_quality"] = "GOOD" if available / len(symbols) >= MIN_MARKET_DATA_COVERAGE else "DEGRADED" if symbols else "NO_DATA"
+        data = self._market_snapshot(symbols); self.universe_market_data = data; available = sum(1 for s in symbols if s in data and not data[s].empty); self.diagnostics["market_data_coverage"] = round(available / len(symbols), 4) if symbols else 0.0; self.diagnostics["data_quality"] = "GOOD" if available / len(symbols) >= 0.60 else "DEGRADED" if symbols else "NO_DATA"
         daily = self._daily_open_snapshot(symbols); self._build_gap_board(refs, data, daily)
-        if available == 0: self.diagnostics["rejections"]["missing_data"] = len(symbols); return self._finish([])
-        if available / len(symbols) < MIN_MARKET_DATA_COVERAGE: self.diagnostics["rejections"]["missing_data"] = f"1M_COVERAGE_BELOW_{MIN_MARKET_DATA_COVERAGE:.0%}"; return self._finish([])
+        if available == 0: self.diagnostics["rejections"]["missing_data"] = "NO_INTRADAY_STOCK_DATA"; return self._finish([])
         change = self._nifty_snapshot()
         if change is None: self.diagnostics["rejections"]["missing_data"] = "NIFTY500_INDEX_UNAVAILABLE"; return self._finish([])
         self.diagnostics["nifty500_change_pct"] = round(change, 4); self.diagnostics["nifty500_direction"] = "BULLISH" if change >= NIFTY500_MIN_CHANGE_PCT else "BEARISH" if change <= -NIFTY500_MIN_CHANGE_PCT else "NEUTRAL"; self.diagnostics["nifty500_bullish"] = int(change >= NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_bearish"] = int(change <= -NIFTY500_MIN_CHANGE_PCT); self.diagnostics["nifty500_neutral"] = int(abs(change) < NIFTY500_MIN_CHANGE_PCT)
