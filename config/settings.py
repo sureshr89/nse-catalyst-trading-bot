@@ -55,7 +55,8 @@ MAX_TRADES_PER_STOCK = 1
 DAILY_MAX_LOSS = DAILY_MAX_LOSS_PER_STRATEGY
 COOLDOWN_MINUTES = 0
 
-# Paper trading only. Dhan/web.dhan.co will be connected later.
+# Paper trading only. Dhan is now the primary market-data source when its
+# Streamlit secrets are configured. No Dhan order endpoint is called.
 PAPER_TRADING = True
 LIVE_TRADING = False
 
