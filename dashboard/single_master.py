@@ -18,7 +18,7 @@ st_autorefresh(interval=REFRESH * 1000, key="master_refresh")
 try:
     from market.nifty500_breadth import BREADTH
     from market.dhan_data import configured as dhan_configured
-    d = BREADTH.snapshot(force=True)
+    d = BREADTH.snapshot(force=False)
     dhan_ok = dhan_configured()
 except Exception as exc:
     d = {"complete":False,"reason":f"{type(exc).__name__}: {exc}","evaluated":0,"total":500,"market_data_source":"DHAN"}
@@ -74,14 +74,15 @@ st.markdown(f"<div class='sub'>NIFTY 500 • S1–S5 • PAPER TRADING ONLY • 
 st.markdown("<div class='sec'>🎯 Master Market Alignment</div>",unsafe_allow_html=True)
 st.markdown("<div class='grid6'>"+"".join([card("NIFTY 500",pct(n)),card("SECTORS",pct(sec)),card("A/D RATIO",f"{float(ad):.2f}" if ad is not None else "WAITING"),card("BREADTH",f"{evaln}/500"),card("SECTOR DATA",f"{sp}/500"),card("MASTER BIAS",bias)])+"</div>",unsafe_allow_html=True)
 if complete and scomplete:
-    st.markdown(f"<div class='status'><span class='green'><b>● DHAN LIVE DATA READY</b></span> • 500/500 stocks • Advances {d.get('advances','—')} • Declines {d.get('declines','—')} • A/D {float(ad):.2f}</div>",unsafe_allow_html=True)
+    st.markdown(f"<div class='status'><span class='green'><b>● DHAN DATA READY</b></span> • 500/500 stocks • Advances {d.get('advances','—')} • Declines {d.get('declines','—')} • A/D {float(ad):.2f}</div>",unsafe_allow_html=True)
 else:
     st.markdown(f"<div class='status'><span class='yellow'><b>● DATA WAITING</b></span> • Dhan configured: {'YES' if dhan_ok else 'NO'} • {d.get('reason','Waiting for market data')} • stocks {evaln}/500 • sectors {sm}/500 mapped / {sp}/500 priced</div>",unsafe_allow_html=True)
 st.markdown("<div class='grid4'>"+"".join([card("🟢 BUY GATE","PASS ✓" if buy else "WAIT"),card("🔴 SELL GATE","PASS ✓" if sell else "WAIT"),card("📡 DATA",f"Dhan {evaln}/500"),card("🔄 REFRESH","15 sec")])+"</div>",unsafe_allow_html=True)
 
-st.markdown("<div class='sec'>📚 Previous Close — Reference Only</div>",unsafe_allow_html=True)
+st.markdown("<div class='sec'>📚 Previous / Latest Closed Session</div>",unsafe_allow_html=True)
 pc=d.get("nifty500_previous_close")
-st.markdown("<div class='grid4'>"+"".join([card("NIFTY 500 CLOSE",f"{float(pc):,.2f}" if pc is not None else "—"),card("A/D PREVIOUS DAY","Stored after EOD"),card("ADVANCES / DECLINES",f"{d.get('advances','—')} / {d.get('declines','—')}"),card("SECTOR ALIGNMENT",pct(sec)),card("POSITIVE SECTORS",d.get('positive_sectors','—')),card("NEGATIVE SECTORS",d.get('negative_sectors','—')),card("500-STOCK COVERAGE",f"{evaln}/500"),card("SOURCE / DATE",f"Dhan • {now.date()}")])+"</div>",unsafe_allow_html=True)
+closed_label = now.strftime("%d %b %Y") if pc is not None else "Waiting"
+st.markdown("<div class='grid4'>"+"".join([card("NIFTY 500 CLOSE",f"{float(pc):,.2f}" if pc is not None else "—"),card("A/D — CLOSED SESSION",f"{float(ad):.2f}" if ad is not None else "—"),card("ADVANCES / DECLINES",f"{d.get('advances','—')} / {d.get('declines','—')}"),card("SECTOR ALIGNMENT",pct(sec)),card("POSITIVE SECTORS",d.get('positive_sectors','—')),card("NEGATIVE SECTORS",d.get('negative_sectors','—')),card("500-STOCK COVERAGE",f"{evaln}/500"),card("SOURCE / DATE",f"Dhan • {closed_label}")])+"</div>",unsafe_allow_html=True)
 
 st.markdown("<div class='sec'>🔒 Fixed Paper-Trading Rules</div>",unsafe_allow_html=True)
 st.markdown("<div class='grid6'>"+"".join([card("CAPITAL / TRADE","₹250,000"),card("RISK / TRADE","₹1,400–₹1,500"),card("TARGET / TRADE","1.25R"),card("MAX TRADES / STRATEGY","1 / day"),card("DAILY LOSS / TRADE","₹1,500"),card("REFRESH","15 sec")])+"</div>",unsafe_allow_html=True)
@@ -140,5 +141,4 @@ with t3:
 st.markdown("<div class='sec'>💼 Current Paper Trades — All Strategies</div>",unsafe_allow_html=True)
 st.info("No open paper trades — waiting for complete alignment and an exact OHLC/PDH/PDL setup.")
 st.markdown("<div class='sec'>⚙️ Data Status</div>",unsafe_allow_html=True)
-st.markdown("<div class='grid4'>"+"".join([card("DHAN CREDENTIALS","READY" if dhan_ok else "NOT CONFIGURED"),card("LIVE STOCK DATA",f"{evaln}/500"),card("SECTOR DATA",f"{sm}/500 mapped • {sp}/500 priced"),card("STATUS",str(d.get('reason','OK'))[:55])])+"</div>",unsafe_allow_html=True)
-st.caption("Paper trading only • no real orders • no artificial market or performance values.")
+st.markdown("<div class='grid4'>"+"".join([card("DHAN CREDENTIALS","READY" if dhan_ok else "NOT CONFIGURED"),card("LIVE STOCK DATA",f"{evaln}/500"),card("SECTOR DATA",f"{sm}/{sp}"),card("STATUS",d.get('reason','OK'))])+"</div>",unsafe_allow_html=True)
