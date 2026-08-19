@@ -34,6 +34,7 @@ BUY_PREVIOUS_CANDLE = "GREEN"
 SELL_PREVIOUS_CANDLE = "RED"
 
 # Position sizing is based on the actual entry-to-SL distance.
+# Each trade is allocated up to Rs 2.5 lakh of capital.
 ALLOCATED_CAPITAL_PER_TRADE = 250000
 MIN_REQUIRED_RISK = 1400
 MAX_RISK_PER_TRADE = 1500
@@ -41,7 +42,11 @@ RISK_REWARD_RATIO = 1.25
 MIN_RR_RATIO = 1.25
 POSITION_SIZE_METHOD = "RISK_BOUNDED_BY_SL"
 
-# Daily controls are per strategy.
+# Five strategies × one active position per strategy = Rs 12.5 lakh total paper capital.
+TOTAL_CAPITAL = 1250000
+MAX_OPEN_POSITIONS = 5
+
+# Daily controls are per strategy, not global.
 MAX_TRADES_PER_STRATEGY_PER_DAY = 2
 DAILY_MAX_LOSS_PER_STRATEGY = 3000
 MAX_TRADES_PER_STOCK = 1
@@ -56,6 +61,7 @@ STOP_LOSS_METHOD = "STRATEGY_SPECIFIC_ENTRY_TIME_ONLY"
 # Single master journal for all strategies.
 MASTER_JOURNAL_FILE = "outputs/strategy_journal_master.csv"
 SIGNAL_LOG_FILE = "outputs/signals.csv"
+TRADE_LOG_FILE = "outputs/trades.csv"
 
-# Retired controls retained only for backward-compatible imports.
+# Retired control kept only for backward-compatible imports.
 DAILY_PROFIT_TARGET = None
