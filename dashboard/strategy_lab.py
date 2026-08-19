@@ -1,4 +1,4 @@
-"""Mobile-first S1-S5 comparison: one numeric table, then comparison charts, then theory."""
+"""Unified S1-S5 comparison and signal analytics."""
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -8,35 +8,32 @@ def _read(name):
  p=OUTPUTS/name
  try:return pd.read_csv(p) if p.exists() else pd.DataFrame()
  except Exception:return pd.DataFrame()
-def _col(df,names):
+def _strategy_col(df):
  if df.empty:return None
- wanted={str(x).lower().replace(" ","_") for x in names}
- return next((c for c in df.columns if str(c).lower().replace(" ","_") in wanted),None)
+ for c in df.columns:
+  if str(c).lower().replace(" ","_") in {"strategy","strategy_id","setup","system"}:return c
+ return None
 def _stats():
- t=_read("trades.csv");s=_read("signals.csv");tc=_col(t,["strategy","strategy_id","setup","system"]);sc=_col(s,["strategy","strategy_id","setup","system"]);rows=[]
+ trades=_read("trades.csv");signals=_read("signals.csv");tc=_strategy_col(trades);sc=_strategy_col(signals);rows=[]
  for sid,name in STRATEGIES.items():
-  tt=t[t[tc].astype(str).str.upper().str.startswith(sid)] if tc else pd.DataFrame();ss=s[s[sc].astype(str).str.upper().str.startswith(sid)] if sc else pd.DataFrame();rc=_col(tt,["result","outcome","status"]);rcol=_col(tt,["r","r_multiple","net_r","pnl_r"]);pcol=_col(tt,["pnl","p&l","profit_loss","net_pnl"]);vals=pd.to_numeric(tt[rcol],errors="coerce").dropna() if rcol else pd.Series(dtype=float);wins=int((vals>0).sum()) if not vals.empty else int(tt[rc].astype(str).str.upper().isin(["WIN","WON","PROFIT"]).sum()) if rc else 0;loss=int((vals<0).sum()) if not vals.empty else int(tt[rc].astype(str).str.upper().isin(["LOSS","LOST"]).sum()) if rc else 0;netr=float(vals.sum()) if not vals.empty else 0.0;pnl=float(pd.to_numeric(tt[pcol],errors="coerce").sum()) if pcol else 0.0;dd=float((vals.cumsum()-vals.cumsum().cummax()).min()) if not vals.empty else 0.0;rows.append({"Strategy":sid,"Signals":len(ss),"Taken":len(tt),"Not Taken":max(len(ss)-len(tt),0),"Wins":wins,"Losses":loss,"Win %":wins/(wins+loss)*100 if wins+loss else 0.0,"Net R":netr,"P&L":pnl,"Max DD":dd})
+  t=trades[trades[tc].astype(str).str.upper().str.startswith(sid)] if tc else pd.DataFrame();s=signals[signals[sc].astype(str).str.upper().str.startswith(sid)] if sc else pd.DataFrame();rcol=next((c for c in t.columns if str(c).lower() in {"r","r_multiple","net_r","pnl_r"}),None);pcol=next((c for c in t.columns if str(c).lower() in {"pnl","p&l","profit_loss","net_pnl"}),None);vals=pd.to_numeric(t[rcol],errors="coerce").dropna() if rcol else pd.Series(dtype=float);wins=int((vals>0).sum()) if not vals.empty else 0;losses=int((vals<0).sum()) if not vals.empty else 0;rows.append({"Strategy":sid,"Signals":len(s),"Taken":len(t),"Not Taken":max(len(s)-len(t),0),"Wins":wins,"Losses":losses,"Win Rate":wins/(wins+losses)*100 if wins+losses else None,"Net R":vals.sum() if not vals.empty else None,"Net P&L":pd.to_numeric(t[pcol],errors="coerce").sum() if pcol else None,"Max DD (R)":(vals.cumsum()-vals.cumsum().cummax()).min() if not vals.empty else None})
  return pd.DataFrame(rows)
 def render_strategy_lab():
- st.markdown("## ⚖️ S1–S5 STRATEGY COMPARISON")
- st.caption("All five strategies • one view • numbers first • charts second")
- d=_stats()
- st.dataframe(d[["Strategy","Signals","Taken","Not Taken","Wins","Losses","Win %","Net R","P&L","Max DD"]],width="stretch",hide_index=True)
- st.markdown("### 📊 Comparison Charts")
- if d["Signals"].sum()==0: st.info("No verified signal/trade history yet. Performance remains 0 until real records are generated.")
+ st.markdown("## ⚖️ S1–S5 Strategy Comparison")
+ d=_stats();display=d.copy();display["Win Rate"]=display["Win Rate"].map(lambda x:f"{x:.1f}%" if pd.notna(x) else "—")
+ for c in ["Net R","Net P&L","Max DD (R)"]:display[c]=display[c].map(lambda x:f"{x:.2f}" if pd.notna(x) else "—")
+ st.dataframe(display,width="stretch",hide_index=True)
+ if d["Signals"].sum()==0:st.info("No verified signal/trade ledger yet; performance figures will populate from recorded results.")
  else:
-  st.bar_chart(d.set_index("Strategy")[["Win %"]],height=220)
-  st.bar_chart(d.set_index("Strategy")[["Signals","Taken","Not Taken"]],height=220)
-  st.bar_chart(d.set_index("Strategy")[["Net R"]],height=220)
-  st.bar_chart(d.set_index("Strategy")[["Max DD"]],height=220)
- st.markdown("### ⏱️ SIGNAL → ENTRY → EXIT")
+  st.markdown("### 📊 Comparison Charts");st.bar_chart(d.set_index("Strategy")[["Win Rate","Net R"]].fillna(0),height=240);st.bar_chart(d.set_index("Strategy")[["Signals","Taken","Not Taken"]],height=240)
+ st.markdown("### ⏱️ Signal → Entry → Exit")
  s=_read("signals.csv")
  if not s.empty:
-  cols=[c for c in s.columns if str(c).lower().replace(" ","_") in {"timestamp","time","signal_time","entry_time","exit_time","strategy","strategy_id","signal","side","entry","sl","stop_loss","target","exit","status"}]
-  st.dataframe(s[cols].tail(30) if cols else s.tail(30),width="stretch",hide_index=True)
- else: st.info("No signals recorded yet.")
- st.markdown("### 📖 STRATEGY THEORY")
- theory={"S1":"Sweep PDH/PDL liquidity and reclaim the open. Require confirmation and master breadth/sector alignment.","S2":"Break PDH/PDL, retest the broken level and confirm continuation. Do not chase the first break.","S3":"Sweep the opposite PDH/PDL side and reclaim/reject the open with breadth and sector confirmation.","S4":"Break a previously formed intraday high/low with confirmation; current unformed extremes are not references.","S5":"Direct PDH/PDL breakout with previous-candle confirmation and full 500/500 master alignment."}
- for sid,name in STRATEGIES.items():
-  with st.expander(f"{sid} • {name}"):
-   st.write(theory[sid]);st.write("**Entry:** setup + confirmation. **SL:** setup invalidation. **Target:** 1.25R. **Entry:** 09:45–14:00 IST. **Square-off:** 15:00 IST. **Gate:** NIFTY 500 + sector + A/D + verified 500/500 breadth.")
+  cols=[c for c in s.columns if str(c).lower() in {"timestamp","time","signal_time","entry_time","exit_time","strategy","strategy_id","signal","side","entry","sl","stop_loss","target","exit","status"}]
+  st.dataframe(s[cols].tail(100) if cols else s.tail(100),width="stretch",hide_index=True)
+ else:st.info("No signal timing records yet.")
+ st.markdown("### 📖 Strategy Theory & Rules")
+ theory={"S1":"Sweep PDH/PDL liquidity and reclaim the open.","S2":"Break PDH/PDL, retest the broken level and confirm continuation.","S3":"Sweep the opposite PDH/PDL side and reclaim/reject the open.","S4":"Break a previously formed intraday high/low with confirmation.","S5":"Direct PDH/PDL breakout with previous-candle confirmation."}
+ rows=[]
+ for sid,name in STRATEGIES.items():rows.append({"Strategy":sid,"Theory":theory[sid],"Entry":"Setup + confirmation","SL":"Setup/swing invalidation","Target":"1.25R","Entry Time":"09:45–14:00 IST","Square-off":"15:00 IST","Gate":"NIFTY 500 + Sector + A/D; 500/500"})
+ with st.expander("▸ View complete S1–S5 theory / rules table",expanded=False):st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
