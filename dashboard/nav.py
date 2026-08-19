@@ -1,13 +1,15 @@
 import streamlit as st
 
-def _link(label,page): st.page_link(page,label=label)
+def _link(label,page):
+    st.page_link(page,label=label)
+
 def _row(items):
     cols=st.columns(len(items),gap="small")
     for col,(label,page) in zip(cols,items):
-        with col:_link(label,page)
+        with col: _link(label,page)
 
 def render_nav(top_offset=0):
-    if top_offset: st.write("");st.write("")
+    if top_offset: st.write(""); st.write("")
     st.markdown("""
     <style>
     .nse-nav-title{font-size:.78rem;font-weight:800;letter-spacing:.06em;margin:8px 0 7px;text-transform:uppercase;color:#A9B7CA}
@@ -20,4 +22,11 @@ def render_nav(top_offset=0):
     </style>
     """,unsafe_allow_html=True)
     st.markdown('<div class="nse-nav-title">🏠 STRATEGIES</div>',unsafe_allow_html=True)
-    _row([("🔵 STRATEGY 1","pages/current_trading.py"),("🔴 STRATEGY 2","pages/strategy2_current.py"),("🟢 STRATEGY 3","pages/strategy3_current.py"),("🟣 STRATEGY 4","pages/strategy4_current.py"),("🟠 STRATEGY 5","pages/strategy5_current.py")])
+    _row([
+        ("🔵 STRATEGY 1","pages/current_trading.py"),
+        ("🔴 STRATEGY 2","pages/strategy2_current.py"),
+        ("🟢 STRATEGY 3","pages/strategy3_current.py"),
+        ("🟣 STRATEGY 4","pages/strategy4_current.py"),
+        ("🟠 STRATEGY 5","pages/strategy5_current.py"),
+        ("📊 COMPARE ALL","pages/compare_strategies.py"),
+    ])
