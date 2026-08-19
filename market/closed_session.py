@@ -5,6 +5,7 @@ from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
+import time
 import pandas as pd
 
 from data.stock_universe import StockUniverse
@@ -29,7 +30,6 @@ def _find_saved_before(date):
 def latest_saved_before(date=None):
     d=date or datetime.now(IST).date(); df,summary=_find_saved_before(d)
     if not df.empty:return df,summary
-    # If no persistent history exists yet, actually obtain the latest completed quote snapshot now.
     return build_closed_snapshot(force=True)
 
 def _universe():
@@ -46,7 +46,6 @@ def _completed_session_date(now):
 
 def build_closed_snapshot(force=False):
     now=datetime.now(IST)
-    # Reuse an already saved completed session before making another Dhan request.
     if not force:
         saved_df,saved_summary=_find_saved_before(now.date())
         if not saved_df.empty and len(saved_df)>=500:return saved_df,saved_summary
@@ -57,7 +56,6 @@ def build_closed_snapshot(force=False):
     if len(u)!=500:return pd.DataFrame(),{"complete":False,"reason":f"NIFTY 500 universe only {len(u)}/500","dhan_status":dhan_status()}
     mapping=map_nifty500(u.Symbol.tolist())
     if len(mapping)!=500:return pd.DataFrame(),{"complete":False,"reason":f"Dhan security mapping only {len(mapping)}/500","dhan_status":dhan_status()}
-    # One batched Dhan quote request. Outside market hours TodayClose is the latest completed close.
     q=market_quote(mapping,cache_seconds=0)
     if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan returned no quotes for closed-session snapshot","dhan_status":dhan_status()}
     q["Close"]=pd.to_numeric(q.get("TodayClose"),errors="coerce");q["PreviousClose"]=pd.to_numeric(q.get("PreviousClose"),errors="coerce")
@@ -68,10 +66,13 @@ def build_closed_snapshot(force=False):
     try:
         sm=load_sector_map(u,refresh=False);sector=calculate_sector_alignment(q[["Symbol","ChangePct"]].rename(columns={"ChangePct":"change_pct"}),sm,"change_pct")
     except Exception as exc:sector={"alignment_pct":None,"positive_sectors":0,"negative_sectors":0,"coverage":"0/500","error":str(exc)}
+    # Dhan limits quote requests; wait before the separate index request.
+    time.sleep(1.1)
     idx=index_quote("NIFTY 500")
+    idx_close=(idx or {}).get("Close");idx_prev=(idx or {}).get("PreviousClose")
+    idx_pct=((idx_close-idx_prev)/idx_prev*100) if idx_close and idx_prev else None
     session_date=_completed_session_date(now).isoformat()
-    summary={"complete":len(q)>=500,"session_date":session_date,"market_close":"15:30 IST","nifty500_close":(idx or {}).get("Close"),"nifty500_previous_close":(idx or {}).get("PreviousClose"),"nifty500_change_pct":(idx or {}).get("NetChange"),"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad,"sector_alignment_pct":sector.get("alignment_pct"),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"coverage":f"{len(q)}/500","source":"Dhan closed OHLC snapshot","saved_at":now.isoformat(),"dhan_status":dhan_status()}
+    summary={"complete":len(q)>=500,"session_date":session_date,"market_close":"15:30 IST","nifty500_close":idx_close,"nifty500_previous_close":idx_prev,"nifty500_change_pct":idx_pct,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad,"sector_alignment_pct":sector.get("alignment_pct"),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"coverage":f"{len(q)}/500","source":"Dhan closed OHLC snapshot","saved_at":now.isoformat(),"dhan_status":dhan_status()}
     out=q[[c for c in ["Symbol","SecurityId","Close","PreviousClose","TodayOpen","TodayHigh","TodayLow","Volume","ChangePct"] if c in q.columns]].copy()
-    # Save under the actual completed-session date, not today's fetch date.
     out.to_csv(_file(datetime.fromisoformat(session_date).date()),index=False);_summary_file(datetime.fromisoformat(session_date).date()).write_text(json.dumps(summary,indent=2,default=str))
     return out,summary
