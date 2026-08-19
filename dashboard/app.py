@@ -25,7 +25,6 @@ def pick(d, *keys):
 
 def val(v): return "—" if v is None else str(v)
 
-# One page only. Analysis and closed/reference information stay inside this dashboard.
 ref = load_reference()
 prev = ref.get("previous_day", {}) if isinstance(ref, dict) else {}
 if not isinstance(prev, dict): prev = {}
@@ -45,7 +44,7 @@ st.markdown("""
 </style>""", unsafe_allow_html=True)
 
 st.markdown("<div class='pc-title'>📚 Previous Close — Reference Data</div>", unsafe_allow_html=True)
-st.markdown("<div class='pc-grid'>" + "".join([
+items = [
     f"<div class='pc-card'><small>NIFTY 500 CLOSE</small><b>{val(nifty_close)}</b></div>",
     f"<div class='pc-card'><small>A/D RATIO</small><b>{val(ad_ratio)}</b></div>",
     f"<div class='pc-card'><small>ADVANCES</small><b>{val(adv)}</b></div>",
@@ -53,9 +52,11 @@ st.markdown("<div class='pc-grid'>" + "".join([
     f"<div class='pc-card'><small>SECTOR ALIGNMENT</small><b>{val(sector_alignment)}</b></div>",
     f"<div class='pc-card'><small>POSITIVE SECTORS</small><b>{val(positive_sectors)}</b></div>",
     f"<div class='pc-card'><small>NEGATIVE SECTORS</small><b>{val(negative_sectors)}</b></div>",
-    f"<div class='pc-card'><small>COVERAGE / DATE</small><b>{val(coverage)} • {val(data_date)}</b></div>
-]) + "</div>", unsafe_allow_html=True)
+    f"<div class='pc-card'><small>COVERAGE / DATE</small><b>{val(coverage)} • {val(data_date)}</b></div>",
+]
+st.markdown("<div class='pc-grid'>" + "".join(items) + "</div>", unsafe_allow_html=True)
 
+# Exactly one Streamlit page; analysis and closed/reference information remain inside it.
 master = st.Page("master_dashboard.py", title="NSE Catalyst", icon="📊", default=True)
 pg = st.navigation([master], position="hidden")
 pg.run()
