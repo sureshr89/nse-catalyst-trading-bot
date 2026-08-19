@@ -31,7 +31,7 @@ def _post(path,payload,timeout=15):
  except Exception as exc:_set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
 def _valid_master(x):
  if x is None or x.empty:return False
- cols={str(c).strip().upper() for c in x.columns};return bool(({"SEM_SECURITY_ID","SECURITY_ID"}&cols) and ({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols))
+ cols={str(c).strip().upper() for c in x.columns};return bool(({"SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"}&cols) and ({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols))
 def load_instrument_master(force=False):
  CACHE_DIR.mkdir(parents=True,exist_ok=True)
  if MASTER_CACHE.exists() and not force:
@@ -50,7 +50,7 @@ def _col(frame,names):
 def map_nifty500(symbols,force=False):
  wanted={str(s).strip().upper().replace(".NS","") for s in symbols if str(s).strip()};m=load_instrument_master(force)
  if m.empty or not wanted:return pd.DataFrame(columns=["Symbol","SecurityId","ExchangeSegment","Instrument"])
- sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"));ser=_col(m,("SEM_SERIES","SERIES"))
+ sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"));ser=_col(m,("SEM_SERIES","SERIES"))
  if not sc or not ic:return pd.DataFrame(columns=["Symbol","SecurityId","ExchangeSegment","Instrument"])
  x=m.copy();x["_symbol"]=x[sc].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
  if seg:x=x[x[seg].astype(str).str.upper().eq("E")]
@@ -80,7 +80,7 @@ def market_quote(mapping,cache_seconds=10):
 def index_quote(index_name="NIFTY 500"):
  m=load_instrument_master()
  if m.empty or not configured():return None
- nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"))
+ nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SECURITY_ID","SEM_SMST_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"))
  if not nc or not ic:return None
  x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();mask=x["_name"].eq(index_name.upper())
  if not mask.any():mask=x["_name"].str.contains(index_name.upper(),regex=False,na=False)
