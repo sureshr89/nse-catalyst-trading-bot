@@ -1,4 +1,4 @@
-"""NIFTY 500 scanner universe."""
+"""NIFTY 500 scanner universe with resilient local fallback."""
 from io import StringIO
 from pathlib import Path
 
@@ -10,21 +10,15 @@ class StockUniverse:
     MIN_EXPECTED_STOCKS = 450
 
     def __init__(self):
-        self.urls = {
-            "NIFTY500": "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
-        }
+        self.urls = {"NIFTY500": "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"}
         self.data_folder = Path("data")
         self.output_file = self.data_folder / "nifty500.csv"
         self.data_folder.mkdir(parents=True, exist_ok=True)
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36",
-            "Accept": "text/csv,*/*",
-            "Referer": "https://www.niftyindices.com/",
-        }
+        self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36", "Accept": "text/csv,*/*", "Referer": "https://www.niftyindices.com/"}
 
     def _download(self, url):
         try:
-            response = requests.get(url, headers=self.headers, timeout=30)
+            response = requests.get(url, headers=self.headers, timeout=15)
             if response.status_code != 200 or not response.text.strip():
                 return None
             return pd.read_csv(StringIO(response.text))
@@ -51,19 +45,20 @@ class StockUniverse:
 
     def download(self):
         df = self._clean(self._download(self.urls["NIFTY500"]))
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < self.MIN_EXPECTED_STOCKS:
             return None
         df["Universe"] = "NIFTY500"
-        if len(df) < self.MIN_EXPECTED_STOCKS:
-            print("NIFTY 500 universe rejected: only", len(df), "stocks")
-            return None
         return df
 
     def save(self, df):
         if df is None or df.empty or len(df) < self.MIN_EXPECTED_STOCKS:
             return False
-        df.to_csv(self.output_file, index=False)
-        return True
+        try:
+            df.to_csv(self.output_file, index=False)
+            return True
+        except Exception as error:
+            print("Universe save error:", error)
+            return False
 
     def load_local(self):
         if not self.output_file.exists():
@@ -78,17 +73,21 @@ class StockUniverse:
                 df["Industry"] = "UNKNOWN"
             df = df.drop_duplicates("Symbol").reset_index(drop=True)
             return df if len(df) >= self.MIN_EXPECTED_STOCKS else None
-        except Exception:
+        except Exception as error:
+            print("Local universe read error:", error)
             return None
 
     def get_dataframe(self, refresh=True):
-        df = self.download() if refresh else None
-        if df is None:
-            df = self.load_local()
-        if df is None:
-            return pd.DataFrame(columns=["Symbol", "Industry", "Universe"])
-        self.save(df)
-        return df
+        # A temporary remote-list failure must never turn the scanner into an empty universe.
+        local = self.load_local()
+        if refresh:
+            fresh = self.download()
+            if fresh is not None:
+                self.save(fresh)
+                return fresh
+        if local is not None:
+            return local
+        return pd.DataFrame(columns=["Symbol", "Industry", "Universe"])
 
     def get_symbols(self, refresh=True):
         df = self.get_dataframe(refresh=refresh)
