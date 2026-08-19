@@ -1,4 +1,4 @@
-"""Single-page NSE Catalyst dashboard: live market, closed reference, and research ledgers."""
+"""Single-page NSE Catalyst dashboard with separate live and closed-session data."""
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -8,20 +8,54 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS = ROOT / "outputs"
 IST = ZoneInfo("Asia/Kolkata")
-REFRESH = 0
 STRATEGIES = {"S1":"PDH/PDL Sweep + Open Reclaim","S2":"PDH/PDL Breakout + Retest","S3":"PDL/PDH Sweep + Open Reclaim","S4":"Intraday High/Low Breakout","S5":"Direct PDH/PDL Breakout"}
 st.set_page_config(page_title="NSE Catalyst", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
+now = datetime.now(IST)
 
+# LIVE TABLE and CLOSED TABLE are deliberately independent.
 try:
     from market.nifty500_breadth import BREADTH
     from market.dhan_data import configured as dhan_configured, dhan_status
-    market = BREADTH.snapshot(force=False)
+    live_market = BREADTH.snapshot(force=False)
     dhan_ok = dhan_configured()
     api_status = dhan_status()
 except Exception as exc:
-    market={"complete":False,"sector_complete":False,"reason":f"{type(exc).__name__}: {exc}","evaluated":0,"total":500}
+    live_market={"complete":False,"sector_complete":False,"reason":f"{type(exc).__name__}: {exc}","evaluated":0,"total":500}
     dhan_ok=False; api_status={"ok":False,"stage":"IMPORT","message":str(exc),"received":0,"requested":0}
-now=datetime.now(IST)
+
+# After 15:30, use the independent persistent CLOSED SESSION table.
+closed_market = {}
+closed_df = pd.DataFrame()
+try:
+    from market.closed_session import build_closed_snapshot, latest_saved_before
+    if now.time().replace(tzinfo=None) >= datetime.strptime("15:30","%H:%M").time():
+        closed_df, closed_market = build_closed_snapshot(force=False)
+    else:
+        closed_df, closed_market = latest_saved_before(now.date())
+except Exception as exc:
+    closed_market = {"complete":False,"reason":f"Closed table: {type(exc).__name__}: {exc}"}
+
+# Prefer the independently saved completed session whenever it exists.
+if closed_market.get("complete") and len(closed_df) > 0:
+    market = {
+        "complete": len(closed_df) >= 500,
+        "sector_complete": closed_market.get("sector_alignment_pct") is not None,
+        "evaluated": len(closed_df), "total": 500,
+        "advances": closed_market.get("advances", 0), "declines": closed_market.get("declines", 0),
+        "ad_ratio": closed_market.get("ad_ratio"),
+        "nifty500_change_pct": closed_market.get("nifty500_change_pct"),
+        "nifty500_previous_close": closed_market.get("nifty500_close"),
+        "sector_alignment_pct": closed_market.get("sector_alignment_pct"),
+        "sector_priced": len(closed_df), "positive_sectors": closed_market.get("positive_sectors", 0),
+        "negative_sectors": closed_market.get("negative_sectors", 0),
+        "updated_at": f"Completed session {closed_market.get('session_date','')} • market close 15:30 IST • saved {closed_market.get('saved_at','')}",
+        "closed_session_label": f"Completed NSE session • {closed_market.get('session_date','')}",
+        "closed_session_basis": "Persistent Dhan completed-session table",
+        "market_data_source": "DHAN CLOSED TABLE"
+    }
+    api_status = closed_market.get("dhan_status", api_status)
+else:
+    market = live_market
 
 def read_csv(name):
     p=OUTPUTS/name
@@ -53,13 +87,21 @@ st.markdown("<div class='title'>📊 NSE Catalyst — Master Dashboard</div>",un
 st.markdown(f"<div class='sub'>NIFTY 500 • S1–S5 • PAPER TRADING ONLY • Dhan data • manual refresh only • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>",unsafe_allow_html=True)
 st.markdown("<div class='sec'>🎯 Master Market Alignment</div>",unsafe_allow_html=True)
 st.markdown("<div class='grid6'>"+"".join([card("NIFTY 500",pct(n)),card("SECTORS",pct(sec)),card("A/D RATIO",f"{ad:.2f}" if ad is not None else "WAITING"),card("BREADTH",f"{evaln}/500"),card("SECTOR DATA",f"{sp}/500"),card("MASTER BIAS",bias)])+"</div>",unsafe_allow_html=True)
-status_class="ok" if complete and scomplete else "wait"; status_text="DHAN DATA READY" if complete and scomplete else "DATA WAITING"; dh=str(api_status.get("message","OK")); received=api_status.get("received",0); requested=api_status.get("requested",0)
+status_class="ok" if complete and scomplete else "wait"; status_text="DHAN CLOSED DATA READY" if closed_market.get("complete") else ("DHAN LIVE DATA READY" if complete else "DATA WAITING"); dh=str(api_status.get("message",api_status.get("reason","OK"))); received=api_status.get("received",evaln); requested=api_status.get("requested",500)
 st.markdown(f"<div class='status'><span class='{status_class}'><b>● {status_text}</b></span> • Dhan configured: {'YES' if dhan_ok else 'NO'} • API: {'PASS' if api_status.get('ok') else 'WAIT/ERROR'} • {dh} • quotes {received}/{requested}</div>",unsafe_allow_html=True)
 
-st.markdown("<div class='sec'>📚 Previous / Latest Closed Session</div>",unsafe_allow_html=True)
+st.markdown("<div class='sec'>🟢 Live Market Table — 09:15 to 15:30 IST</div>",unsafe_allow_html=True)
+if now.time().replace(tzinfo=None) >= datetime.strptime("09:15","%H:%M").time() and now.time().replace(tzinfo=None) < datetime.strptime("15:30","%H:%M").time():
+    st.info("Live table is active. Data can be refreshed manually; the screen does not auto-refresh.")
+else:
+    st.caption("Live table is inactive outside market hours. It is kept separate from the closed-session table.")
+
+st.markdown("<div class='sec'>📚 Previous / Latest Closed Session — Separate Table</div>",unsafe_allow_html=True)
 pc=market.get("nifty500_previous_close")
 st.markdown("<div class='grid4'>"+"".join([card("NIFTY 500 CLOSE",f"{pc:,.2f}" if pc is not None else "—"),card("A/D RATIO",f"{ad:.2f}" if ad is not None else "—"),card("ADVANCES / DECLINES",f"{market.get('advances','—')} / {market.get('declines','—')}"),card("SECTOR ALIGNMENT",pct(sec)),card("POSITIVE SECTORS",market.get("positive_sectors","—")),card("NEGATIVE SECTORS",market.get("negative_sectors","—")),card("500-STOCK COVERAGE",f"{evaln}/500"),card("SESSION",market.get("updated_at","—"))])+"</div>",unsafe_allow_html=True)
-st.caption("After 15:30 IST, this section represents the latest completed NSE session. Values are never fabricated.")
+st.caption("This table is independent of live trading. After 15:30 IST it is saved as the completed NSE session and reused as yesterday's reference.")
+if not closed_df.empty:
+    st.download_button("⬇️ Download Closed NIFTY 500 CSV",closed_df.to_csv(index=False).encode(),f"nifty500_closed_{closed_market.get('session_date',now.date())}.csv","text/csv")
 
 trades=read_csv("trades.csv"); signals=read_csv("signals.csv")
 if not trades.empty and "strategy" in trades.columns:trades["strategy"]=trades["strategy"].map(strategy_name)
@@ -72,7 +114,7 @@ st.markdown(f"<div class='status'><b>{yesterday}</b> • Close: {f'{pc:,.2f}' if
 st.markdown("<div class='sec'>🧠 Daily Analysis & Journal</div>",unsafe_allow_html=True)
 if complete:
     conclusion="Bullish breadth" if (num(ad) is not None and ad>1 and num(n) is not None and n>0) else "Bearish breadth" if (num(ad) is not None and ad<1 and num(n) is not None and n<0) else "Mixed/neutral breadth"
-    st.markdown(f"<div class='status'><b>Session conclusion:</b> {conclusion}. This conclusion is derived only from the saved Dhan session values above. <b>Master bias:</b> {bias}.</div>",unsafe_allow_html=True)
+    st.markdown(f"<div class='status'><b>Session conclusion:</b> {conclusion}. Derived only from verified session data. <b>Master bias:</b> {bias}.</div>",unsafe_allow_html=True)
 else: st.info("Daily analysis is waiting for verified Dhan completed-session data.")
 
 st.markdown("<div class='sec'>1 · Today's Taken Trades</div>",unsafe_allow_html=True)
