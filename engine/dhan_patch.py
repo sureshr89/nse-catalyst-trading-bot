@@ -1,7 +1,7 @@
-"""Small compatibility patch that makes the existing S1-S5 engine use Dhan
-for the master NIFTY 500 / sector / A-D gates without rewriting the strategy
-state machine. The strategy candle layer remains unchanged until its dedicated
-Dhan intraday-feed integration is completed.
+"""Bridge the Dhan NIFTY 500 breadth snapshot into the strategy engine.
+
+Dhan is the master gate and current-price source when configured. The existing
+1-minute candle layer is retained for completed-candle confirmation.
 """
 from market.dhan_data import configured as dhan_configured
 from market.nifty500_breadth import BREADTH
@@ -10,6 +10,7 @@ from market.nifty500_breadth import BREADTH
 def install(MasterEngine):
     if getattr(MasterEngine, "_dhan_gate_patch_installed", False):
         return MasterEngine
+
     original = MasterEngine._market_snapshot
 
     def _market_snapshot(self):
@@ -21,18 +22,32 @@ def install(MasterEngine):
             if not breadth.get("complete"):
                 self.diagnostics["rejections"]["dhan_breadth"] = breadth.get("reason", "DHAN_BREADTH_UNAVAILABLE")
                 return base
+
             nifty = breadth.get("nifty500_change_pct")
             sector = breadth.get("sector_alignment_pct")
             ad_ratio = breadth.get("ad_ratio")
             sector_ok = bool(breadth.get("sector_complete"))
             buy = bool(nifty is not None and nifty > 0 and sector_ok and sector is not None and sector > 0 and ad_ratio is not None and ad_ratio > 1)
             sell = bool(nifty is not None and nifty < 0 and sector_ok and sector is not None and sector < 0 and ad_ratio is not None and ad_ratio < 1)
+
+            quote_rows = breadth.get("quote_rows")
+            if quote_rows is None:
+                quote_rows = []
+            if hasattr(quote_rows, "to_dict"):
+                quote_rows = quote_rows.to_dict("records")
+            dhan_quotes = {}
+            for row in quote_rows:
+                symbol = str(row.get("Symbol", "")).upper().strip()
+                if symbol:
+                    dhan_quotes[symbol] = row
+
             base.update({
                 "nifty_change": nifty,
                 "ad_ratio": ad_ratio,
                 "ad_complete": True,
                 "buy_alignment": buy,
                 "sell_alignment": sell,
+                "dhan_quotes": dhan_quotes,
             })
             base["sector"] = {
                 "available": sector_ok,
