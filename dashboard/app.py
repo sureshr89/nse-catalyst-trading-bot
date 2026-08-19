@@ -1,11 +1,11 @@
 """Reliable Streamlit entry point for NSE Catalyst."""
 from pathlib import Path
+import runpy
 import sys
+import threading
+import time
 import streamlit as st
 
-# Streamlit executes this file as dashboard/app.py. Add the repository root to
-# Python's import path so both dashboard/single_master.py and top-level packages
-# such as data/ and market/ can be imported reliably on Streamlit Cloud.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -17,18 +17,74 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("# 📊 NSE Catalyst")
-st.caption("Starting dashboard…")
+# The NIFTY-500/Dhan scan can take several seconds. Do NOT run it on the
+# Streamlit script thread because that prevents the dashboard from rendering.
+# Keep the worker state on the long-lived BREADTH object so it survives the
+# Streamlit reruns triggered by the 15-second autorefresh in single_master.py.
+try:
+    from market.nifty500_breadth import BREADTH
 
-# single_master.py also configures the page. Disable its second page-config
-# call when it is imported through this entry point.
+    if not hasattr(BREADTH, "_async_dashboard_state"):
+        BREADTH._async_dashboard_state = {
+            "market": {
+                "complete": False,
+                "sector_complete": False,
+                "reason": "DATA_LOADING",
+                "evaluated": 0,
+                "total": 500,
+            },
+            "running": False,
+            "error": None,
+            "started_at": 0.0,
+        }
+        BREADTH._sync_dashboard_snapshot = BREADTH.snapshot
+
+    def _background_dhan_scan():
+        state = BREADTH._async_dashboard_state
+        try:
+            result = BREADTH._sync_dashboard_snapshot(force=True)
+            state["market"] = result
+            state["error"] = None
+        except Exception as exc:
+            state["error"] = f"{type(exc).__name__}: {exc}"
+            state["market"] = {
+                "complete": False,
+                "sector_complete": False,
+                "reason": state["error"],
+                "evaluated": 0,
+                "total": 500,
+            }
+        finally:
+            state["running"] = False
+
+    def _non_blocking_snapshot(force=False):
+        state = BREADTH._async_dashboard_state
+        if not state["running"]:
+            # Refresh when there is no current scan. The worker performs the
+            # real Dhan request while the UI immediately renders the old/new
+            # state instead of waiting for the network.
+            state["running"] = True
+            state["started_at"] = time.monotonic()
+            threading.Thread(
+                target=_background_dhan_scan,
+                name="dhan-nifty500-scan",
+                daemon=True,
+            ).start()
+        return dict(state["market"])
+
+    BREADTH.snapshot = _non_blocking_snapshot
+except Exception:
+    # single_master.py has its own defensive handling if Dhan modules cannot
+    # be imported. Keep startup alive so the dashboard can show the error.
+    pass
+
+# Execute the dashboard source on every Streamlit rerun. run_path is important
+# here: a normal Python import can be cached in sys.modules, while the dashboard
+# needs to redraw its Streamlit elements every 15 seconds.
 _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
-
 try:
-    # Import the sibling module directly. Using `dashboard.single_master`
-    # fails on Streamlit Cloud because dashboard is not a Python package.
-    from single_master import *  # noqa: F401,F403
+    runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__nse_catalyst_dashboard__")
 except Exception as exc:
     st.error("The dashboard could not start.")
     st.exception(exc)
