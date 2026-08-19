@@ -1,4 +1,4 @@
-"""Master dashboard enhancements: sector analysis, permanent S1-S5 rules and diagnostics."""
+"""Master dashboard enhancements: compact analysis-first layout."""
 from pathlib import Path
 import os
 from io import StringIO
@@ -8,23 +8,19 @@ import streamlit as st
 from datetime import datetime
 from zoneinfo import ZoneInfo
 ROOT=Path(__file__).resolve().parents[1];OUTPUTS=ROOT/"outputs";MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv";IST=ZoneInfo("Asia/Kolkata")
-STRATEGIES={"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"BUY: Open > PDH, sweep below PDH, reclaim Open. SELL: Open < PDL, sweep above PDL, reject back below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"BUY: NIFTY 500 >0%, sector alignment >0%, A/D >1, coverage 500/500. SELL is the exact opposite.","notes":"Previous completed candle must agree with side. One paper trade per strategy/day."},"S2":{"name":"PDH/PDL Breakout + Retest","entry":"BUY: break PDH → retest PDH → reclaim. SELL: break PDL → retest PDL → fail below.","sl":"BUY = retest Low; SELL = retest High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory NIFTY 500 + sector + A/D gate with 500/500 verification.","notes":"No chase without retest; previous candle must agree."},"S3":{"name":"PDL/PDH Sweep + Open Reclaim","entry":"BUY: Open > PDL, sweep below PDL, reclaim Open. SELL: Open < PDH, sweep above PDH, reject below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate; partial breadth never qualifies.","notes":"Previous completed candle confirmation is mandatory."},"S4":{"name":"Intraday High/Low Breakout","entry":"BUY = break previously formed intraday High. SELL = break previously formed intraday Low.","sl":"BUY = previous intraday Low; SELL = previous intraday High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Master NIFTY 500, sector and A/D alignment must be valid before eligibility.","notes":"Do not use the current unformed candle extreme as the reference."},"S5":{"name":"Direct PDH/PDL Breakout","entry":"BUY = LTP breaks PDH. SELL = LTP breaks PDL.","sl":"BUY = PDH; SELL = PDL.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate and 500/500 breadth verification.","notes":"Previous completed candle must agree; paper trading only."}}
+STRATEGIES={"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"BUY: Open > PDH → sweep below PDH → reclaim Open. SELL: Open < PDL → sweep above PDL → reject below Open.","sl":"BUY = sweep/session Low; SELL = sweep/session High.","target":"1.25R","time":"09:45–14:00 IST; square-off 15:00 IST.","sector":"NIFTY 500 direction + sector alignment + A/D >1 for BUY; opposite for SELL."},"S2":{"name":"PDH/PDL Breakout + Retest","entry":"Break PDH/PDL → retest → confirmation in breakout direction.","sl":"Beyond the retest swing.","target":"1.25R","time":"09:45–14:00 IST; square-off 15:00 IST.","sector":"NIFTY 500 + sector + A/D alignment required."},"S3":{"name":"PDL/PDH Sweep + Open Reclaim","entry":"Sweep PDL/PDH → reclaim/reject Open → confirmation.","sl":"Beyond sweep extreme.","target":"1.25R","time":"09:45–14:00 IST; square-off 15:00 IST.","sector":"Master breadth and sector alignment required."},"S4":{"name":"Intraday High/Low Breakout","entry":"Break a previously formed intraday High/Low with confirmation.","sl":"Opposite reference swing.","target":"1.25R","time":"09:45–14:00 IST; square-off 15:00 IST.","sector":"Master breadth, sector and A/D alignment required."},"S5":{"name":"Direct PDH/PDL Breakout","entry":"LTP breaks PDH or PDL with previous-candle confirmation.","sl":"PDH/PDL reference level.","target":"1.25R","time":"09:45–14:00 IST; square-off 15:00 IST.","sector":"500/500 breadth and sector alignment required."}}
 def _secret(name):
  v=os.getenv(name,"")
  if v:return str(v).strip()
  try:return str(st.secrets.get(name,"")).strip()
  except Exception:return ""
-def _csv(name):
- p=OUTPUTS/name
- try:return pd.read_csv(p) if p.exists() else pd.DataFrame()
- except Exception:return pd.DataFrame()
 def _test_10_stocks():
  cid=_secret("DHAN_CLIENT_ID");token=_secret("DHAN_ACCESS_TOKEN")
  if not cid or not token:return pd.DataFrame(),"DHAN credentials missing"
  h={"Accept":"application/json","Content-Type":"application/json","access-token":token,"client-id":cid};wanted=["TCS","RELIANCE","HDFCBANK","INFY","ICICIBANK","SBIN","ITC","BHARTIARTL","LT","AXISBANK"]
  try:
   r=requests.get(MASTER_URL,timeout=15);r.raise_for_status();m=pd.read_csv(StringIO(r.text),low_memory=False);cols={str(c).strip().upper():c for c in m.columns};sc=next((cols[k] for k in ["SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"] if k in cols),None);sid=next((cols[k] for k in ["SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"] if k in cols),None)
-  if not sc or not sid:return pd.DataFrame(),f"Dhan master columns found: {list(m.columns)[:12]} — symbol/security ID not recognised"
+  if not sc or not sid:return pd.DataFrame(),"Dhan master symbol/security ID not recognised"
   x=m.copy();x["_sym"]=x[sc].astype(str).str.upper().str.strip();x=x[x["_sym"].isin(wanted)].drop_duplicates("_sym")
   if len(x)<10:return pd.DataFrame(),f"Mapped only {len(x)}/10 test stocks"
   ids=[int(float(v)) for v in x[sid]];q=requests.post("https://api.dhan.co/v2/marketfeed/ohlc",headers=h,json={"NSE_EQ":ids},timeout=15);b=q.json() if q.content else {}
@@ -41,54 +37,71 @@ def _sector_frame(quotes,universe):
  u["Symbol"]=u.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False);q=quotes.copy();q["Symbol"]=q.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False);q["change_pct"]=pd.to_numeric(q.get("change_pct"),errors="coerce")
  m=u.merge(q[["Symbol","change_pct"]],on="Symbol",how="inner").dropna(subset=["change_pct"])
  if m.empty:return pd.DataFrame()
- out=m.groupby("Sector").agg(Stocks=("Symbol","count"),AverageChange=("change_pct","mean"),Advances=("change_pct",lambda x:int((x>0).sum())),Declines=("change_pct",lambda x:int((x<0).sum()))).reset_index();out["Bias"]=out.AverageChange.map(lambda x:"POSITIVE" if x>0 else "NEGATIVE" if x<0 else "FLAT");return out.sort_values("AverageChange",ascending=False).reset_index(drop=True)
-def _dhan_profile():
- cid=_secret("DHAN_CLIENT_ID");token=_secret("DHAN_ACCESS_TOKEN")
- if not cid or not token:return "NOT CONFIGURED","Credentials missing"
- try:
-  r=requests.get("https://api.dhan.co/v2/profile",headers={"Accept":"application/json","access-token":token,"client-id":cid},timeout=10);b=r.json() if r.content else {}
-  return ("PROFILE OK",f"Token {b.get('tokenValidity','—')} • Data plan {b.get('dataPlan','—')}") if r.status_code==200 else ("ERROR",f"{b.get('errorCode') or r.status_code}: {b.get('errorMessage') or b.get('message') or r.text[:160]}")
- except Exception as e:return "REQUEST ERROR",f"{type(e).__name__}: {e}"
+ return m.groupby("Sector").agg(Stocks=("Symbol","count"),AverageChange=("change_pct","mean"),Advances=("change_pct",lambda x:int((x>0).sum())),Declines=("change_pct",lambda x:int((x<0).sum()))).reset_index().sort_values("AverageChange",ascending=False).reset_index(drop=True)
+def _render_compact_sector(df,title):
+ if df.empty:st.warning("Sector analysis waiting for verified stock + sector mapping.");return
+ d=df.copy();d["AverageChange"]=pd.to_numeric(d["AverageChange"],errors="coerce");d["Bias"]=d["AverageChange"].map(lambda x:"🟢" if x>0 else "🔴" if x<0 else "⚪")
+ with st.expander(title,expanded=True):
+  st.caption(f"{len(d)} sectors • sorted strongest to weakest")
+  st.dataframe(d[["Bias","Sector","Stocks","AverageChange","Advances","Declines"]],width="stretch",hide_index=True,column_config={"AverageChange":st.column_config.NumberColumn("Change %",format="%+.2f")})
 def render_enhancements():
  now=datetime.now(IST)
- st.markdown(f"<div style='background:linear-gradient(90deg,#0b132b,#1c2541);color:white;border-radius:10px;padding:10px 14px;margin:4px 0 12px;text-align:center;font-weight:800;font-size:16px'>🕒 LIVE MARKET CLOCK<br><span style='font-size:22px'>{now.strftime('%d %b %Y • %H:%M:%S')} IST</span></div>",unsafe_allow_html=True)
+ st.markdown(f"<div style='background:linear-gradient(90deg,#07111f,#16324f);color:white;border-radius:12px;padding:12px 16px;text-align:center;margin:4px 0 12px'><div style='font-size:12px;font-weight:800;letter-spacing:1px'>🕒 LIVE APP TIME • INDIA</div><div style='font-size:26px;font-weight:900'>{now.strftime('%d %b %Y • %H:%M:%S')} IST</div><div style='font-size:11px;opacity:.8'>Dhan data status is shown below • prices/analysis refresh independently</div></div>",unsafe_allow_html=True)
  try:
   from market.nifty500_breadth import BREADTH
   from data.stock_universe import StockUniverse
   live=BREADTH.snapshot(force=False);universe=StockUniverse().get_dataframe(refresh=False)
- except Exception as e:live={"complete":False,"quote_rows":pd.DataFrame(),"reason":str(e)};universe=pd.DataFrame()
- lq=live.get("quote_rows",pd.DataFrame());lq=lq if isinstance(lq,pd.DataFrame) else pd.DataFrame(lq);live_sec=_sector_frame(lq,universe)
- st.markdown("<div class='sec'>🟢 LIVE / 📚 PAST — Sector Analysis</div>",unsafe_allow_html=True);lt,pt=st.tabs(["🟢 LIVE SECTOR ANALYSIS","📚 PAST SECTOR ANALYSIS"])
- with lt:
-  st.caption(f"Live sector coverage: {len(lq)}/500 • A/D: {live.get('ad_ratio') if live.get('ad_ratio') is not None else 'WAITING'} • Sector alignment: {live.get('sector_alignment_pct') if live.get('sector_alignment_pct') is not None else 'WAITING'}");st.dataframe(live_sec,width="stretch",hide_index=True) if not live_sec.empty else st.warning("Sector analysis is locked until verified stock prices and a 500-stock sector map are available.")
- with pt:
+ except Exception as e:live={"complete":False,"sector_complete":False,"quote_rows":pd.DataFrame(),"reason":str(e)};universe=pd.DataFrame()
+ q=live.get("quote_rows",pd.DataFrame());q=q if isinstance(q,pd.DataFrame) else pd.DataFrame(q);sec=_sector_frame(q,universe)
+ n=live.get("nifty500_change_pct");ad=live.get("ad_ratio");coverage=len(q);sector_coverage=int(sec.Stocks.sum()) if not sec.empty else 0
+ # Analysis is the main event: one compact overview, then three clearly separated analysis modes.
+ st.markdown("### 🎯 Master Signal — What is the market saying now?")
+ c1,c2,c3,c4=st.columns(4);c1.metric("NIFTY 500",f"{float(n):+.2f}%" if n is not None else "—");c2.metric("A/D Ratio",f"{float(ad):.2f}" if ad is not None and pd.notna(ad) else "WAITING");c3.metric("Breadth",f"{coverage}/500");c4.metric("Sector Map",f"{sector_coverage}/500")
+ st.caption(f"🟢 RUNNING • Dhan • {now.strftime('%H:%M:%S')} IST • last verified data: {live.get('last_quote_time','—')} • no full-screen auto-refresh")
+ tabs=st.tabs(["🟢 LIVE ANALYSIS","📚 PAST ANALYSIS","🧠 STRATEGY ANALYSIS"])
+ with tabs[0]:
+  st.subheader("Live Market Structure")
+  a,b,c=st.columns(3);a.metric("Advances",live.get("advances",0));b.metric("Declines",live.get("declines",0));c.metric("Positive Sectors",live.get("positive_sectors",0))
+  _render_compact_sector(sec,"📊 Sector Heatmap / Strength — Live")
+  if not sec.empty:
+   top=sec.head(8)[["Sector","AverageChange"]].copy();st.bar_chart(top.set_index("Sector"),height=260)
+  with st.expander("🔍 Stock breadth details",expanded=False):
+   if not q.empty:
+    cols=[c for c in ["Symbol","LTP","PreviousClose","NetChange","change_pct","Volume"] if c in q.columns];st.dataframe(q[cols].head(30),width="stretch",hide_index=True)
+ with tabs[1]:
+  st.subheader("Past Session — verified only")
   try:
    from market.closed_session import load_saved
    past_df,past=load_saved()
-  except Exception as e:past_df=pd.DataFrame();past={"complete":False,"reason":str(e),"coverage":"0/500"}
+  except Exception as e:past_df=pd.DataFrame();past={"coverage":"0/500","reason":str(e)}
   if not past_df.empty:
    pq=past_df.copy();pq["Symbol"]=pq.Symbol.astype(str).str.upper();
    if "change_pct" not in pq.columns and {"Close","PreviousClose"}.issubset(pq.columns):pq["change_pct"]=(pq.Close-pq.PreviousClose)/pq.PreviousClose*100
-   ps=_sector_frame(pq,universe);st.caption(f"Past session: {past.get('session_date','—')} • coverage {len(pq)}/500 • A/D {past.get('ad_ratio','—')}");st.dataframe(ps,width="stretch",hide_index=True) if not ps.empty else st.warning("Past sector mapping is not verified yet.")
-  else:st.warning(f"Past 500-stock session not stored yet • coverage {past.get('coverage','0/500')}")
- st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Library — permanent rules</div>",unsafe_allow_html=True);st.caption("Collapse/expand each strategy. These are strategy definitions, not a daily trade list.")
- for s,r in STRATEGIES.items():
-  with st.expander(f"{s} • {r['name']}",expanded=False):
-   st.write(f"**ENTRY:** {r['entry']}");st.write(f"**EXIT / TARGET:** {r['target']} • exit immediately at SL or target • force square-off 15:00 IST.");st.write(f"**STOP LOSS:** {r['sl']}");st.write(f"**TIME:** {r['time']}");st.write(f"**SECTOR ANALYSIS:** {r['sector']}");st.write(f"**NOTES:** {r['notes']}");st.write("**Risk model:** ₹1,400–₹1,500 actual risk per trade • capital allocation up to ₹2,50,000 • RR 1:1.25.")
- st.subheader("Strategy Timing / Risk Summary");st.dataframe(pd.DataFrame([{"Strategy":s,"Entry":"09:45–14:00","Square-off":"15:00","RR":"1:1.25","Risk":"₹1,400–₹1,500","Sector gate":"MANDATORY","Breadth":"500/500"} for s in STRATEGIES]),width="stretch",hide_index=True)
- st.markdown("<div class='sec'>🧰 Dhan Data Diagnostics</div>",unsafe_allow_html=True);st.caption("Manual diagnostics only; no automatic screen refresh.")
- if st.button("🔎 TEST DHAN — 10 STOCKS",type="primary",key="dhan10"):
-  with st.spinner("Requesting 10 NSE stocks from Dhan…"):df,msg=_test_10_stocks()
-  st.session_state["dhan10_msg"]=msg;st.session_state["dhan10_df"]=df
- if "dhan10_msg" in st.session_state:
-  msg=st.session_state["dhan10_msg"];df=st.session_state["dhan10_df"];st.success(msg) if not df.empty else st.error(msg)
-  if not df.empty:st.dataframe(df,width="stretch",hide_index=True)
- if st.button("Test Dhan Authentication",key="dhan_auth"):
-  s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
- if "dhan_auth_result" in st.session_state:
-  a=st.session_state["dhan_auth_result"];st.write(f"**Dhan authentication:** {a['status']} — {a['detail']}")
- st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True)
- qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."]
- quote=qs[now.date().toordinal()%len(qs)]
- st.markdown(f"<div style='border:1px solid #d9dee8;border-radius:12px;padding:16px 18px;margin-top:8px;background:#f8fafc'><div style='font-size:13px;font-weight:800;letter-spacing:.6px'>💡 DAILY TRADING TIP</div><div style='font-size:18px;font-weight:700;line-height:1.45;margin-top:8px'>“{quote}”</div><div style='font-size:12px;margin-top:8px;opacity:.7'>NSE Catalyst • Paper Trading</div></div>",unsafe_allow_html=True)
- st.caption("NSE Catalyst • paper trading only")
+   ps=_sector_frame(pq,universe);pcols=[c for c in ["Symbol","Close","PreviousClose","change_pct"] if c in pq.columns]
+   pc1,pc2,pc3=st.columns(3);pc1.metric("Coverage",f"{len(pq)}/500");pc2.metric("A/D",past.get("ad_ratio","—"));pc3.metric("Session",past.get("session_date","—"));_render_compact_sector(ps,"📊 Sector Heatmap / Strength — Past")
+   with st.expander("🔍 Past stock details",expanded=False):st.dataframe(pq[pcols],width="stretch",hide_index=True)
+  else:st.info(f"Past session not verified yet • coverage {past.get('coverage','0/500')}")
+ with tabs[2]:
+  st.subheader("S1–S5 — Strategy Analysis & Rules")
+  st.caption("Permanent strategy reference. Expand only the strategy you want to study; this is not a daily trade list.")
+  for s,r in STRATEGIES.items():
+   with st.expander(f"{s} • {r['name']}",expanded=False):
+    x,y=st.columns(2);x.markdown(f"**ENTRY**\n\n{r['entry']}");y.markdown(f"**SL**\n\n{r['sl']}\n\n**TARGET**\n\n{r['target']}");st.markdown(f"**TIME**  {r['time']}  
+**SECTOR / BREADTH GATE**  {r['sector']}")
+    st.info("Paper trading only • wait for all required confirmations • no partial 500-stock breadth")
+ with st.expander("📚 Daily Journal / P&L",expanded=False):
+  trades=_csv("trades.csv");signals=_csv("signals.csv");st.write(f"Taken trades: **{len(trades)}** • Eligible opportunities: **{len(signals)}**")
+  if not trades.empty:st.dataframe(trades.tail(20),width="stretch",hide_index=True)
+ with st.expander("🧰 Dhan diagnostics",expanded=False):
+  if st.button("🔎 TEST DHAN — 10 STOCKS",type="primary",key="dhan10"):
+   with st.spinner("Testing Dhan…"):df,msg=_test_10_stocks()
+   st.session_state["dhan10_msg"]=msg;st.session_state["dhan10_df"]=df
+  if "dhan10_msg" in st.session_state:
+   st.success(st.session_state["dhan10_msg"]) if not st.session_state["dhan10_df"].empty else st.error(st.session_state["dhan10_msg"])
+ with st.expander("📥 Downloads",expanded=False):
+  if not q.empty:st.download_button("Download verified Dhan dataset",q.to_csv(index=False).encode(),f"nifty500_{now.date()}.csv","text/csv")
+  journal=q.copy();
+  if not journal.empty:journal["A/D Ratio"]=ad;journal["Advances"]=live.get("advances");journal["Declines"]=live.get("declines");st.download_button("Download Master Journal",journal.to_csv(index=False).encode(),f"master_journal_{now.date()}.csv","text/csv")
+ st.markdown("<div class='sec'>💡 Daily Trading Tip</div>",unsafe_allow_html=True)
+ tips=["Protect capital first; opportunities return.","A planned trade is better than an emotional trade.","Wait for confirmation; missing one trade is cheaper than forcing one.","Risk small enough to stay in the game.","Let price confirm the idea before committing capital."]
+ st.markdown(f"<div style='border:1px solid #294367;border-radius:12px;padding:14px 18px;background:#101b2b;color:#f5f7fb;font-size:18px;font-weight:750'>“{tips[now.date().toordinal()%len(tips)]}”<div style='font-size:11px;color:#9fb1ca;margin-top:6px'>NSE Catalyst • Paper Trading</div></div>",unsafe_allow_html=True)
