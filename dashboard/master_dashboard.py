@@ -1,6 +1,6 @@
-"""Single combined NSE Catalyst paper-trading dashboard for S1-S5."""
+"""NSE Catalyst - single combined paper-trading master dashboard for S1-S5."""
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import json
 import pandas as pd
@@ -10,14 +10,14 @@ from streamlit_autorefresh import st_autorefresh
 
 ROOT = Path(__file__).resolve().parents[1]
 IST = ZoneInfo("Asia/Kolkata")
-REFRESH_MS = 15000
-CAPITAL_PER_STRATEGY = 250000.0
-MAX_TRADES_PER_DAY = 2
+REFRESH_SECONDS = 15
+CAPITAL_PER_TRADE = 250000.0
+MAX_TRADES_PER_STRATEGY_DAY = 2
+MAX_OPEN_TRADES_PER_STRATEGY = 1
 DAILY_LOSS_LIMIT = 3000.0
 MIN_RISK = 1400.0
 MAX_RISK = 1500.0
 RR = 1.25
-TOTAL_CAPITAL = CAPITAL_PER_STRATEGY * 5
 
 STRATEGIES = {
     "S1": "PDH/PDL Sweep + Open Reclaim",
@@ -33,206 +33,260 @@ QUOTES = [
     "Consistency comes from repeating a tested process.",
     "No setup is also a valid decision.",
     "Risk is fixed before the entry; everything else follows.",
+    "Wait for alignment. Trade only the setup you can explain.",
 ]
 
 st.set_page_config(page_title="NSE Catalyst | Master Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
-st_autorefresh(interval=REFRESH_MS, key="master_15s")
+st_autorefresh(interval=REFRESH_SECONDS * 1000, key="nse_catalyst_master_15s")
 
 st.markdown("""
 <style>
-.main-title{font-size:2.1rem;font-weight:850;margin:0}.sub{color:#9fb0c7;margin-bottom:18px}
-.kpi{border:1px solid #2d405d;border-radius:14px;background:#111a29;padding:14px 16px;min-height:90px}
-.kpi small{display:block;color:#91a3ba;font-size:.78rem;font-weight:750;text-transform:uppercase}.kpi b{display:block;font-size:1.45rem;margin-top:5px}
-.section{font-size:1.2rem;font-weight:800;margin:22px 0 10px}.good{color:#35d07f}.bad{color:#ff6374}.muted{color:#9fb0c7}
-.strategy-card{border:1px solid #2d405d;border-radius:14px;background:#111a29;padding:13px;margin-bottom:8px}.strategy-name{font-weight:800}.strategy-status{font-size:1rem;font-weight:800;margin-top:5px}
-.quote{border-left:4px solid #6f8fb8;background:#111a29;padding:14px 18px;border-radius:8px;color:#d9e3f0;font-style:italic}
+.block-container{padding-top:1.1rem;padding-bottom:2rem;max-width:1500px}
+.title{font-size:2.15rem;font-weight:900;line-height:1.1;margin-bottom:4px}
+.subtitle{color:#9fb0c7;font-size:.92rem;margin-bottom:16px}
+.section{font-size:1.22rem;font-weight:850;margin:22px 0 10px}
+.card{border:1px solid #2c3e5b;border-radius:14px;background:#111a29;padding:13px 15px;min-height:88px}
+.card small{display:block;color:#8fa3bd;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+.card b{display:block;font-size:1.35rem;margin-top:5px}
+.good{color:#36d982}.bad{color:#ff6476}.warn{color:#ffd166}.muted{color:#9fb0c7}
+.trade-card{border:1px solid #334b6c;border-radius:14px;background:#101a2a;padding:12px;margin-bottom:8px}
+.trade-card .head{font-size:1rem;font-weight:850}.trade-card .line{color:#a7b8cd;font-size:.82rem;margin-top:4px}
+.quote{border-left:4px solid #6f8fb8;background:#111a29;padding:14px 18px;border-radius:9px;color:#d9e3f0;font-style:italic}
 </style>
 """, unsafe_allow_html=True)
 
 def read_json(name):
-    p = ROOT / "outputs" / name
-    try: return json.loads(p.read_text(encoding="utf-8"))
-    except Exception: return {}
+    try:
+        return json.loads((ROOT / "outputs" / name).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 def read_csv(name):
-    p = ROOT / "outputs" / name
-    try: return pd.read_csv(p)
-    except Exception: return pd.DataFrame()
+    try:
+        return pd.read_csv(ROOT / "outputs" / name)
+    except Exception:
+        return pd.DataFrame()
 
-def val(x, default=None):
+def num(x, default=None):
     try: return float(x)
     except Exception: return default
 
 def money(x):
-    x = val(x)
+    x = num(x)
     return f"₹{x:,.0f}" if x is not None else "—"
 
 def pct(x):
-    x = val(x)
+    x = num(x)
     return f"{x:+.2f}%" if x is not None else "—"
-
-def age(ts):
-    try:
-        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        if d.tzinfo is None: d = d.replace(tzinfo=IST)
-        return max(0, int((datetime.now(timezone.utc)-d.astimezone(timezone.utc)).total_seconds()))
-    except Exception: return None
-
-def kpi(label, value, cls=""):
-    return f"<div class='kpi'><small>{label}</small><b class='{cls}'>{value}</b></div>"
 
 def normalize_trades(df):
     if df.empty: return df
     d = df.copy()
     if "strategy" not in d: d["strategy"] = ""
-    d["strategy"] = d["strategy"].astype(str).str.upper().replace({"STRATEGY_1":"S1","STRATEGY_2":"S2","STRATEGY_3":"S3","STRATEGY_4":"S4","STRATEGY_5":"S5","OPEN_RETURN":"S1"})
-    if "pnl" in d: d["pnl"] = pd.to_numeric(d["pnl"], errors="coerce").fillna(0)
-    if "actual_risk" in d: d["actual_risk"] = pd.to_numeric(d["actual_risk"], errors="coerce")
+    d["strategy"] = d["strategy"].astype(str).str.upper().replace({
+        "STRATEGY_1":"S1","STRATEGY_2":"S2","STRATEGY_3":"S3",
+        "STRATEGY_4":"S4","STRATEGY_5":"S5","OPEN_RETURN":"S1"
+    })
+    if "pnl" not in d: d["pnl"] = 0.0
+    d["pnl"] = pd.to_numeric(d["pnl"], errors="coerce").fillna(0.0)
     return d
 
-status = read_json("bot_status.json")
+def today_rows(df, now):
+    if df.empty or "entry_time" not in df: return df
+    dt = pd.to_datetime(df["entry_time"], errors="coerce")
+    return df[dt.dt.date == now.date()].copy()
+
+def kpi(label, value, cls="muted"):
+    return f"<div class='card'><small>{label}</small><b class='{cls}'>{value}</b></div>"
+
+def daily_quote(now):
+    return QUOTES[now.toordinal() % len(QUOTES)]
+
+def master_journal(df, now):
+    cols = ["date","strategy","stock","side","entry_time","entry","sl","target","quantity","actual_risk","exit_time","exit","pnl","outcome","notes"]
+    if df.empty:
+        out = pd.DataFrame(columns=cols)
+    else:
+        out = df.copy()
+        aliases = {"symbol":"stock","signal":"side","stop_loss":"sl","take_profit":"target","exit_price":"exit","closed_at":"exit_time","status":"outcome"}
+        for src,dst in aliases.items():
+            if dst not in out.columns and src in out.columns: out[dst] = out[src]
+        if "date" not in out.columns: out["date"] = now.date().isoformat()
+        for c in cols:
+            if c not in out.columns: out[c] = ""
+        out = out[cols]
+    quote = {c:"" for c in cols}
+    quote["date"] = now.date().isoformat()
+    quote["strategy"] = "DAILY_QUOTE"
+    quote["notes"] = daily_quote(now)
+    return pd.concat([out, pd.DataFrame([quote])], ignore_index=True)
+
+# ---------- DATA ----------
+now = datetime.now(IST)
 diag = read_json("scanner_diagnostics.json")
 state = read_json("paper_engine_state.json")
 trades = normalize_trades(read_csv("trades.csv"))
-waiting = read_json("waiting_candidates.json")
-now = datetime.now(IST)
-
-nifty_change = val(diag.get("nifty500_change_pct"))
-ad_ratio = val(diag.get("ad_ratio"))
-coverage = int(val(diag.get("nifty500_evaluated", diag.get("nifty500_coverage", 0))) or 0)
-ad_complete = coverage >= 500 and bool(diag.get("nifty500_breadth_complete", False))
-sector_change = val(diag.get("sector_change_pct"))
-sector_alignment = sector_change is not None
-buy_aligned = nifty_change is not None and nifty_change > 0 and sector_change is not None and sector_change > 0 and ad_complete and ad_ratio is not None and ad_ratio > 1
-sell_aligned = nifty_change is not None and nifty_change < 0 and sector_change is not None and sector_change < 0 and ad_complete and ad_ratio is not None and ad_ratio < 1
+today = today_rows(trades, now)
 positions = state.get("open_positions", {}) if isinstance(state, dict) else {}
+if not isinstance(positions, dict): positions = {}
 
-st.markdown("<div class='main-title'>📊 NSE Catalyst — Master Dashboard</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='sub'>NIFTY 500 • S1–S5 combined • PAPER TRADING ONLY • live refresh every 15 seconds • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>", unsafe_allow_html=True)
+nifty = num(diag.get("nifty500_change_pct"))
+sector = num(diag.get("sector_change_pct"))
+ad = num(diag.get("ad_ratio"))
+coverage = int(num(diag.get("nifty500_evaluated", diag.get("nifty500_coverage", 0))) or 0)
+ad_complete = coverage >= 500 and bool(diag.get("nifty500_breadth_complete", False))
+buy_aligned = nifty is not None and nifty > 0 and sector is not None and sector > 0 and ad_complete and ad is not None and ad > 1
+sell_aligned = nifty is not None and nifty < 0 and sector is not None and sector < 0 and ad_complete and ad is not None and ad < 1
 
+# ---------- HEADER ----------
+st.markdown("<div class='title'>📊 NSE Catalyst — Master Dashboard</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='subtitle'>NIFTY 500 • S1–S5 combined • PAPER TRADING ONLY • refresh every {REFRESH_SECONDS} seconds • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>", unsafe_allow_html=True)
+
+# ---------- MARKET ALIGNMENT ----------
 st.markdown("<div class='section'>🎯 Master Market Alignment</div>", unsafe_allow_html=True)
-sector_display = pct(sector_change) if sector_change is not None else "UNAVAILABLE"
-ad_display = f"{ad_ratio:.2f}" if ad_complete and ad_ratio is not None else "UNAVAILABLE"
+ad_text = f"{ad:.2f}" if ad_complete and ad is not None else "UNAVAILABLE"
 bias = "🟢 BUY ALIGNED" if buy_aligned else "🔴 SELL ALIGNED" if sell_aligned else "⚪ NO TRADE"
 bias_cls = "good" if buy_aligned else "bad" if sell_aligned else "muted"
-st.markdown("<div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px'>" + "".join([
-    kpi("NIFTY 500", pct(nifty_change), "good" if nifty_change is not None and nifty_change > 0 else "bad" if nifty_change is not None and nifty_change < 0 else "muted"),
-    kpi("SECTOR ALIGNMENT", sector_display, "good" if sector_change is not None and sector_change > 0 else "bad" if sector_change is not None and sector_change < 0 else "muted"),
-    kpi("NIFTY 500 A/D", ad_display, "good" if ad_complete and ad_ratio and ad_ratio > 1 else "bad" if ad_complete and ad_ratio and ad_ratio < 1 else "muted"),
-    kpi("A/D COVERAGE", f"{coverage}/500", "good" if coverage >= 500 else "bad"),
+cards = [
+    kpi("NIFTY 500", pct(nifty), "good" if nifty is not None and nifty > 0 else "bad" if nifty is not None and nifty < 0 else "muted"),
+    kpi("SECTOR ALIGNMENT", pct(sector) if sector is not None else "UNAVAILABLE", "good" if sector is not None and sector > 0 else "bad" if sector is not None and sector < 0 else "muted"),
+    kpi("NIFTY 500 A/D", ad_text, "good" if ad_complete and ad is not None and ad > 1 else "bad" if ad_complete and ad is not None and ad < 1 else "muted"),
+    kpi("A/D COVERAGE", f"{coverage}/500", "good" if ad_complete else "bad"),
     kpi("MASTER BIAS", bias, bias_cls),
-]) + "</div>", unsafe_allow_html=True)
+]
+st.markdown("<div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
 if not ad_complete:
-    st.warning(f"NIFTY 500 breadth is incomplete ({coverage}/500). A/D is unavailable and trading is BLOCKED until the full 500-stock universe is available.")
-if not sector_alignment:
-    st.info("Sector alignment is waiting for the live sector feed. No trade is allowed until the sector gate is available and agrees with the direction.")
+    st.error(f"🚫 TRADING BLOCKED — NIFTY 500 A/D is incomplete ({coverage}/500). Full 500-stock breadth is mandatory.")
+if sector is None:
+    st.warning("🚫 TRADING BLOCKED — sector alignment is unavailable.")
 
-st.markdown("<div class='section'>💰 Capital & Risk Rules</div>", unsafe_allow_html=True)
-st.markdown("<div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px'>" + "".join([
-    kpi("CAPITAL / STRATEGY", money(CAPITAL_PER_STRATEGY)),
-    kpi("TOTAL S1–S5 CAPITAL", money(TOTAL_CAPITAL)),
+# ---------- FIXED RULES ----------
+st.markdown("<div class='section'>🔒 Fixed Paper-Trading Rules</div>", unsafe_allow_html=True)
+rules = [
+    kpi("CAPITAL / TRADE", "₹2,50,000"),
     kpi("RISK / TRADE", "₹1,400–₹1,500"),
     kpi("TARGET", "1.25R"),
-    kpi("DAILY LOSS LIMIT", "₹3,000 / strategy"),
-]) + "</div>", unsafe_allow_html=True)
-st.caption("Position size is calculated from the actual Entry-to-SL distance. If actual risk cannot be kept between ₹1,400 and ₹1,500, the trade is rejected. Maximum 2 trades per strategy per day. Paper orders only.")
+    kpi("MAX TRADES / STRATEGY", "2 / day"),
+    kpi("MAX DAILY LOSS", "₹3,000 / strategy"),
+]
+st.markdown("<div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px'>" + "".join(rules) + "</div>", unsafe_allow_html=True)
+st.caption("Position size is derived from actual Entry→SL distance. If actual risk is outside ₹1,400–₹1,500, the trade is rejected. Only one open trade per strategy at a time. Paper trading only; no real orders.")
 
-st.markdown("<div class='section'>🔥 Live Strategy Board</div>", unsafe_allow_html=True)
-summary=[]
+# ---------- FIVE STRATEGIES AT ONE GLANCE ----------
+st.markdown("<div class='section'>🔥 All 5 Strategies — One-Glance Board</div>", unsafe_allow_html=True)
+summary = []
 for s,name in STRATEGIES.items():
-    sd = {"Strategy":s,"Name":name,"Trades Today":0,"Daily P&L":0.0,"Status":"WAITING"}
-    if not trades.empty:
-        td=trades[trades["strategy"]==s].copy()
-        if not td.empty:
-            today=td
-            if "entry_time" in td:
-                dates=pd.to_datetime(td["entry_time"],errors="coerce")
-                today=td[dates.dt.date==now.date()]
-            sd["Trades Today"]=len(today)
-            sd["Daily P&L"]=float(today["pnl"].sum()) if "pnl" in today else 0.0
-    if sd["Trades Today"]>=MAX_TRADES_PER_DAY or sd["Daily P&L"]<=-DAILY_LOSS_LIMIT: sd["Status"]="🔒 LOCKED"
-    elif positions: sd["Status"]="🟢 ACTIVE"
-    elif buy_aligned or sell_aligned: sd["Status"]="🟡 MARKET ALIGNED"
-    else: sd["Status"]="⚪ WAITING"
-    summary.append(sd)
-summary_df=pd.DataFrame(summary)
-cols=st.columns(5)
+    td = today[today["strategy"] == s] if not today.empty else pd.DataFrame()
+    pnl = float(td["pnl"].sum()) if not td.empty else 0.0
+    wins = int((td["pnl"] > 0).sum()) if not td.empty else 0
+    losses = int((td["pnl"] < 0).sum()) if not td.empty else 0
+    open_count = sum(1 for p in positions.values() if isinstance(p, dict) and str(p.get("strategy", "")).upper().replace("STRATEGY_", "S") == s)
+    if len(td) >= MAX_TRADES_PER_STRATEGY_DAY or pnl <= -DAILY_LOSS_LIMIT:
+        status, cls = "🔒 LOCKED", "bad"
+    elif open_count >= MAX_OPEN_TRADES_PER_STRATEGY:
+        status, cls = "🟢 ACTIVE", "good"
+    elif buy_aligned or sell_aligned:
+        status, cls = "🟡 ALIGNED", "warn"
+    else:
+        status, cls = "⚪ WAITING", "muted"
+    summary.append({"Strategy":s,"Setup":name,"Status":status,"Trades":len(td),"Wins":wins,"Losses":losses,"Daily P&L":pnl})
+cols = st.columns(5)
 for col,row in zip(cols,summary):
     with col:
-        st.markdown(f"<div class='strategy-card'><div class='strategy-name'>{row['Strategy']} • {row['Name']}</div><div class='strategy-status'>{row['Status']}</div><div class='muted'>Trades: {row['Trades Today']}/2</div><div class='muted'>Daily P&L: {money(row['Daily P&L'])}</div></div>",unsafe_allow_html=True)
+        st.markdown(f"<div class='trade-card'><div class='head'>{row['Strategy']} • <span class='{cls}'>{row['Status']}</span></div><div class='line'>{row['Setup']}</div><div class='line'>Trades {row['Trades']}/2 • Wins {row['Wins']} • Losses {row['Losses']}</div><div class='line'>Daily P&L <b>{money(row['Daily P&L'])}</b></div></div>", unsafe_allow_html=True)
 
-st.markdown("<div class='section'>💼 Current Paper Trades</div>", unsafe_allow_html=True)
+# ---------- LIVE TRADE BOARD ----------
+st.markdown("<div class='section'>💼 Current Paper Trades — All Strategies</div>", unsafe_allow_html=True)
 if positions:
-    rows=[]
+    live=[]
     for symbol,p in positions.items():
-        rows.append({"Strategy":p.get("strategy","—"),"Stock":symbol,"Side":p.get("signal","—"),"Entry":p.get("entry"),"SL":p.get("stop_loss"),"Target":p.get("target"),"Qty":p.get("quantity"),"Risk":p.get("actual_risk"),"Entry Time":p.get("entry_time","—")})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        if not isinstance(p, dict): continue
+        live.append({
+            "Strategy":p.get("strategy","—"), "Stock":symbol, "Side":p.get("signal",p.get("side","—")),
+            "Entry":p.get("entry"), "LTP":p.get("ltp",p.get("current_price")), "SL":p.get("stop_loss"),
+            "Target":p.get("target",p.get("take_profit")), "Qty":p.get("quantity"), "Risk":p.get("actual_risk"),
+            "P&L":p.get("pnl"), "Entry Time":p.get("entry_time","—")
+        })
+    if live: st.dataframe(pd.DataFrame(live), use_container_width=True, hide_index=True)
 else:
-    st.info("No open paper trades. The engine is waiting for a complete market-alignment + OHLC/PDH/PDL setup.")
+    st.info("No open paper trades — waiting for complete alignment and an exact OHLC/PDH/PDL setup.")
 
-st.markdown("<div class='section'>📈 Live & Historical Analysis</div>", unsafe_allow_html=True)
-if not trades.empty and "pnl" in trades:
-    chart=trades.copy()
-    chart["pnl"]=pd.to_numeric(chart["pnl"],errors="coerce").fillna(0)
-    chart["strategy"]=chart["strategy"].replace({"STRATEGY_1":"S1","STRATEGY_2":"S2","STRATEGY_3":"S3","STRATEGY_4":"S4","STRATEGY_5":"S5"})
-    perf=chart.groupby("strategy")["pnl"].agg(["sum","count"]).reindex(list(STRATEGIES.keys())).fillna(0).reset_index()
-    perf["wins"]=perf["strategy"].map(chart.assign(win=chart["pnl"]>0).groupby("strategy")["win"].sum()).fillna(0)
-    perf["win_rate"]=perf["wins"].div(perf["count"].replace(0,pd.NA)).mul(100).fillna(0)
-    c1,c2=st.columns(2)
-    with c1:
-        fig=px.bar(perf,x="strategy",y="sum",title="Net P&L by Strategy",text_auto=True)
-        fig.update_layout(margin=dict(l=10,r=10,t=45,b=10),height=330)
-        st.plotly_chart(fig,use_container_width=True)
-    with c2:
-        fig=px.bar(perf,x="strategy",y="win_rate",title="Win Rate %",text_auto='.1f')
-        fig.update_layout(margin=dict(l=10,r=10,t=45,b=10),height=330,yaxis_title="%")
-        st.plotly_chart(fig,use_container_width=True)
-    c3,c4=st.columns(2)
-    with c3:
-        fig=px.bar(perf,x="strategy",y="count",title="Trades by Strategy",text_auto=True)
-        fig.update_layout(margin=dict(l=10,r=10,t=45,b=10),height=300)
-        st.plotly_chart(fig,use_container_width=True)
-    with c4:
-        win_loss=perf[["strategy","wins"]].copy(); win_loss["losses"]=perf["count"]-perf["wins"]
-        wl=win_loss.melt(id_vars="strategy",var_name="Outcome",value_name="Trades")
-        fig=px.bar(wl,x="strategy",y="Trades",color="Outcome",barmode="stack",title="Wins vs Losses")
-        fig.update_layout(margin=dict(l=10,r=10,t=45,b=10),height=300)
-        st.plotly_chart(fig,use_container_width=True)
-    # Cumulative P&L line
-    seq=chart.sort_values("entry_time") if "entry_time" in chart else chart
-    if not seq.empty:
-        seq["cum_pnl"]=seq.groupby("strategy")["pnl"].cumsum()
-        fig=px.line(seq,x="entry_time" if "entry_time" in seq else seq.index,y="cum_pnl",color="strategy",markers=True,title="Cumulative P&L")
-        fig.update_layout(margin=dict(l=10,r=10,t=45,b=10),height=360)
-        st.plotly_chart(fig,use_container_width=True)
-    # Pie chart only as a compact outcome view, not the main analysis.
-    pie=perf[["strategy","wins"]].copy();pie["losses"]=perf["count"]-perf["wins"]
-    pie_total=pie[["wins","losses"]].sum()
-    if pie_total.sum()>0:
-        fig=px.pie(values=pie_total.values,names=pie_total.index,title="Overall Trade Outcomes")
-        fig.update_layout(height=300,margin=dict(l=10,r=10,t=45,b=10))
-        st.plotly_chart(fig,use_container_width=True)
+# ---------- CHARTS ----------
+st.markdown("<div class='section'>📈 Live / Historical Charts</div>", unsafe_allow_html=True)
+if trades.empty:
+    st.info("Charts will populate from real paper-trade history. No artificial performance numbers are shown.")
 else:
-    st.info("Charts will populate automatically as paper trades are recorded. No fake performance values are shown before real trade history exists.")
+    t = trades.copy()
+    t["pnl"] = pd.to_numeric(t["pnl"], errors="coerce").fillna(0.0)
+    t["strategy"] = t["strategy"].astype(str).str.upper().replace({f"STRATEGY_{i}":f"S{i}" for i in range(1,6)})
+    perf = t.groupby("strategy")["pnl"].agg(total_pnl="sum", trades="count").reindex(list(STRATEGIES)).fillna(0).reset_index()
+    perf["wins"] = perf["strategy"].map(t.assign(win=t["pnl"]>0).groupby("strategy")["win"].sum()).fillna(0)
+    perf["losses"] = perf["strategy"].map(t.assign(loss=t["pnl"]<0).groupby("strategy")["loss"].sum()).fillna(0)
+    perf["win_rate"] = (perf["wins"] / perf["trades"].replace(0,pd.NA) * 100).fillna(0)
+    gross_w = t[t["pnl"]>0].groupby("strategy")["pnl"].sum()
+    gross_l = -t[t["pnl"]<0].groupby("strategy")["pnl"].sum()
+    perf["profit_factor"] = (perf["strategy"].map(gross_w).fillna(0) / perf["strategy"].map(gross_l).replace(0,pd.NA)).fillna(0)
 
-st.markdown("<div class='section'>🏆 Strategy Comparison</div>", unsafe_allow_html=True)
-if not trades.empty and "pnl" in trades:
-    perf2=summary_df[["Strategy","Daily P&L","Trades Today"]].copy()
-    st.dataframe(perf2,use_container_width=True,hide_index=True)
+    a,b = st.columns(2)
+    with a:
+        fig=px.bar(perf,x="strategy",y="total_pnl",text_auto=True,title="💰 Net P&L")
+        fig.update_layout(height=330,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(fig,use_container_width=True)
+    with b:
+        fig=px.bar(perf,x="strategy",y="win_rate",text_auto='.1f',title="🎯 Win Rate %")
+        fig.update_layout(height=330,margin=dict(l=10,r=10,t=45,b=10),yaxis_title="%"); st.plotly_chart(fig,use_container_width=True)
+    a,b = st.columns(2)
+    with a:
+        fig=px.bar(perf,x="strategy",y="profit_factor",text_auto='.2f',title="📊 Profit Factor")
+        fig.update_layout(height=300,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(fig,use_container_width=True)
+    with b:
+        wl=perf[["strategy","wins","losses"]].melt(id_vars="strategy",var_name="Outcome",value_name="Trades")
+        fig=px.bar(wl,x="strategy",y="Trades",color="Outcome",barmode="stack",title="🏆 Wins vs Losses")
+        fig.update_layout(height=300,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(fig,use_container_width=True)
+    if "entry_time" in t:
+        t["entry_time"] = pd.to_datetime(t["entry_time"], errors="coerce")
+        q=t.dropna(subset=["entry_time"]).sort_values("entry_time")
+        if not q.empty:
+            q["cum_pnl"] = q.groupby("strategy")["pnl"].cumsum()
+            fig=px.line(q,x="entry_time",y="cum_pnl",color="strategy",markers=True,title="📈 Cumulative P&L — S1 to S5")
+            fig.update_layout(height=380,margin=dict(l=10,r=10,t=45,b=10),yaxis_title="₹"); st.plotly_chart(fig,use_container_width=True)
+    outcome=perf[["wins","losses"]].sum()
+    if outcome.sum()>0:
+        fig=px.pie(values=outcome.values,names=["Wins","Losses"],hole=.45,title="🥧 Overall Trade Outcomes")
+        fig.update_layout(height=320,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(fig,use_container_width=True)
+
+# ---------- HISTORICAL COMPARISON ----------
+st.markdown("<div class='section'>🏆 Strategy Comparison & Evidence</div>", unsafe_allow_html=True)
+if trades.empty:
+    st.info("No historical paper trades yet. Win rate, probability, profit factor and ranking will be evidence-based after trades are recorded.")
 else:
-    st.caption("Historical probability, win rate, profit factor, drawdown and ranking will be calculated from the master journal once sufficient paper-trade history exists.")
+    rows=[]
+    for s,name in STRATEGIES.items():
+        td=trades[trades["strategy"]==s]
+        n=len(td); wins=int((td["pnl"]>0).sum()) if n else 0; losses=int((td["pnl"]<0).sum()) if n else 0
+        gw=float(td.loc[td["pnl"]>0,"pnl"].sum()) if n else 0; gl=float(-td.loc[td["pnl"]<0,"pnl"].sum()) if n else 0
+        rows.append({"Strategy":s,"Trades":n,"Wins":wins,"Losses":losses,"Win Rate %":round(wins/n*100,1) if n else None,"Net P&L":float(td["pnl"].sum()) if n else 0,"Profit Factor":round(gw/gl,2) if gl else None})
+    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+    st.caption("A success probability is not invented. It is estimated from actual recorded paper trades; small samples are clearly shown rather than treated as reliable proof.")
 
-st.markdown("<div class='section'>📋 Master Paper-Trading Journal</div>", unsafe_allow_html=True)
-st.caption("One consolidated journal for S1–S5. The export ends with a DAILY_QUOTE row that changes by date.")
-try:
-    from journal.master_journal import build_journal
-    journal_path=build_journal()
-    journal_df=pd.read_csv(journal_path)
-    st.dataframe(journal_df.tail(25),use_container_width=True,hide_index=True)
-    st.download_button("⬇️ Download Master Journal CSV", data=journal_path.read_bytes(), file_name="strategy_journal_master.csv", mime="text/csv")
-except Exception as e:
-    st.warning(f"Master journal will be available after the first successful journal build: {type(e).__name__}")
+# ---------- MASTER JOURNAL ----------
+st.markdown("<div class='section'>📒 Master Strategy Journal — S1 to S5</div>", unsafe_allow_html=True)
+journal=master_journal(trades,now)
+st.dataframe(journal.tail(100),use_container_width=True,hide_index=True)
+st.download_button("⬇️ DOWNLOAD MASTER JOURNAL CSV", data=journal.to_csv(index=False).encode("utf-8-sig"), file_name="strategy_journal_master.csv", mime="text/csv", use_container_width=True)
+st.caption("One master CSV only. All five strategies share the same journal. The final row is today's fresh daily quote.")
 
-quote=QUOTES[now.date().toordinal()%len(QUOTES)]
-st.markdown(f"<div class='quote'>🧠 Daily Trading Quote — “{quote}”</div>",unsafe_allow_html=True)
-st.caption("Paper trading only • No live orders • Dashboard refresh: 15 seconds • Dhan web/API can be connected later as the live data source.")
+# ---------- DAILY QUOTE ----------
+st.markdown("<div class='section'>🧠 Daily Trading Quote</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='quote'>“{daily_quote(now)}”</div>", unsafe_allow_html=True)
+
+# ---------- SYSTEM ----------
+with st.expander("⚙️ System / Data Status", expanded=False):
+    st.json({
+        "mode":"PAPER_ONLY","refresh_seconds":REFRESH_SECONDS,"capital_per_trade":CAPITAL_PER_TRADE,
+        "max_trades_per_strategy_day":MAX_TRADES_PER_STRATEGY_DAY,"max_open_trades_per_strategy":MAX_OPEN_TRADES_PER_STRATEGY,
+        "daily_loss_limit_per_strategy":DAILY_LOSS_LIMIT,"risk_range":"₹1,400–₹1,500","target_rr":RR,
+        "nifty500_change":nifty,"sector_change":sector,"ad_ratio":ad if ad_complete else None,"ad_coverage":f"{coverage}/500",
+        "buy_alignment":buy_aligned,"sell_alignment":sell_aligned,"open_positions":len(positions)
+    })
+
+st.caption("NSE Catalyst • single combined dashboard • S1–S5 • paper trading only • live API can be connected later.")
