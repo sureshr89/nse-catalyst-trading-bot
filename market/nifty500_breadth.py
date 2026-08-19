@@ -81,17 +81,12 @@ class Nifty500Breadth:
         quotes["TodayClose"] = pd.to_numeric(quotes.get("TodayClose"), errors="coerce")
 
         if closed_mode:
-            # Dhan exposes the completed day's OHLC close after market close.
-            # This is the value required by the Previous / Latest Closed Session tab.
             quotes["SessionClose"] = quotes["TodayClose"]
             bad = quotes["SessionClose"].isna() | (quotes["SessionClose"] <= 0)
             quotes.loc[bad, "SessionClose"] = quotes.loc[bad, "LTP"]
-            change_price = "SessionClose"
             session_basis = "Dhan completed-session close"
         else:
-            # During market hours, keep the master bias live.
             quotes["SessionClose"] = quotes["LTP"]
-            change_price = "SessionClose"
             session_basis = "Dhan live LTP"
 
         quotes = quotes.dropna(subset=["SessionClose", "PreviousClose"])
@@ -99,7 +94,7 @@ class Nifty500Breadth:
         if len(quotes) != 500:
             return self._store(self._unknown(f"DHAN_VALID_PRICE_DATA_{len(quotes)}/500", cache_key, now, len(quotes)))
 
-        quotes["change_pct"] = (quotes[change_price] - quotes["PreviousClose"]) / quotes["PreviousClose"] * 100
+        quotes["change_pct"] = (quotes["SessionClose"] - quotes["PreviousClose"]) / quotes["PreviousClose"] * 100
         advances = int((quotes["change_pct"] > 0).sum())
         declines = int((quotes["change_pct"] < 0).sum())
         unchanged = int((quotes["change_pct"] == 0).sum())
@@ -122,11 +117,12 @@ class Nifty500Breadth:
             nifty_change = ((session_close - prev_close) / prev_close * 100) if prev_close > 0 else None
             display_close = session_close
             session_label = "Latest completed NSE session"
+            updated_label = f"Latest completed session • market close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST"
         else:
-            session_close = live_ltp
             nifty_change = ((live_ltp - prev_close) / prev_close * 100) if prev_close > 0 else None
             display_close = prev_close
             session_label = "Previous completed NSE session"
+            updated_label = f"Previous completed session • close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST"
         if not display_close or not prev_close or nifty_change is None:
             return self._store(self._unknown("DHAN_NIFTY500_CLOSED_PRICE_UNAVAILABLE", cache_key, now, 500, sector=sector))
 
@@ -134,7 +130,7 @@ class Nifty500Breadth:
             "universe": "NIFTY 500", "total": 500, "evaluated": 500,
             "advances": advances, "declines": declines, "unchanged": unchanged, "ad_ratio": ad_ratio,
             "direction": "BULLISH" if advances > declines else "BEARISH" if declines > advances else "NEUTRAL",
-            "complete": True, "reason": "OK", "updated_at": now.isoformat(timespec="seconds"),
+            "complete": True, "reason": "OK", "updated_at": updated_label,
             "nifty500_change_pct": nifty_change, "nifty500_ltp": live_ltp,
             "nifty500_previous_close": display_close, "nifty500_reference_close": prev_close,
             "closed_session_label": session_label, "closed_session_basis": session_basis,
@@ -159,9 +155,9 @@ class Nifty500Breadth:
         return {
             "universe": "NIFTY 500", "total": 500, "evaluated": int(evaluated), "advances": 0, "declines": 0, "unchanged": 0,
             "ad_ratio": None, "direction": "UNKNOWN", "complete": False, "reason": reason,
-            "updated_at": now.isoformat(timespec="seconds"), "nifty500_change_pct": None, "nifty500_ltp": None,
-            "nifty500_previous_close": None, "nifty500_reference_close": None, "closed_session_label": "Latest completed NSE session",
-            "closed_session_basis": "waiting for Dhan closed-session data", "market_close_time": "15:30 IST",
+            "updated_at": f"Latest completed session • market close 15:30 IST • waiting for Dhan data • refreshed {now.strftime('%H:%M:%S')} IST",
+            "nifty500_change_pct": None, "nifty500_ltp": None, "nifty500_previous_close": None, "nifty500_reference_close": None,
+            "closed_session_label": "Latest completed NSE session", "closed_session_basis": "waiting for Dhan closed-session data", "market_close_time": "15:30 IST",
             "sector_alignment_pct": sector.get("alignment_pct"), "sector_complete": bool(sector.get("available")),
             "sector_coverage": sector.get("coverage", f"{evaluated}/500"), "sector_mapped": sector.get("mapped", 0),
             "sector_priced": sector.get("priced", 0), "sector_count": sector.get("sectors", 0),
