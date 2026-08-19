@@ -2,9 +2,14 @@
 from pathlib import Path
 import sys
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 st.set_page_config(page_title="NSE Catalyst",page_icon="📊",layout="wide",initial_sidebar_state="collapsed")
+
+# Refresh the complete dashboard every 25 seconds so the clock and live market data update together.
+st_autorefresh(interval=25_000, key="nse_catalyst_live_refresh")
+
 try:
     from dashboard.enhancements import render_enhancements
     render_enhancements()
