@@ -34,15 +34,15 @@ html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,BlinkMacSyste
 .card{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:14px;padding:13px 12px;min-height:92px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;box-sizing:border-box;box-shadow:0 5px 18px rgba(0,0,0,.12)}
 .card small{display:block;color:var(--muted);font-size:.67rem;line-height:1.2;font-weight:800;text-transform:uppercase;letter-spacing:.045em;white-space:normal}
 .card b{font-size:clamp(1.03rem,2vw,1.35rem);line-height:1.2;display:block;margin-top:7px;color:var(--text);overflow-wrap:anywhere}
-.strategy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.strategy{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:15px;padding:17px;min-height:155px;box-sizing:border-box;box-shadow:0 5px 18px rgba(0,0,0,.12)}
+.strategy-grid{display:flex;flex-wrap:nowrap;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 10px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.strategy{flex:0 0 calc((100% - 48px)/5);min-width:210px;border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:15px;padding:17px;min-height:155px;box-sizing:border-box;box-shadow:0 5px 18px rgba(0,0,0,.12)}
 .strategy h4{font-size:1.08rem;margin:0 0 10px;line-height:1.25;color:var(--text)}
 .strategy .muted{font-size:.92rem}
 .muted{color:var(--muted);line-height:1.5}
 .quote{border-left:4px solid var(--blue);background:var(--panel);padding:13px 16px;border-radius:9px;font-style:italic;color:#dbe6f5}
 [data-testid="stDataFrame"]{border-radius:12px;overflow:hidden}
-@media(max-width:900px){.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rule-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.strategy-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.block-container{padding:1rem .85rem 2rem}.title{font-size:1.75rem}.sub{font-size:.82rem;margin-bottom:16px}.sec{font-size:1.15rem;margin-top:22px;margin-bottom:10px}.metric-grid,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{grid-template-columns:1fr;gap:9px}.card{min-height:82px;padding:11px 10px;border-radius:12px}.card small{font-size:.62rem}.card b{font-size:1rem;margin-top:6px}.strategy{min-height:125px;padding:14px}.strategy h4{font-size:1rem}.strategy .muted{font-size:.86rem}}
+@media(max-width:1100px){.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rule-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.strategy{flex-basis:270px}}
+@media(max-width:700px){.block-container{padding:1rem .85rem 2rem}.title{font-size:1.75rem}.sub{font-size:.82rem;margin-bottom:16px}.sec{font-size:1.15rem;margin-top:22px;margin-bottom:10px}.metric-grid,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{gap:9px;padding-bottom:9px}.strategy{flex-basis:255px;min-height:125px;padding:14px}.card{min-height:82px;padding:11px 10px;border-radius:12px}.card small{font-size:.62rem}.card b{font-size:1rem;margin-top:6px}.strategy h4{font-size:1rem}.strategy .muted{font-size:.86rem}}
 @media(max-width:380px){.metric-grid,.rule-grid{grid-template-columns:1fr}.title{font-size:1.6rem}.card b{font-size:1.02rem}}
 </style>""",unsafe_allow_html=True)
 
@@ -98,18 +98,15 @@ bias="🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
 
 st.markdown("<div class='title'>📊 NSE Catalyst — Master Dashboard</div>",unsafe_allow_html=True)
 st.markdown(f"<div class='sub'>NIFTY 500 • S1–S5 combined • PAPER TRADING ONLY • auto-refresh {REFRESH}s • {now.strftime('%d %b %Y %H:%M:%S')} IST</div>",unsafe_allow_html=True)
-
 st.markdown("<div class='sec'>🎯 Master Market Alignment</div>",unsafe_allow_html=True)
 master_cards=[k("NIFTY 500",pct(nifty)),k("SECTORS",pct(sector)),k("A/D RATIO",f"{float(ad):.2f}" if full_breadth and ad is not None else "UNAVAILABLE"),k("BREADTH",coverage),k("SECTOR DATA",sector_priced),k("MASTER BIAS",bias)]
 st.markdown("<div class='metric-grid'>"+"".join(master_cards)+"</div>",unsafe_allow_html=True)
 if not full_breadth:st.error(f"🚫 TRADING BLOCKED — NIFTY 500 breadth is {coverage}. Full 500/500 is mandatory.")
 if not sector_ok:st.warning(f"🚫 TRADING BLOCKED — sector data is incomplete. Mapping {sector_map}; priced {sector_priced}.")
-
 st.markdown("<div class='sec'>🔒 Fixed Paper-Trading Rules</div>",unsafe_allow_html=True)
 rules=[k("CAPITAL / TRADE",money(CAPITAL)),k("RISK / TRADE","₹1,400–₹1,500"),k("TARGET / TRADE","1.25R"),k("MAX TRADES / STRATEGY","1 / day"),k("DAILY LOSS / TRADE","₹1,500"),k("REFRESH","15 sec")]
 st.markdown("<div class='rule-grid'>"+"".join(rules)+"</div>",unsafe_allow_html=True)
 st.caption("Position size is derived from actual Entry→SL distance. If actual risk is outside ₹1,400–₹1,500, the trade is rejected. Maximum one paper trade per strategy per day. No real orders.")
-
 st.markdown("<div class='sec'>🔥 All 5 Strategies — One-Glance Board</div>",unsafe_allow_html=True)
 st.markdown("<div class='strategy-grid'>",unsafe_allow_html=True)
 for s in STRATEGIES:
@@ -125,7 +122,6 @@ for s in STRATEGIES:
     status="🔒 LOCKED" if locked else "🟢 ALIGNED" if (buy or sell) else "⚪ WAITING"
     st.markdown(f"<div class='strategy'><h4>{s} • {status}</h4><div class='muted'>{STRATEGIES[s]}</div><br><span>Trades <b>{len(today_td)}/{MAX_TRADES}</b> • Wins <b>{wins}</b> • Losses <b>{losses}</b></span><br><br><span>Daily P&amp;L <b>{money(pnl)}</b></span></div>",unsafe_allow_html=True)
 st.markdown("</div>",unsafe_allow_html=True)
-
 st.markdown("<div class='sec'>💼 Current Paper Trades — All Strategies</div>",unsafe_allow_html=True)
 open_positions=state.get("open_positions",{}) if isinstance(state,dict) else {}
 if open_positions:
@@ -135,7 +131,6 @@ if open_positions:
         rows.append({"Strategy":normalize_strategy(p.get("strategy","")),"Stock":symbol,"Side":side,"Entry":entry,"LTP":ltp,"SL":p.get("stop_loss"),"Target":p.get("target"),"Qty":qty,"Risk":p.get("actual_risk",p.get("risk")),"P&L":round(pnl,2),"Entry Time":p.get("entry_time")})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 else:st.info("No open paper trades — waiting for complete alignment and an exact OHLC/PDH/PDL setup.")
-
 st.markdown("<div class='sec'>📈 Performance & Analysis</div>",unsafe_allow_html=True)
 if not trades.empty and "pnl" in trades:
     perf=[]
@@ -152,20 +147,16 @@ if not trades.empty and "pnl" in trades:
     if "entry_time" in trades.columns:
         seq=trades.copy();seq["entry_time"]=pd.to_datetime(seq["entry_time"],errors="coerce");seq=seq.dropna(subset=["entry_time"]).sort_values("entry_time");seq["Cumulative P&L"]=seq.groupby("strategy")["pnl"].cumsum()
         if not seq.empty:st.plotly_chart(px.line(seq,x="entry_time",y="Cumulative P&L",color="strategy",markers=True,title="📈 Cumulative P&L"),use_container_width=True)
-else:
-    st.info("Charts will populate from real paper-trade history. No artificial performance numbers are shown.")
-
+else:st.info("Charts will populate from real paper-trade history. No artificial performance numbers are shown.")
 st.markdown("<div class='sec'>🏆 Strategy Comparison</div>",unsafe_allow_html=True)
 if not trades.empty and "pnl" in trades:st.dataframe(pdf,use_container_width=True,hide_index=True)
 else:st.info("No historical paper trades yet. Strategy probabilities and rankings will appear after actual paper trades are recorded.")
-
 st.markdown("<div class='sec'>📒 Master Strategy Journal — S1 to S5</div>",unsafe_allow_html=True)
 try:
     from journal.master_journal import build_journal
     path=build_journal();jdf=pd.read_csv(path);st.dataframe(jdf.tail(25),use_container_width=True,hide_index=True);st.download_button("⬇️ Download Master Strategy Journal CSV",path.read_bytes(),"strategy_journal_master.csv","text/csv")
 except Exception as e:st.warning(f"Journal unavailable: {type(e).__name__}")
 quote=QUOTES[now.date().toordinal()%len(QUOTES)];st.markdown(f"<div class='quote'>🧠 Daily Trading Quote — “{quote}”</div>",unsafe_allow_html=True)
-
 st.markdown("<div class='sec'>⚙️ System / Data Status</div>",unsafe_allow_html=True)
 st.json({"mode":"PAPER_ONLY","refresh_seconds":REFRESH,"capital_per_trade":CAPITAL,"max_trades_per_strategy_day":MAX_TRADES,"daily_loss_limit_per_trade":DAILY_LOSS,"risk_range":"₹1,400–₹1,500","target_rr":RR,"nifty500_change":nifty,"sector_change":sector,"sector_mapping":sector_map,"sector_priced":sector_priced,"ad_ratio":ad,"ad_coverage":coverage,"market_data_coverage":priced,"buy_alignment":buy,"sell_alignment":sell,"open_positions":len(open_positions)})
 st.caption("NSE Catalyst • one combined mobile-friendly dashboard • S1–S5 • paper trading only • Dhan live data can be connected later.")
