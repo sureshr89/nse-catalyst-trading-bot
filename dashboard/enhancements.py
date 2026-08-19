@@ -51,7 +51,7 @@ def _dhan_profile():
  except Exception as e:return "REQUEST ERROR",f"{type(e).__name__}: {e}"
 def render_enhancements():
  now=datetime.now(IST)
- st.markdown(f"<div style='position:sticky;top:0;z-index:999;background:#fff;padding:6px 10px;border-bottom:1px solid #ddd;text-align:right;font-weight:700'>🕒 LIVE TIME • {now.strftime('%d %b %Y %H:%M:%S IST')}</div>",unsafe_allow_html=True)
+ st.markdown(f"<div style='background:linear-gradient(90deg,#0b132b,#1c2541);color:white;border-radius:10px;padding:10px 14px;margin:4px 0 12px;text-align:center;font-weight:800;font-size:16px'>🕒 LIVE MARKET CLOCK<br><span style='font-size:22px'>{now.strftime('%d %b %Y • %H:%M:%S')} IST</span></div>",unsafe_allow_html=True)
  try:
   from market.nifty500_breadth import BREADTH
   from data.stock_universe import StockUniverse
@@ -87,4 +87,8 @@ def render_enhancements():
   s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
  if "dhan_auth_result" in st.session_state:
   a=st.session_state["dhan_auth_result"];st.write(f"**Dhan authentication:** {a['status']} — {a['detail']}")
- st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True);qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."];st.info(f"“{qs[now.date().toordinal()%len(qs)]}”");st.caption("NSE Catalyst • paper trading only • no automatic screen refresh")
+ st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True)
+ qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."]
+ quote=qs[now.date().toordinal()%len(qs)]
+ st.markdown(f"<div style='border:1px solid #d9dee8;border-radius:12px;padding:16px 18px;margin-top:8px;background:#f8fafc'><div style='font-size:13px;font-weight:800;letter-spacing:.6px'>💡 DAILY TRADING TIP</div><div style='font-size:18px;font-weight:700;line-height:1.45;margin-top:8px'>“{quote}”</div><div style='font-size:12px;margin-top:8px;opacity:.7'>NSE Catalyst • Paper Trading</div></div>",unsafe_allow_html=True)
+ st.caption("NSE Catalyst • paper trading only")
