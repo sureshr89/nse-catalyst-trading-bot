@@ -8,12 +8,7 @@ import streamlit as st
 from datetime import datetime
 from zoneinfo import ZoneInfo
 ROOT=Path(__file__).resolve().parents[1];OUTPUTS=ROOT/"outputs";MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv";IST=ZoneInfo("Asia/Kolkata")
-STRATEGIES={
-"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"BUY: Open > PDH, sweep below PDH, reclaim Open. SELL: Open < PDL, sweep above PDL, reject back below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"BUY: NIFTY 500 >0%, sector alignment >0%, A/D >1, coverage 500/500. SELL is the exact opposite.","notes":"Previous completed candle must agree with side. One paper trade per strategy/day."},
-"S2":{"name":"PDH/PDL Breakout + Retest","entry":"BUY: break PDH → retest PDH → reclaim. SELL: break PDL → retest PDL → fail below.","sl":"BUY = retest Low; SELL = retest High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory NIFTY 500 + sector + A/D gate with 500/500 verification.","notes":"No chase without retest; previous candle must agree."},
-"S3":{"name":"PDL/PDH Sweep + Open Reclaim","entry":"BUY: Open > PDL, sweep below PDL, reclaim Open. SELL: Open < PDH, sweep above PDH, reject below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate; partial breadth never qualifies.","notes":"Previous completed candle confirmation is mandatory."},
-"S4":{"name":"Intraday High/Low Breakout","entry":"BUY = break previously formed intraday High. SELL = break previously formed intraday Low.","sl":"BUY = previous intraday Low; SELL = previous intraday High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Master NIFTY 500, sector and A/D alignment must be valid before eligibility.","notes":"Do not use the current unformed candle extreme as the reference."},
-"S5":{"name":"Direct PDH/PDL Breakout","entry":"BUY = LTP breaks PDH. SELL = LTP breaks PDL.","sl":"BUY = PDH; SELL = PDL.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate and 500/500 breadth verification.","notes":"Previous completed candle must agree; paper trading only."}}
+STRATEGIES={"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"BUY: Open > PDH, sweep below PDH, reclaim Open. SELL: Open < PDL, sweep above PDL, reject back below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"BUY: NIFTY 500 >0%, sector alignment >0%, A/D >1, coverage 500/500. SELL is the exact opposite.","notes":"Previous completed candle must agree with side. One paper trade per strategy/day."},"S2":{"name":"PDH/PDL Breakout + Retest","entry":"BUY: break PDH → retest PDH → reclaim. SELL: break PDL → retest PDL → fail below.","sl":"BUY = retest Low; SELL = retest High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory NIFTY 500 + sector + A/D gate with 500/500 verification.","notes":"No chase without retest; previous candle must agree."},"S3":{"name":"PDL/PDH Sweep + Open Reclaim","entry":"BUY: Open > PDL, sweep below PDL, reclaim Open. SELL: Open < PDH, sweep above PDH, reject below Open.","sl":"BUY = current session Low; SELL = current session High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate; partial breadth never qualifies.","notes":"Previous completed candle confirmation is mandatory."},"S4":{"name":"Intraday High/Low Breakout","entry":"BUY = break previously formed intraday High. SELL = break previously formed intraday Low.","sl":"BUY = previous intraday Low; SELL = previous intraday High.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Master NIFTY 500, sector and A/D alignment must be valid before eligibility.","notes":"Do not use the current unformed candle extreme as the reference."},"S5":{"name":"Direct PDH/PDL Breakout","entry":"BUY = LTP breaks PDH. SELL = LTP breaks PDL.","sl":"BUY = PDH; SELL = PDL.","target":"1.25R","time":"09:45–14:00 IST entries; force square-off 15:00 IST.","sector":"Same mandatory master alignment gate and 500/500 breadth verification.","notes":"Previous completed candle must agree; paper trading only."}}
 def _secret(name):
  v=os.getenv(name,"")
  if v:return str(v).strip()
@@ -52,34 +47,29 @@ def _dhan_profile():
  if not cid or not token:return "NOT CONFIGURED","Credentials missing"
  try:
   r=requests.get("https://api.dhan.co/v2/profile",headers={"Accept":"application/json","access-token":token,"client-id":cid},timeout=10);b=r.json() if r.content else {}
-  return ("PROFILE OK",f"Token {b.get('tokenValidity','—')} • Data plan {b.get('dataPlan','—')}" ) if r.status_code==200 else ("ERROR",f"{b.get('errorCode') or r.status_code}: {b.get('errorMessage') or b.get('message') or r.text[:160]}" )
+  return ("PROFILE OK",f"Token {b.get('tokenValidity','—')} • Data plan {b.get('dataPlan','—')}") if r.status_code==200 else ("ERROR",f"{b.get('errorCode') or r.status_code}: {b.get('errorMessage') or b.get('message') or r.text[:160]}")
  except Exception as e:return "REQUEST ERROR",f"{type(e).__name__}: {e}"
 def render_enhancements():
  now=datetime.now(IST)
+ st.markdown(f"<div style='position:sticky;top:0;z-index:999;background:#fff;padding:6px 10px;border-bottom:1px solid #ddd;text-align:right;font-weight:700'>🕒 LIVE TIME • {now.strftime('%d %b %Y %H:%M:%S IST')}</div>",unsafe_allow_html=True)
  try:
   from market.nifty500_breadth import BREADTH
   from data.stock_universe import StockUniverse
   live=BREADTH.snapshot(force=False);universe=StockUniverse().get_dataframe(refresh=False)
  except Exception as e:live={"complete":False,"quote_rows":pd.DataFrame(),"reason":str(e)};universe=pd.DataFrame()
- lq=live.get("quote_rows",pd.DataFrame());lq=lq if isinstance(lq,pd.DataFrame) else pd.DataFrame(lq)
- live_sec=_sector_frame(lq,universe)
- st.markdown("<div class='sec'>🟢 LIVE / 📚 PAST — Sector Analysis</div>",unsafe_allow_html=True)
- lt,pt=st.tabs(["🟢 LIVE SECTOR ANALYSIS","📚 PAST SECTOR ANALYSIS"])
+ lq=live.get("quote_rows",pd.DataFrame());lq=lq if isinstance(lq,pd.DataFrame) else pd.DataFrame(lq);live_sec=_sector_frame(lq,universe)
+ st.markdown("<div class='sec'>🟢 LIVE / 📚 PAST — Sector Analysis</div>",unsafe_allow_html=True);lt,pt=st.tabs(["🟢 LIVE SECTOR ANALYSIS","📚 PAST SECTOR ANALYSIS"])
  with lt:
-  st.caption(f"Live sector coverage: {len(lq)}/500 • A/D: {live.get('ad_ratio') if live.get('ad_ratio') is not None else 'WAITING'} • Sector alignment: {live.get('sector_alignment_pct') if live.get('sector_alignment_pct') is not None else 'WAITING'}")
-  if live_sec.empty:st.warning("Sector analysis is locked until verified stock prices and a 500-stock sector map are available.")
-  else:st.dataframe(live_sec,width="stretch",hide_index=True)
+  st.caption(f"Live sector coverage: {len(lq)}/500 • A/D: {live.get('ad_ratio') if live.get('ad_ratio') is not None else 'WAITING'} • Sector alignment: {live.get('sector_alignment_pct') if live.get('sector_alignment_pct') is not None else 'WAITING'}");st.dataframe(live_sec,width="stretch",hide_index=True) if not live_sec.empty else st.warning("Sector analysis is locked until verified stock prices and a 500-stock sector map are available.")
  with pt:
   try:
    from market.closed_session import load_saved
    past_df,past=load_saved()
   except Exception as e:past_df=pd.DataFrame();past={"complete":False,"reason":str(e),"coverage":"0/500"}
   if not past_df.empty:
-   pq=past_df.copy();pq["Symbol"]=pq.Symbol.astype(str).str.upper()
+   pq=past_df.copy();pq["Symbol"]=pq.Symbol.astype(str).str.upper();
    if "change_pct" not in pq.columns and {"Close","PreviousClose"}.issubset(pq.columns):pq["change_pct"]=(pq.Close-pq.PreviousClose)/pq.PreviousClose*100
-   ps=_sector_frame(pq,universe);st.caption(f"Past session: {past.get('session_date','—')} • coverage {len(pq)}/500 • A/D {past.get('ad_ratio','—')}")
-   if ps.empty:st.warning("Past sector mapping is not verified yet.")
-   else:st.dataframe(ps,width="stretch",hide_index=True)
+   ps=_sector_frame(pq,universe);st.caption(f"Past session: {past.get('session_date','—')} • coverage {len(pq)}/500 • A/D {past.get('ad_ratio','—')}");st.dataframe(ps,width="stretch",hide_index=True) if not ps.empty else st.warning("Past sector mapping is not verified yet.")
   else:st.warning(f"Past 500-stock session not stored yet • coverage {past.get('coverage','0/500')}")
  st.markdown("<div class='sec'>⚖️ S1–S5 Strategy Library — permanent rules</div>",unsafe_allow_html=True);st.caption("Collapse/expand each strategy. These are strategy definitions, not a daily trade list.")
  for s,r in STRATEGIES.items():
@@ -97,6 +87,4 @@ def render_enhancements():
   s,d=_dhan_profile();st.session_state["dhan_auth_result"]={"status":s,"detail":d}
  if "dhan_auth_result" in st.session_state:
   a=st.session_state["dhan_auth_result"];st.write(f"**Dhan authentication:** {a['status']} — {a['detail']}")
- st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True)
- qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."]
- st.info(f"“{qs[now.date().toordinal()%len(qs)]}”");st.caption("NSE Catalyst • paper trading only • no automatic screen refresh")
+ st.markdown("<div class='sec'>💡 Daily Trading Quote</div>",unsafe_allow_html=True);qs=["Protect your capital first; opportunities come again.","A good trade is planned before it is entered.","Discipline turns a strategy into an edge.","Wait for confirmation; forcing a trade is optional.","Trade the setup, not the emotion.","Consistency matters more than one big win.","Risk small enough to stay in the game.","Patience is a trading skill, not inactivity.","Your stop-loss is part of the strategy, not a failure.","Let price confirm your idea before you commit capital."];st.info(f"“{qs[now.date().toordinal()%len(qs)]}”");st.caption("NSE Catalyst • paper trading only • no automatic screen refresh")
