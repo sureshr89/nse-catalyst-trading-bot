@@ -68,7 +68,11 @@ def market_quote(mapping,cache_seconds=10):
   if not isinstance(item,dict):continue
   o=item.get("ohlc") or {}
   try:
-   ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0);rows.append({"Symbol":by_id.get(str(sid),str(sid)),"SecurityId":str(sid),"LTP":ltp,"TodayOpen":float(o.get("open") or 0),"TodayHigh":float(o.get("high") or 0),"TodayLow":float(o.get("low") or 0),"TodayClose":c,"PreviousClose":c,"NetChange":nc,"Volume":float(item.get("volume") or 0),"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
+   ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0)
+   # Dhan quote close is the completed-session close. PreviousClose must be derived
+   # from close - net_change; using close itself here made every stock unchanged.
+   prev=(c-nc) if c>0 else 0.0
+   rows.append({"Symbol":by_id.get(str(sid),str(sid)),"SecurityId":str(sid),"LTP":ltp,"TodayOpen":float(o.get("open") or 0),"TodayHigh":float(o.get("high") or 0),"TodayLow":float(o.get("low") or 0),"TodayClose":c,"PreviousClose":prev,"NetChange":nc,"Volume":float(item.get("volume") or 0),"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
   except (TypeError,ValueError):pass
  _set_status(received=len(rows),requested=len(ids),ok=len(rows)>0,stage="/marketfeed/quote",message=f"Received {len(rows)}/{len(ids)} quotes" if rows else _LAST_DHAN_STATUS.get("message","No quotes returned"));result=pd.DataFrame(rows)
  if not result.empty:
@@ -77,19 +81,33 @@ def market_quote(mapping,cache_seconds=10):
 def index_quote(index_name="NIFTY 500"):
  m=load_instrument_master()
  if m.empty or not configured():return None
- nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"))
+ nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME","SEM_TRADING_SYMBOL"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ins=_col(m,("SEM_INSTRUMENT_NAME","INSTRUMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"))
  if not nc or not ic:return None
- x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();mask=x["_name"].eq(index_name.upper())
+ x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();names={index_name.upper(),index_name.upper().replace(" ","-")};mask=x["_name"].isin(names)
  if not mask.any():mask=x["_name"].str.contains(index_name.upper(),regex=False,na=False)
- if seg:mask&=x[seg].astype(str).str.upper().eq("I")
- if ins:mask&=x[ins].astype(str).str.upper().eq("INDEX")
+ if seg:mask&=x[seg].astype(str).str.upper().isin({"I","INDEX"})
+ if ex:mask&=x[ex].astype(str).str.upper().isin({"NSE","BSE"})
  match=x.loc[mask]
+ if match.empty:
+  # Do not require instrument-name equality; Dhan's master has changed labels across versions.
+  x2=m.copy();x2["_name2"]=x2[nc].astype(str).str.upper();mask2=x2["_name2"].str.contains(index_name.upper(),regex=False,na=False)
+  if seg:mask2&=x2[seg].astype(str).str.upper().isin({"I","INDEX"})
+  match=x2.loc[mask2]
  if match.empty:return None
  sid=str(match.iloc[0][ic]).strip();response=_marketfeed("IDX_I",[sid]);item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid)
- if not isinstance(item,dict):return None
+ if not isinstance(item,dict):
+  # Fallback to daily chart for the same index security ID.
+  response=_post("/charts/historical",{"securityId":sid,"exchangeSegment":"IDX_I","instrument":"INDEX","expiryCode":0,"oi":False,"fromDate":(datetime.now()-timedelta(days=10)).date().isoformat(),"toDate":(datetime.now()+timedelta(days=1)).date().isoformat()},timeout=20)
+  if response and response.get("close"):
+   try:
+    closes=pd.to_numeric(pd.Series(response.get("close",[])),errors="coerce").dropna()
+    if len(closes):
+     last=float(closes.iloc[-1]);prev=float(closes.iloc[-2]) if len(closes)>1 else last;return {"LTP":last,"Open":0.0,"High":0.0,"Low":0.0,"Close":last,"PreviousClose":prev,"NetChange":last-prev,"SecurityId":sid}
+   except Exception:pass
+  return None
  o=item.get("ohlc") or {}
  try:
-  ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0);return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":c,"PreviousClose":c,"NetChange":nc,"SecurityId":sid}
+  ltp=float(item.get("last_price") or 0);nc=float(item.get("net_change") or 0);c=float(o.get("close") or 0);prev=c-nc;return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":c,"PreviousClose":prev,"NetChange":nc,"SecurityId":sid}
  except (TypeError,ValueError):return None
 def daily_history(security_id,from_date,to_date):
  response=_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20)
