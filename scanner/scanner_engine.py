@@ -9,6 +9,7 @@ from data.reference_store import ReferenceStore
 from data.stock_universe import StockUniverse
 from market.price_data import PriceData
 from market.live_price import get_current_market_price
+from market.nifty500_breadth import BREADTH
 from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.candidate_metrics import metrics,sort_key
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
@@ -116,8 +117,7 @@ class ScannerEngine:
    item=dict(state);item.update(self.metrics_cache[symbol]);rows.append(item)
   rows.sort(key=sort_key,reverse=True);return rows
  def _final_signals(self,change,market_data):
-  signals=[];ranking=[];breadth=BREADTH.snapshot()
-  self.diagnostics.update({"ad_ratio":breadth.get("ad_ratio"),"ad_advances":breadth.get("advances",0),"ad_declines":breadth.get("declines",0),"ad_evaluated":breadth.get("evaluated",0),"ad_coverage":f"{breadth.get('evaluated',0)}/500"})
+  signals=[];ranking=[];breadth=BREADTH.snapshot();self.diagnostics.update({"ad_ratio":breadth.get("ad_ratio"),"ad_advances":breadth.get("advances",0),"ad_declines":breadth.get("declines",0),"ad_evaluated":breadth.get("evaluated",0),"ad_coverage":f"{breadth.get('evaluated',0)}/500"})
   for side in ("BUY","SELL"):
    if not self.strategy.market_aligned(side,change):continue
    for item in self._rank_qualified(side,market_data):
@@ -125,15 +125,12 @@ class ScannerEngine:
     if not current:continue
     entry=float(current["Close"]);open_price=float(item["today_open"]);data=market_data.get(symbol);prev=self.strategy.latest_completed(data)
     if prev is None:continue
-    prev_open,prev_close=float(prev["Open"]),float(prev["Close"])
-    self.diagnostics["previous_candle_green"]+=int(prev_close>prev_open);self.diagnostics["previous_candle_red"]+=int(prev_close<prev_open)
-    if side=="BUY" and (entry<open_price or prev_close<=prev_open):continue
-    if side=="SELL" and (entry>open_price or prev_close>=prev_open):continue
-    state=item;today=self.price_data.today_only(data)
-    low=float(state.get("today_low",today["Low"].min())) if not today.empty else 0;high=float(state.get("today_high",today["High"].max())) if not today.empty else 0
-    signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,{"previous_candle":"GREEN" if prev_close>prev_open else "RED"},today_low=low,today_high=high,previous_candle=prev)
-    if signal:
-     signal.update({"candidate_id":item.get("candidate_id"),"nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1});ranking.append({"priority":len(ranking)+1,"symbol":symbol,"side":side});signals.append(signal)
+    po,pc=float(prev["Open"]),float(prev["Close"]);self.diagnostics["previous_candle_green"]+=int(pc>po);self.diagnostics["previous_candle_red"]+=int(pc<po)
+    if side=="BUY" and (entry<open_price or pc<=po):continue
+    if side=="SELL" and (entry>open_price or pc>=po):continue
+    today=self.price_data.today_only(data);low=float(item.get("today_low",today["Low"].min())) if not today.empty else 0;high=float(item.get("today_high",today["High"].max())) if not today.empty else 0
+    signal=self.strategy.build_signal(symbol,side,entry,open_price,item["pdh"],item["pdl"],change,{"previous_candle":"GREEN" if pc>po else "RED"},today_low=low,today_high=high,previous_candle=prev)
+    if signal:signal.update({"candidate_id":item.get("candidate_id"),"nifty500_universe":True,"candidate_state":"QUALIFIED","priority_rank":len(ranking)+1});ranking.append({"priority":len(ranking)+1,"symbol":symbol,"side":side});signals.append(signal)
   self.diagnostics["ranking"]=ranking;return signals
  def scan(self):
   self.diagnostics=self._empty_diagnostics();refs=self.prepare_reference_data()
