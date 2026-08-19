@@ -17,10 +17,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# The NIFTY-500/Dhan scan can take several seconds. Do NOT run it on the
-# Streamlit script thread because that prevents the dashboard from rendering.
-# Keep the worker state on the long-lived BREADTH object so it survives the
-# Streamlit reruns triggered by the 15-second autorefresh in single_master.py.
 try:
     from market.nifty500_breadth import BREADTH
 
@@ -60,31 +56,21 @@ try:
     def _non_blocking_snapshot(force=False):
         state = BREADTH._async_dashboard_state
         if not state["running"]:
-            # Refresh when there is no current scan. The worker performs the
-            # real Dhan request while the UI immediately renders the old/new
-            # state instead of waiting for the network.
             state["running"] = True
             state["started_at"] = time.monotonic()
-            threading.Thread(
-                target=_background_dhan_scan,
-                name="dhan-nifty500-scan",
-                daemon=True,
-            ).start()
+            threading.Thread(target=_background_dhan_scan, name="dhan-nifty500-scan", daemon=True).start()
         return dict(state["market"])
 
     BREADTH.snapshot = _non_blocking_snapshot
 except Exception:
-    # single_master.py has its own defensive handling if Dhan modules cannot
-    # be imported. Keep startup alive so the dashboard can show the error.
     pass
 
-# Execute the dashboard source on every Streamlit rerun. run_path is important
-# here: a normal Python import can be cached in sys.modules, while the dashboard
-# needs to redraw its Streamlit elements every 15 seconds.
 _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
 try:
     runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__nse_catalyst_dashboard__")
+    from dashboard.enhancements import render_enhancements
+    render_enhancements()
 except Exception as exc:
     st.error("The dashboard could not start.")
     st.exception(exc)
