@@ -42,7 +42,7 @@ RISK_REWARD_RATIO = 1.25
 MIN_RR_RATIO = 1.25
 POSITION_SIZE_METHOD = "RISK_BOUNDED_BY_SL"
 
-# Five strategies × one active position per strategy = Rs 12.5 lakh total paper capital.
+# Five strategies × one active position per strategy = Rs 12.5 lakh maximum simultaneous paper capital.
 TOTAL_CAPITAL = 1250000
 MAX_OPEN_POSITIONS = 5
 
@@ -50,6 +50,10 @@ MAX_OPEN_POSITIONS = 5
 MAX_TRADES_PER_STRATEGY_PER_DAY = 2
 DAILY_MAX_LOSS_PER_STRATEGY = 3000
 MAX_TRADES_PER_STOCK = 1
+
+# Compatibility aliases used by older risk/worker code.
+DAILY_MAX_LOSS = DAILY_MAX_LOSS_PER_STRATEGY
+COOLDOWN_MINUTES = 0
 
 # Paper trading only. Dhan/web.dhan.co will be connected later.
 PAPER_TRADING = True
