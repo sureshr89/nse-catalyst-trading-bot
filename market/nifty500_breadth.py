@@ -8,7 +8,6 @@ import pandas as pd
 from data.stock_universe import StockUniverse
 from data.sector_alignment import load_sector_map, calculate_sector_alignment
 from market.dhan_data import configured as dhan_configured, map_nifty500, market_quote, index_quote
-from market.price_data import PriceData
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 CACHE_SECONDS = 15
@@ -17,17 +16,32 @@ CACHE_SECONDS = 15
 class Nifty500Breadth:
     def __init__(self):
         self.universe_engine = StockUniverse()
-        self.price_data = PriceData()
         self._lock = threading.RLock()
         self._cached_at = 0.0
         self._cached = None
         self._mapping = pd.DataFrame()
         self._mapping_at = 0.0
+        self._universe = pd.DataFrame()
+
+    def _get_universe(self):
+        # Streamlit cloud starts without the generated CSV cache. Download once,
+        # then keep the 500-symbol universe in memory for subsequent 15s scans.
+        if self._universe is not None and len(self._universe) == 500:
+            return self._universe
+        universe = self.universe_engine.get_dataframe(refresh=True)
+        if universe is None or universe.empty or "Symbol" not in universe.columns:
+            return pd.DataFrame()
+        universe = universe.copy()
+        universe["Symbol"] = universe["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS", "", regex=False)
+        universe = universe.drop_duplicates("Symbol").head(500).reset_index(drop=True)
+        if len(universe) == 500:
+            self._universe = universe
+        return universe
 
     def _get_mapping(self, symbols):
         now = time.monotonic()
         if self._mapping is not None and not self._mapping.empty and now - self._mapping_at < 3600:
-            if len(self._mapping) == len(symbols):
+            if set(self._mapping["Symbol"].astype(str).str.upper()) == set(symbols):
                 return self._mapping
         mapping = map_nifty500(symbols)
         self._mapping = mapping
@@ -40,7 +54,7 @@ class Nifty500Breadth:
             if not force and self._cached is not None and now - self._cached_at < CACHE_SECONDS:
                 return dict(self._cached)
 
-        universe = self.universe_engine.get_dataframe(refresh=False)
+        universe = self._get_universe()
         if universe is None or universe.empty or "Symbol" not in universe.columns:
             return self._store(self._unknown("NIFTY_500_UNIVERSE_UNAVAILABLE"))
         symbols = universe["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).drop_duplicates().tolist()
@@ -72,7 +86,8 @@ class Nifty500Breadth:
         ad_ratio = float(advances / declines) if declines else float("inf")
 
         try:
-            sector = calculate_sector_alignment(quotes[["Symbol", "change_pct"]], load_sector_map(universe, refresh=False), "change_pct")
+            sector_map = load_sector_map(universe, refresh=False)
+            sector = calculate_sector_alignment(quotes[["Symbol", "change_pct"]], sector_map, "change_pct")
         except Exception as exc:
             sector = {"available": False, "alignment_pct": None, "mapped": 0, "priced": 0, "sectors": 0, "positive_sectors": 0, "negative_sectors": 0, "coverage": "0/500", "error": str(exc)}
 
