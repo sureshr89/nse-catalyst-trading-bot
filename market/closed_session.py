@@ -48,31 +48,31 @@ def build_closed_snapshot(force=False):
     now=datetime.now(IST)
     if not force:
         saved_df,saved_summary=_find_saved_before(now.date())
-        if not saved_df.empty and len(saved_df)>=500:return saved_df,saved_summary
+        if not saved_df.empty and len(saved_df)>=450:return saved_df,saved_summary
     if not configured():
         saved_df,saved_summary=_find_saved_before(now.date())
         return (saved_df,saved_summary) if not saved_df.empty else (pd.DataFrame(),{"complete":False,"reason":"Dhan credentials not configured","dhan_status":dhan_status()})
     u=_universe()
-    if len(u)!=500:return pd.DataFrame(),{"complete":False,"reason":f"NIFTY 500 universe only {len(u)}/500","dhan_status":dhan_status()}
+    if len(u)<450:return pd.DataFrame(),{"complete":False,"reason":f"NIFTY 500 universe unavailable: {len(u)}/500","dhan_status":dhan_status()}
     mapping=map_nifty500(u.Symbol.tolist())
-    if len(mapping)!=500:return pd.DataFrame(),{"complete":False,"reason":f"Dhan security mapping only {len(mapping)}/500","dhan_status":dhan_status()}
+    # Do NOT throw away the whole dataset because a few symbols cannot be mapped.
+    if len(mapping)<450:return pd.DataFrame(),{"complete":False,"reason":f"Dhan security mapping too low: {len(mapping)}/500","dhan_status":dhan_status()}
+
     q=market_quote(mapping,cache_seconds=0)
-    if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan returned no quotes for closed-session snapshot","dhan_status":dhan_status()}
+    if q.empty:return pd.DataFrame(),{"complete":False,"reason":f"Dhan returned 0/{len(mapping)} quotes","dhan_status":dhan_status()}
     q["Close"]=pd.to_numeric(q.get("TodayClose"),errors="coerce");q["PreviousClose"]=pd.to_numeric(q.get("PreviousClose"),errors="coerce")
     q=q.dropna(subset=["Close","PreviousClose"]);q=q[(q.Close>0)&(q.PreviousClose>0)].copy()
-    if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan quotes contained no usable closes","dhan_status":dhan_status()}
+    if q.empty:return pd.DataFrame(),{"complete":False,"reason":"Dhan returned quotes but no usable closed prices","dhan_status":dhan_status()}
     q["ChangePct"]=(q.Close-q.PreviousClose)/q.PreviousClose*100
     advances=int((q.ChangePct>0).sum());declines=int((q.ChangePct<0).sum());unchanged=int((q.ChangePct==0).sum());ad=float(advances/declines) if declines else None
     try:
         sm=load_sector_map(u,refresh=False);sector=calculate_sector_alignment(q[["Symbol","ChangePct"]].rename(columns={"ChangePct":"change_pct"}),sm,"change_pct")
     except Exception as exc:sector={"alignment_pct":None,"positive_sectors":0,"negative_sectors":0,"coverage":"0/500","error":str(exc)}
-    # Dhan limits quote requests; wait before the separate index request.
     time.sleep(1.1)
     idx=index_quote("NIFTY 500")
-    idx_close=(idx or {}).get("Close");idx_prev=(idx or {}).get("PreviousClose")
-    idx_pct=((idx_close-idx_prev)/idx_prev*100) if idx_close and idx_prev else None
+    idx_close=(idx or {}).get("Close");idx_prev=(idx or {}).get("PreviousClose");idx_pct=((idx_close-idx_prev)/idx_prev*100) if idx_close and idx_prev else None
     session_date=_completed_session_date(now).isoformat()
-    summary={"complete":len(q)>=500,"session_date":session_date,"market_close":"15:30 IST","nifty500_close":idx_close,"nifty500_previous_close":idx_prev,"nifty500_change_pct":idx_pct,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad,"sector_alignment_pct":sector.get("alignment_pct"),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"coverage":f"{len(q)}/500","source":"Dhan closed OHLC snapshot","saved_at":now.isoformat(),"dhan_status":dhan_status()}
+    summary={"complete":len(q)>=450,"session_date":session_date,"market_close":"15:30 IST","nifty500_close":idx_close,"nifty500_previous_close":idx_prev,"nifty500_change_pct":idx_pct,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad,"sector_alignment_pct":sector.get("alignment_pct"),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"coverage":f"{len(q)}/500","source":"Dhan closed OHLC snapshot","saved_at":now.isoformat(),"dhan_status":dhan_status()}
     out=q[[c for c in ["Symbol","SecurityId","Close","PreviousClose","TodayOpen","TodayHigh","TodayLow","Volume","ChangePct"] if c in q.columns]].copy()
     out.to_csv(_file(datetime.fromisoformat(session_date).date()),index=False);_summary_file(datetime.fromisoformat(session_date).date()).write_text(json.dumps(summary,indent=2,default=str))
     return out,summary
