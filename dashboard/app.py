@@ -11,15 +11,16 @@ try:
 except Exception: pass
 _original_set_page_config=st.set_page_config
 _original_download=st.download_button
-# The old dashboard contains download buttons before the strategy library.
-# Suppress those old buttons; the enhancements module renders downloads last.
 st.download_button=lambda *args,**kwargs:None
 st.set_page_config=lambda *args,**kwargs:None
 try:
  runpy.run_path(str(ROOT/"dashboard"/"single_master.py"),run_name="__nse_catalyst_dashboard__")
+ # Restore downloads before the new final section renders them.
+ st.download_button=_original_download
  from dashboard.enhancements import render_enhancements
  render_enhancements()
 except Exception as exc:
+ st.download_button=_original_download
  st.error("The dashboard could not start.")
  st.exception(exc)
 finally:
