@@ -11,7 +11,6 @@ from market.dhan_data import configured as dhan_configured, map_nifty500, market
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 CACHE_SECONDS = 15
-INITIAL_LOAD_GRACE_SECONDS = 2
 
 
 class Nifty500Breadth:
@@ -23,11 +22,8 @@ class Nifty500Breadth:
         self._mapping = pd.DataFrame()
         self._mapping_at = 0.0
         self._universe = pd.DataFrame()
-        self._created_at = time.monotonic()
 
     def _get_universe(self):
-        # Streamlit cloud starts without the generated CSV cache. Download once,
-        # then keep the 500-symbol universe in memory for subsequent 15s scans.
         if self._universe is not None and len(self._universe) == 500:
             return self._universe
         universe = self.universe_engine.get_dataframe(refresh=True)
@@ -55,15 +51,11 @@ class Nifty500Breadth:
         with self._lock:
             if not force and self._cached is not None and now - self._cached_at < CACHE_SECONDS:
                 return dict(self._cached)
-            # Do not make a network/universe request during the first seconds of
-            # the Streamlit session. This lets the dashboard render immediately;
-            # the normal 15-second refresh performs the real Dhan scan afterward.
-            if not force and self._cached is None and now - self._created_at < INITIAL_LOAD_GRACE_SECONDS:
-                return self._unknown("DATA_LOADING")
 
         universe = self._get_universe()
         if universe is None or universe.empty or "Symbol" not in universe.columns:
             return self._store(self._unknown("NIFTY_500_UNIVERSE_UNAVAILABLE"))
+
         symbols = universe["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).drop_duplicates().tolist()
         if len(symbols) != 500:
             return self._store(self._unknown(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}", len(symbols)))
@@ -96,11 +88,22 @@ class Nifty500Breadth:
             sector_map = load_sector_map(universe, refresh=False)
             sector = calculate_sector_alignment(quotes[["Symbol", "change_pct"]], sector_map, "change_pct")
         except Exception as exc:
-            sector = {"available": False, "alignment_pct": None, "mapped": 0, "priced": 0, "sectors": 0, "positive_sectors": 0, "negative_sectors": 0, "coverage": "0/500", "error": str(exc)}
+            sector = {
+                "available": False,
+                "alignment_pct": None,
+                "mapped": 0,
+                "priced": 0,
+                "sectors": 0,
+                "positive_sectors": 0,
+                "negative_sectors": 0,
+                "coverage": "0/500",
+                "error": str(exc),
+            }
 
         nifty = index_quote("NIFTY 500")
         if not nifty or not nifty.get("PreviousClose") or not nifty.get("LTP"):
             return self._store(self._unknown("DHAN_NIFTY500_INDEX_UNAVAILABLE", 500, quotes, sector))
+
         nifty_change = (float(nifty["LTP"]) - float(nifty["PreviousClose"])) / float(nifty["PreviousClose"]) * 100
 
         result = {
