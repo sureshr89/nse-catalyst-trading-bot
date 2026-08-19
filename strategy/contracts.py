@@ -1,6 +1,6 @@
 """Single source of truth for the five NIFTY 500 price-action strategies."""
 
-STRATEGY_VERSION = "2026.08.19.v2"
+STRATEGY_VERSION = "2026.08.19.v3"
 STRATEGY_1_NAME = "PDH/PDL Sweep + Open Reclaim"
 STRATEGY_2_NAME = "PDH/PDL Breakout + Retest"
 STRATEGY_3_NAME = "PDL/PDH Sweep + Open Reclaim"
@@ -17,12 +17,12 @@ COMMON_RULES = (
     ("Indicators", "Not used for strategy entry"),
     ("Refresh", "Live data/strategy evaluation every 15 seconds"),
     ("Entry", "Live LTP trigger; no current-candle close confirmation"),
-    ("Capital allocation", "₹2,50,000 per strategy"),
+    ("Capital allocation", "₹2,50,000 per trade"),
     ("Max trades", "Maximum 2 trades per strategy per day"),
     ("Daily loss limit", "Maximum ₹3,000 loss per strategy per day; lock strategy after limit"),
     ("Target", "1.25R"),
     ("Position risk", "Actual risk must be ₹1,400–₹1,500 from the calculated SL distance; otherwise no trade"),
-    ("Position sizing", "Quantity is calculated from Entry-to-SL distance; capital limit ₹2,50,000"),
+    ("Position sizing", "Quantity is calculated from Entry-to-SL distance; capital per trade capped at ₹2,50,000"),
     ("Exit", "SL or 1.25R target; mandatory 15:00 IST paper square-off"),
     ("Execution", "PAPER TRADING ONLY; no live order placement"),
     ("Look-ahead rule", "Only OHLC/levels available before or at entry may be used"),
@@ -72,9 +72,4 @@ def strategy_metadata(strategy: str) -> dict:
     }.get(key)
     if canonical is None:
         raise ValueError(f"Unknown strategy: {strategy}")
-    return {
-        "strategy": canonical,
-        "name": names[canonical],
-        "version": STRATEGY_VERSION,
-        "rules": COMMON_RULES + STRATEGY_RULES[canonical],
-    }
+    return {"strategy": canonical, "name": names[canonical], "version": STRATEGY_VERSION, "rules": COMMON_RULES + STRATEGY_RULES[canonical]}
