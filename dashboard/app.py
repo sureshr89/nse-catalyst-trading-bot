@@ -1,7 +1,7 @@
-"""NSE Catalyst: one combined master paper-trading dashboard."""
+"""NSE Catalyst: combined paper-trading dashboard with historical data page."""
 import streamlit as st
 
-# The master dashboard owns page configuration and contains S1-S5 together.
 master = st.Page("master_dashboard.py", title="NSE Catalyst", icon="📊", default=True)
-pg = st.navigation([master], position="hidden")
+historical = st.Page("historical_data.py", title="Historical / Previous Day", icon="📚")
+pg = st.navigation([master, historical], position="hidden")
 pg.run()
