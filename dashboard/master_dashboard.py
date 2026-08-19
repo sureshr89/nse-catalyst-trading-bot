@@ -11,7 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 ROOT=Path(__file__).resolve().parents[1]
 IST=ZoneInfo("Asia/Kolkata")
 REFRESH=15
-CAPITAL=150000
+CAPITAL=250000
 MIN_RISK=1400
 MAX_RISK=1500
 RR=1.25
@@ -24,11 +24,26 @@ st.set_page_config(page_title="NSE Catalyst",page_icon="📊",layout="wide",init
 st_autorefresh(interval=REFRESH*1000,key="master_refresh")
 st.markdown("""
 <style>
-:root{--panel:#111b2b;--border:#2b4163;--muted:#9fb1ca;--blue:#62a8ff}
-.title{font-size:clamp(1.9rem,4vw,3rem);font-weight:900;line-height:1.08;letter-spacing:-.02em;margin:4px 0 8px}.sub{color:var(--muted);font-size:.92rem;margin-bottom:18px}.sec{font-size:clamp(1.15rem,2.5vw,1.45rem);font-weight:850;margin:25px 0 11px;line-height:1.2}.metric-grid,.rule-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.card{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),#0f1928);border-radius:14px;padding:13px 12px;min-height:92px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;box-sizing:border-box}.card small{display:block;color:var(--muted);font-size:.68rem;line-height:1.15;font-weight:800;text-transform:uppercase;letter-spacing:.045em}.card b{font-size:clamp(1.05rem,2vw,1.42rem);line-height:1.15;display:block;margin-top:7px;overflow-wrap:anywhere}.strategy-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.strategy{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),#101a2b);border-radius:15px;padding:15px;min-height:150px;box-sizing:border-box}.strategy h4{font-size:1.02rem;margin:0 0 9px;line-height:1.2}.muted{color:var(--muted);line-height:1.45}.quote{border-left:4px solid var(--blue);background:var(--panel);padding:13px 16px;border-radius:9px;font-style:italic}
-@media(max-width:1100px){.metric-grid,.rule-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.strategy-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.title{font-size:1.8rem}.sub{font-size:.82rem}.sec{font-size:1.18rem;margin-top:21px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{grid-template-columns:1fr;gap:9px}.card{min-height:88px;padding:12px 11px}.card small{font-size:.66rem}.card b{font-size:1.08rem}.strategy{min-height:126px;padding:14px}.strategy h4{font-size:1rem}}
-@media(max-width:380px){.metric-grid,.rule-grid{grid-template-columns:1fr}.title{font-size:1.65rem}}
+:root{--panel:#111b2b;--panel2:#0f1928;--border:#2b4163;--muted:#9fb1ca;--text:#f4f7fb;--blue:#62a8ff;--green:#43d17a;--red:#ff6675;--gold:#ffd166}
+html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.block-container{max-width:1450px;padding-top:1.4rem;padding-bottom:2.5rem}
+.title{font-size:clamp(2rem,4vw,3rem);font-weight:900;line-height:1.08;letter-spacing:-.025em;margin:4px 0 8px;color:var(--text)}
+.sub{color:var(--muted);font-size:.92rem;line-height:1.5;margin-bottom:20px}
+.sec{font-size:clamp(1.18rem,2.5vw,1.5rem);font-weight:850;margin:27px 0 12px;line-height:1.2;color:var(--text)}
+.metric-grid,.rule-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.card{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:14px;padding:13px 12px;min-height:92px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;box-sizing:border-box;box-shadow:0 5px 18px rgba(0,0,0,.12)}
+.card small{display:block;color:var(--muted);font-size:.67rem;line-height:1.2;font-weight:800;text-transform:uppercase;letter-spacing:.045em;white-space:normal}
+.card b{font-size:clamp(1.03rem,2vw,1.35rem);line-height:1.2;display:block;margin-top:7px;color:var(--text);overflow-wrap:anywhere}
+.strategy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.strategy{border:1px solid var(--border);background:linear-gradient(145deg,var(--panel),var(--panel2));border-radius:15px;padding:17px;min-height:155px;box-sizing:border-box;box-shadow:0 5px 18px rgba(0,0,0,.12)}
+.strategy h4{font-size:1.08rem;margin:0 0 10px;line-height:1.25;color:var(--text)}
+.strategy .muted{font-size:.92rem}
+.muted{color:var(--muted);line-height:1.5}
+.quote{border-left:4px solid var(--blue);background:var(--panel);padding:13px 16px;border-radius:9px;font-style:italic;color:#dbe6f5}
+[data-testid="stDataFrame"]{border-radius:12px;overflow:hidden}
+@media(max-width:900px){.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rule-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.strategy-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.block-container{padding:1rem .85rem 2rem}.title{font-size:1.75rem}.sub{font-size:.82rem;margin-bottom:16px}.sec{font-size:1.15rem;margin-top:22px;margin-bottom:10px}.metric-grid,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.strategy-grid{grid-template-columns:1fr;gap:9px}.card{min-height:82px;padding:11px 10px;border-radius:12px}.card small{font-size:.62rem}.card b{font-size:1rem;margin-top:6px}.strategy{min-height:125px;padding:14px}.strategy h4{font-size:1rem}.strategy .muted{font-size:.86rem}}
+@media(max-width:380px){.metric-grid,.rule-grid{grid-template-columns:1fr}.title{font-size:1.6rem}.card b{font-size:1.02rem}}
 </style>""",unsafe_allow_html=True)
 
 def load_json(name):
@@ -91,9 +106,9 @@ if not full_breadth:st.error(f"🚫 TRADING BLOCKED — NIFTY 500 breadth is {co
 if not sector_ok:st.warning(f"🚫 TRADING BLOCKED — sector data is incomplete. Mapping {sector_map}; priced {sector_priced}.")
 
 st.markdown("<div class='sec'>🔒 Fixed Paper-Trading Rules</div>",unsafe_allow_html=True)
-rules=[k("CAPITAL / STRATEGY",money(CAPITAL)),k("RISK / TRADE","₹1,400–₹1,500"),k("TARGET","1.25R"),k("MAX TRADES","1 / day"),k("DAILY LOSS LIMIT","₹1,500"),k("REFRESH","15 sec")]
+rules=[k("CAPITAL / TRADE",money(CAPITAL)),k("RISK / TRADE","₹1,400–₹1,500"),k("TARGET / TRADE","1.25R"),k("MAX TRADES / STRATEGY","1 / day"),k("DAILY LOSS / TRADE","₹1,500"),k("REFRESH","15 sec")]
 st.markdown("<div class='rule-grid'>"+"".join(rules)+"</div>",unsafe_allow_html=True)
-st.caption("Position size is derived from actual Entry→SL distance. If actual risk is outside ₹1,400–₹1,500, the trade is rejected. One open paper trade per strategy. No real orders.")
+st.caption("Position size is derived from actual Entry→SL distance. If actual risk is outside ₹1,400–₹1,500, the trade is rejected. Maximum one paper trade per strategy per day. No real orders.")
 
 st.markdown("<div class='sec'>🔥 All 5 Strategies — One-Glance Board</div>",unsafe_allow_html=True)
 st.markdown("<div class='strategy-grid'>",unsafe_allow_html=True)
@@ -152,5 +167,5 @@ except Exception as e:st.warning(f"Journal unavailable: {type(e).__name__}")
 quote=QUOTES[now.date().toordinal()%len(QUOTES)];st.markdown(f"<div class='quote'>🧠 Daily Trading Quote — “{quote}”</div>",unsafe_allow_html=True)
 
 st.markdown("<div class='sec'>⚙️ System / Data Status</div>",unsafe_allow_html=True)
-st.json({"mode":"PAPER_ONLY","refresh_seconds":REFRESH,"capital_per_strategy":CAPITAL,"max_trades_per_strategy_day":MAX_TRADES,"daily_loss_limit_per_strategy":DAILY_LOSS,"risk_range":"₹1,400–₹1,500","target_rr":RR,"nifty500_change":nifty,"sector_change":sector,"sector_mapping":sector_map,"sector_priced":sector_priced,"ad_ratio":ad,"ad_coverage":coverage,"market_data_coverage":priced,"buy_alignment":buy,"sell_alignment":sell,"open_positions":len(open_positions)})
+st.json({"mode":"PAPER_ONLY","refresh_seconds":REFRESH,"capital_per_trade":CAPITAL,"max_trades_per_strategy_day":MAX_TRADES,"daily_loss_limit_per_trade":DAILY_LOSS,"risk_range":"₹1,400–₹1,500","target_rr":RR,"nifty500_change":nifty,"sector_change":sector,"sector_mapping":sector_map,"sector_priced":sector_priced,"ad_ratio":ad,"ad_coverage":coverage,"market_data_coverage":priced,"buy_alignment":buy,"sell_alignment":sell,"open_positions":len(open_positions)})
 st.caption("NSE Catalyst • one combined mobile-friendly dashboard • S1–S5 • paper trading only • Dhan live data can be connected later.")
