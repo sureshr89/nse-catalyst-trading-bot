@@ -26,3 +26,5 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m pytest -q
+
+# Test workflow intentionally runs on every push so strategy fixes are validated immediately.
