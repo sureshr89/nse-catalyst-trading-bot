@@ -15,13 +15,13 @@ def test_completed_excludes_current_minute():
     now=datetime.now(IST).replace(second=0,microsecond=0);frame=pd.DataFrame([{ "Datetime":now,"Open":100,"High":101,"Low":99,"Close":100},{"Datetime":now.replace(minute=max(0,now.minute-1)),"Open":100,"High":101,"Low":99,"Close":100}]);result=PriceData._completed(frame);assert all(result["Datetime"]<now)
 
 def test_live_price_uses_dhan_source_label():
-    pd_obj=PriceData();pd_obj._live_price_cache.clear();pd_obj._live_price_cache_at.clear()
-    mapping=pd.DataFrame([{"Symbol":"ABC","SecurityId":"123"}])
-    quote=pd.DataFrame([{ "Symbol":"ABC","LTP":110,"TodayOpen":108,"TodayHigh":112,"TodayLow":107,"PreviousClose":105,"NetChange":5}])
-    with patch("market.dhan_data.configured",return_value=True) as configured_mock, patch("market.dhan_data.map_nifty500",return_value=mapping) as map_mock, patch("market.dhan_data.market_quote",return_value=quote) as quote_mock:
-        result=pd_obj.get_latest_live_price("ABC",max_age_seconds=0)
-    configured_mock.assert_called_once()
-    map_mock.assert_called_once_with(["ABC"])
+    symbol="PRICE_TEST_UNIQUE"
+    pd_obj=PriceData();pd_obj._live_price_cache.pop(symbol,None);pd_obj._live_price_cache_at.pop(symbol,None)
+    mapping=pd.DataFrame([{"Symbol":symbol,"SecurityId":"123"}])
+    quote=pd.DataFrame([{ "Symbol":symbol,"LTP":110,"TodayOpen":108,"TodayHigh":112,"TodayLow":107,"PreviousClose":105,"NetChange":5}])
+    with patch("market.dhan_data.configured",return_value=True), patch("market.dhan_data.map_nifty500",return_value=mapping) as map_mock, patch("market.dhan_data.market_quote",return_value=quote) as quote_mock:
+        result=pd_obj.get_latest_live_price(symbol,max_age_seconds=0)
+    map_mock.assert_called_once_with([symbol])
     quote_mock.assert_called_once()
     assert result is not None
     assert result["price_source"]=="DHAN_OHLC"
