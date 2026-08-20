@@ -6,12 +6,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math, os, threading, time
 import pandas as pd, requests
-
 BASE_URL="https://api.dhan.co/v2"; MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"; MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 CACHE_DIR=Path("data"); MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv"; IST="Asia/Kolkata"
-_LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0; _QUOTE_CACHE_KEY=None; _INTRADAY_CACHE={}; _INTRADAY_CACHE_AT={}
+_LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0; _QUOTE_CACHE_KEY=None
 _LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
-
 def _secret(name):
     value=os.getenv(name,"")
     if value:return str(value).strip()
@@ -66,12 +64,10 @@ def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
 def _finite_positive(v):
     try:return math.isfinite(float(v)) and float(v)>0
     except (TypeError,ValueError):return False
-def _valid_ohlc(op,hi,lo,close,ltp):
-    return all(_finite_positive(v) for v in (op,hi,lo,close,ltp)) and hi>=max(op,lo,ltp) and lo<=min(op,hi,ltp)
+def _valid_ohlc(op,hi,lo,close,ltp):return all(_finite_positive(v) for v in (op,hi,lo,close,ltp)) and hi>=max(op,lo,ltp) and lo<=min(op,hi,ltp)
 def market_quote(mapping,cache_seconds=10):
     global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
-    if mapping is None or mapping.empty or not configured():return pd.DataFrame()
-    if not {"SecurityId","Symbol"}.issubset(mapping.columns):return pd.DataFrame()
+    if mapping is None or mapping.empty or not configured() or not {"SecurityId","Symbol"}.issubset(mapping.columns):return pd.DataFrame()
     clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.dropna(subset=["SecurityId"]).drop_duplicates("SecurityId")
     if len(clean)!=len(mapping) or clean["Symbol"].duplicated().any():return pd.DataFrame()
     ids=clean["SecurityId"].astype(int).astype(str).tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
@@ -88,11 +84,24 @@ def market_quote(mapping,cache_seconds=10):
             if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,close,ltp) or not math.isfinite(net) or vol<0:continue
             rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":close,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
         except (TypeError,ValueError,OverflowError,KeyError):pass
-    result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame(); verified=not result.empty and len(result)==len(expected_ids) and set(result["SecurityId"].astype(str))==expected_ids and set(result["Symbol"].astype(str).str.upper())==expected_symbols
+    result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame();verified=not result.empty and len(result)==len(expected_ids) and set(result["SecurityId"].astype(str))==expected_ids and set(result["Symbol"].astype(str).str.upper())==expected_symbols
     _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/quote",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes")
     if not verified:return pd.DataFrame()
     with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
     return result
+def index_quote(ticker="NIFTY 500"):
+    """Return a verified Dhan index quote when available; no equity fallback is used."""
+    aliases={"NIFTY 500":"NIFTY 500","NIFTY500":"NIFTY 500","NIFTY 50":"NIFTY","NIFTY":"NIFTY"};name=aliases.get(str(ticker).strip().upper(),str(ticker).strip().upper())
+    if not configured():return None
+    try:
+        response=_post("/marketfeed/quote",{"IDX_I":[13]})
+        data=response.get("data",{}).get("IDX_I",{}) if response else {}
+        for _,item in data.items():
+            if isinstance(item,dict):
+                ltp=float(item.get("last_price") or item.get("ltp") or 0);net=float(item.get("net_change") or 0);prev=ltp-net
+                if _finite_positive(ltp) and _finite_positive(prev):return {"Name":name,"LTP":ltp,"NetChange":net,"PreviousClose":prev,"change_pct":net/prev*100.0,"price_source":"DHAN_INDEX_QUOTE"}
+    except Exception:pass
+    return None
 def _history_frame(response):
     if not response:return pd.DataFrame()
     try:
@@ -102,11 +111,8 @@ def _history_frame(response):
         for c in ["Open","High","Low","Close","Volume"]:x[c]=pd.to_numeric(x[c],errors="coerce")
         x=x.dropna(subset=["Open","High","Low","Close"]);return x[(x["Open"]>0)&(x["High"]>=x[["Open","Low","Close"]].max(axis=1))&(x["Low"]<=x[["Open","High","Close"]].min(axis=1))].sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
     except Exception:return pd.DataFrame()
-def intraday_history(security_id,from_dt,to_dt,interval=1):
-    payload={"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","interval":str(interval),"oi":False,"fromDate":from_dt,"toDate":to_dt}
-    return _history_frame(_post("/charts/intraday",payload,timeout=20))
-def daily_history(security_id,from_date,to_date):
-    return _history_frame(_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20))
+def intraday_history(security_id,from_dt,to_dt,interval=1):return _history_frame(_post("/charts/intraday",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","interval":str(interval),"oi":False,"fromDate":from_dt,"toDate":to_dt},timeout=20))
+def daily_history(security_id,from_date,to_date):return _history_frame(_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20))
 def previous_day_references(mapping,force=False):
     if mapping is None or mapping.empty or not configured():return pd.DataFrame()
     today=datetime.now().date();fd=(today-timedelta(days=10)).isoformat();td=(today+timedelta(days=1)).isoformat()
