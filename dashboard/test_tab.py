@@ -8,12 +8,8 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-# Test entry: first qualifying live cycle at or after 09:15 IST.
-# There is deliberately no 09:45 deadline: if a complete aligned snapshot
-# becomes available at any time after market open, the test may enter then.
-TEST_ENTRY_TIME = dt.time(9, 15)
+TEST_ENTRY_TIME = dt.time(9, 15)  # first qualifying cycle at/after market open
 FORCE_EXIT = dt.time(14, 45)
 MIN_HOLD = dt.timedelta(minutes=1)
 SL_PCT = 0.005
@@ -45,9 +41,6 @@ def _eligible_stock(rows, index_change):
     work = work.dropna(subset=["Symbol", "LTP", "TodayOpen"])
     if work.empty:
         return None
-
-    # Simple isolated diagnostic rule: positive NIFTY -> first verified stock
-    # above open is BUY; negative NIFTY -> first verified stock below open is SELL.
     if float(index_change) >= 0:
         candidates = work[work["LTP"] > work["TodayOpen"]].sort_values("Symbol")
         side = "BUY"
@@ -63,27 +56,13 @@ def _eligible_stock(rows, index_change):
 def _open_test_trade(candidate, now):
     entry = candidate["entry"]
     side = candidate["side"]
-    if side == "BUY":
-        sl = entry * (1 - SL_PCT)
-        target = entry * (1 + TARGET_PCT)
-    else:
-        sl = entry * (1 + SL_PCT)
-        target = entry * (1 - TARGET_PCT)
+    sl = entry * (1 - SL_PCT) if side == "BUY" else entry * (1 + SL_PCT)
+    target = entry * (1 + TARGET_PCT) if side == "BUY" else entry * (1 - TARGET_PCT)
     st.session_state["nse_test_trade"] = {
-        "date": now.date().isoformat(),
-        "status": "OPEN",
-        "symbol": candidate["symbol"],
-        "side": side,
-        "entry_time": now.isoformat(),
-        "entry": entry,
-        "open": candidate["open"],
-        "sl": sl,
-        "target": target,
-        "qty": 1,
-        "exit_time": None,
-        "exit": None,
-        "pnl": None,
-        "exit_reason": None,
+        "date": now.date().isoformat(), "status": "OPEN", "symbol": candidate["symbol"],
+        "side": side, "entry_time": now.isoformat(), "entry": entry, "open": candidate["open"],
+        "sl": sl, "target": target, "qty": 1, "exit_time": None, "exit": None,
+        "pnl": None, "exit_reason": None,
     }
 
 
@@ -102,7 +81,6 @@ def _update_test_trade(live_rows, now):
         return state
     if now - entry_time < MIN_HOLD:
         return state
-
     side = state["side"]
     reason = None
     if side == "BUY":
@@ -117,7 +95,7 @@ def _update_test_trade(live_rows, now):
             reason = "TARGET"
     if reason is None and now.time() >= FORCE_EXIT:
         reason = "2:45 PM TIME EXIT"
-    if reason is not None:
+    if reason:
         state["status"] = "CLOSED"
         state["exit_time"] = now.isoformat()
         state["exit"] = ltp
@@ -128,15 +106,10 @@ def _update_test_trade(live_rows, now):
 
 def _render_test_trade(rows, snap, idx):
     st.markdown("### 5. 🧪 One isolated test trade — first available time after 09:15 AM to 02:45 PM")
-    st.caption(
-        "After 09:15 IST, the first refresh with complete aligned live data and a qualifying stock opens the one test position. "
-        "There is no 09:45 deadline. Minimum 1-minute hold. SL/Target may close after 1 minute; otherwise forced exit at 02:45 PM IST. "
-        "In-memory only; nothing is written to trading or journal storage."
-    )
+    st.caption("After 09:15 IST, the first refresh with complete aligned live data and a qualifying stock opens exactly one test position. No 09:45 deadline. Minimum 1-minute hold. SL/Target may close after 1 minute; otherwise forced exit at 02:45 PM IST. In-memory only.")
     now = _now_ist()
     state = _test_state()
     today = now.date().isoformat()
-
     if state.get("date") != today:
         state = {"date": today, "status": "WAITING"}
         st.session_state["nse_test_trade"] = state
@@ -147,32 +120,33 @@ def _render_test_trade(rows, snap, idx):
     aligned = complete and sector_ok and bool(idx) and snap.get("ad_ratio") is not None
 
     if state.get("status") == "WAITING":
-        if now.time() >= TEST_ENTRY_TIME:
+        if now.time() >= TEST_ENTRY_TIME and now.time() < FORCE_EXIT:
             if aligned:
                 candidate = _eligible_stock(rows, idx_change)
                 if candidate:
                     _open_test_trade(candidate, now)
                     state = st.session_state["nse_test_trade"]
                 else:
-                    st.info("Aligned live data is available, but no stock currently matches the simple price-vs-open side. The test will check again on the next 15-second refresh.")
+                    st.info("Aligned live data is available, but no stock currently matches the simple price-vs-open side. Checking again on the next 15-second refresh.")
             else:
-                st.info("Waiting for the complete aligned 500-stock/sector/index/A-D snapshot. The test will check again on the next 15-second refresh.")
-        else:
-            st.info("Waiting for market-open test window: first available qualifying cycle at/after 09:15 AM IST.")
+                st.info("Waiting for the complete aligned 500-stock/sector/index/A-D snapshot. Checking again on the next 15-second refresh.")
+        elif now.time() < TEST_ENTRY_TIME:
+            st.info("Waiting for market open: first available qualifying cycle at/after 09:15 AM IST.")
+        elif now.time() >= FORCE_EXIT:
+            st.info("Today's one-test-trade window has ended. No test entry is created after 02:45 PM IST.")
 
     if state.get("status") == "OPEN":
         state = _update_test_trade(rows, now)
 
     if state.get("status") in {"OPEN", "CLOSED"}:
-        symbol = state.get("symbol", "—")
         current = state.get("last_ltp", state.get("entry"))
+        display_price = current if state.get("status") == "OPEN" else state.get("exit")
         pnl = state.get("pnl")
         cols = st.columns(4)
-        cols[0].metric("Stock / Side", f"{symbol} / {state.get('side', '—')}")
+        cols[0].metric("Stock / Side", f"{state.get('symbol', '—')} / {state.get('side', '—')}")
         cols[1].metric("Entry", f"₹{_fmt(state.get('entry'))}")
-        cols[2].metric("Current / Exit", f"₹{_fmt(current if state.get('status') == 'OPEN' else state.get('exit'))}")
+        cols[2].metric("Current / Exit", f"₹{_fmt(display_price)}")
         cols[3].metric("P&L", f"₹{_fmt(pnl) if pnl is not None else '—'}")
-
         cols = st.columns(4)
         cols[0].metric("Entry Time", state.get("entry_time", "—")[-14:-6] if state.get("entry_time") else "—")
         cols[1].metric("SL", f"₹{_fmt(state.get('sl'))}")
@@ -181,17 +155,15 @@ def _render_test_trade(rows, snap, idx):
         if state.get("status") == "CLOSED":
             st.success(f"Test exit: {state.get('exit_reason', '—')} at ₹{_fmt(state.get('exit'))}. Temporary result only; not added to P&L/W-L or journal storage.")
         else:
-            st.info("Test position is live in-memory only. It will close on SL/Target after the 1-minute minimum hold, or automatically at 02:45 PM IST.")
+            st.info("One test position is open in memory only. It will close on SL/Target after the 1-minute minimum hold, or automatically at 02:45 PM IST.")
 
 
 def render_test_tab():
     st.markdown("## 🧪 TEST — Live Data / Entry Check")
     st.caption("READ-ONLY diagnostic • one isolated in-memory test position • no signals • no journal • S1–S5 unchanged")
-
     try:
         from market.nifty500_breadth import BREADTH
         from market.dhan_data import configured, index_quote
-
         snap = BREADTH.snapshot(force=False)
         q = snap.get("quote_rows")
         rows = q.copy() if isinstance(q, pd.DataFrame) else pd.DataFrame()
@@ -234,9 +206,6 @@ def render_test_tab():
         _render_test_trade(rows, snap, idx)
         st.markdown("### TEST isolation")
         st.info("The test position is memory-only for this browser session. It does not write signals.csv, trades.csv, journal data, win/loss, P&L, or S1–S5 state.")
-
-        st.markdown("""<style>
-        .test-card{background:#0b1726;border:1px solid #294b70;border-radius:10px;padding:10px 12px;min-height:72px;margin-bottom:8px}.test-label{font-size:12px;color:#9fb0c3;margin-bottom:7px;font-weight:600}.test-status{display:inline-block;font-size:14px;font-weight:700;padding:3px 10px;border-radius:14px}.test-status.pass{background:#063d22;color:#57e389}.test-status.wait{background:#3a2b05;color:#ffd45a}[data-testid="stDataFrame"]{font-size:13px}
-        </style>""", unsafe_allow_html=True)
+        st.markdown("""<style>.test-card{background:#0b1726;border:1px solid #294b70;border-radius:10px;padding:10px 12px;min-height:72px;margin-bottom:8px}.test-label{font-size:12px;color:#9fb0c3;margin-bottom:7px;font-weight:600}.test-status{display:inline-block;font-size:14px;font-weight:700;padding:3px 10px;border-radius:14px}.test-status.pass{background:#063d22;color:#57e389}.test-status.wait{background:#3a2b05;color:#ffd45a}[data-testid="stDataFrame"]{font-size:13px}</style>""", unsafe_allow_html=True)
     except Exception as exc:
         st.error(f"TEST unavailable: {type(exc).__name__}: {exc}")
