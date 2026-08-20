@@ -58,24 +58,25 @@ runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__"
 # the dashboard's trading tip.
 render_trade_path()
 
-# Separate read-only TEST section. It does not alter normal S1-S5 state.
+# Separate isolated TEST trade. It does not alter normal S1-S5 state.
 st.divider()
-st.markdown("### 🧪 TEST — Live Data / Entry Check")
-st.caption("READ-ONLY TEST • one isolated test trade • no journal • no win/loss • S1–S5 unchanged")
+st.markdown("### 🧪 TEST TRADE")
+st.caption("One isolated paper test trade • no journal • no win/loss • S1–S5 unchanged")
 try:
     from dashboard.test_tab import render_test_tab
     render_test_tab()
 except Exception as exc:
-    st.error(f"TEST section unavailable: {type(exc).__name__}: {exc}")
+    st.error(f"TEST trade unavailable: {type(exc).__name__}: {exc}")
 
-# Keep one and only one DAILY TRADING TIP, at the very end of the page.
-# Hide the copy emitted by single_master.py without changing its trading logic.
+# One and only one DAILY TRADING TIP, at the very end of the page.
 st.markdown("""
 <style>
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="stMainBlockContainer"],[data-testid="stHeader"],header,main,section{background:#000!important}
 .block-container{background:#000!important}
 .stMarkdown,.stMarkdown p,.stCaption,.stCaption p{color:#fff!important}
+/* Hide the legacy tip block and its preceding heading from single_master.py. */
 .tip{display:none!important}
+[data-testid="stElementContainer"]:has(+ [data-testid="stElementContainer"] .tip){display:none!important}
 .tip-final{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700;color:#fff}
 </style>
 """, unsafe_allow_html=True)
