@@ -1,0 +1,44 @@
+name: Master Test 01-10
+
+on:
+  workflow_dispatch:
+
+# GROUP 01-10 — foundational market/data/strategy tests.
+# Do not move tests between groups without changing the group contract.
+
+jobs:
+  test-01-10:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Compile group modules
+        run: |
+          python -m py_compile strategy/nifty500_price_action_strategies.py
+          python -m py_compile master_data.py
+          python -m py_compile market/dhan_data.py
+          python -m py_compile market/nifty500_breadth.py
+          python -m py_compile data/sector_alignment.py
+          python -m py_compile config/settings.py config/trading_limits.py config/trading_rules.py
+      - name: Run GROUP 01-10 only
+        env:
+          PYTHONPATH: .
+        run: >-
+          python -m pytest -q
+          tests/test_nifty500_price_action_strategies.py
+          tests/test_core.py
+          tests/test_master_data.py
+          tests/test_dhan_data.py
+          tests/test_dhan_data_extra.py
+          tests/test_nifty500_breadth.py
+          tests/test_sector_alignment.py
+          tests/test_config_s10_14.py
