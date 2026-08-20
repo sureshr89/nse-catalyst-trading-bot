@@ -1,11 +1,12 @@
-"""Persistent paper-trade execution engine for the NIFTY 500 strategy."""
+"""Persistent paper-trade execution engine for the clean NIFTY 500 S1-S5 strategy."""
 import json, os, re
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 from config.settings import PAPER_TRADING,LIVE_TRADING,TRADING_START,LAST_ENTRY_TIME,SQUARE_OFF_TIME,MARKET_CLOSE,TOTAL_CAPITAL,MAX_OPEN_POSITIONS,MIN_REQUIRED_RISK,MAX_RISK_PER_TRADE,MIN_RR_RATIO,TRADE_LOG_FILE
 from papertrade.persistent_storage import restore_json,sync_json
-INDIA_TZ=ZoneInfo("Asia/Kolkata");STATE_VERSION=8;CURRENT_STRATEGY="NIFTY_500_PDH_PDL_OPEN_RETURN"
+from strategy.contracts import STRATEGY_VERSION
+INDIA_TZ=ZoneInfo("Asia/Kolkata");STATE_VERSION=9;CURRENT_STRATEGY=STRATEGY_VERSION
 class PaperTradeEngine:
     """Simulated execution engine. Live trading is deliberately prohibited."""
     def __init__(self):
@@ -61,7 +62,6 @@ class PaperTradeEngine:
             version=int(state.get("state_version",0) or 0)
             if version>STATE_VERSION:return
             if version<STATE_VERSION:state=self._migrate_state(state,version)
-            # Do not carry state belonging to an obsolete strategy implementation.
             if str(state.get("strategy","")).strip()!=CURRENT_STRATEGY:
                 state={"state_version":STATE_VERSION,"strategy":CURRENT_STRATEGY,"open_positions":{},"closed_positions":[],"trade_counter":0,"total_capital":TOTAL_CAPITAL,"available_capital":TOTAL_CAPITAL,"used_capital":0.0,"session_date":datetime.now(INDIA_TZ).date().isoformat()}
             self.open_positions={str(k).strip().upper():v for k,v in state.get("open_positions",{}).items() if self._valid_open_position(k,v)};self.closed_positions=[v for v in state.get("closed_positions",[]) if isinstance(v,dict)]
@@ -82,7 +82,7 @@ class PaperTradeEngine:
         path=self._state_path();os.makedirs(os.path.dirname(path),exist_ok=True);state={"state_version":STATE_VERSION,"strategy":CURRENT_STRATEGY,"session_date":datetime.now(INDIA_TZ).date().isoformat(),"open_positions":self.open_positions,"closed_positions":self.closed_positions,"trade_counter":self.trade_counter,"total_capital":self.total_capital,"available_capital":self.available_capital,"used_capital":self.used_capital,"saved_at":datetime.now(INDIA_TZ).isoformat()}
         try:
             with open(path,"w",encoding="utf-8") as f:json.dump(state,f,ensure_ascii=False,indent=2,default=str);f.flush()
-            sync_json(path,path.replace(os.sep,"/"),"Save NIFTY 500 paper-trading state")
+            sync_json(path,path.replace(os.sep,"/"),"Save clean S1-S5 paper-trading state")
         except Exception as e:print(f"Paper state sync skipped: {type(e).__name__}: {e}")
     def has_open_position(self,symbol):return str(symbol).strip().upper() in self.open_positions
     def _validate_trade(self,t):
