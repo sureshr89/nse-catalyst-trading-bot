@@ -8,7 +8,7 @@ import pandas as pd, requests
 
 BASE_URL="https://api.dhan.co/v2"; MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"; MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 CACHE_DIR=Path("data"); MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv"; IST="Asia/Kolkata"
-_LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0
+_LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0; _QUOTE_CACHE_KEY=None
 _LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
 
 def _secret(name):
@@ -77,31 +77,42 @@ def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
     ids=[int(x) for x in security_ids[:1000]];_set_status(stage=endpoint,requested=len(ids),received=0);return _post(endpoint,{exchange_segment:ids})
 
 def market_quote(mapping,cache_seconds=10):
-    """Return current Dhan OHLC/LTP for up to 1000 mapped instruments.
-    Dhan's OHLC close is the previous trading-session close; net_change is
-    LTP minus that close. Therefore PreviousClose is the OHLC close directly.
+    """Return verified current Dhan OHLC/LTP for mapped instruments.
+    Every returned row must map back to one requested NSE security ID and symbol.
     """
-    global _QUOTE_CACHE,_QUOTE_CACHE_AT
+    global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
     if mapping is None or mapping.empty or not configured():return pd.DataFrame()
+    ids=pd.to_numeric(mapping["SecurityId"],errors="coerce").dropna().astype(int).astype(str).tolist()
+    expected_ids=set(ids); expected_symbols=set(mapping["Symbol"].astype(str).str.upper().str.strip())
+    cache_key=tuple(sorted(expected_ids))
     now=time.monotonic()
     with _LOCK:
-        if _QUOTE_CACHE and now-_QUOTE_CACHE_AT<=cache_seconds:return pd.DataFrame(list(_QUOTE_CACHE.values()))
-    ids=pd.to_numeric(mapping["SecurityId"],errors="coerce").dropna().astype(int).astype(str).tolist();response=_marketfeed("NSE_EQ",ids,"/marketfeed/ohlc");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(mapping["SecurityId"].astype(str),mapping["Symbol"].astype(str)));rows=[]
+        if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
+            cached=pd.DataFrame(list(_QUOTE_CACHE.values()))
+            if set(cached["SecurityId"].astype(str))==expected_ids and set(cached["Symbol"].astype(str).str.upper())==expected_symbols:return cached
+    response=_marketfeed("NSE_EQ",ids,"/marketfeed/ohlc");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(mapping["SecurityId"].astype(str),mapping["Symbol"].astype(str)));rows=[]
     for sid,item in data.items():
-        if not isinstance(item,dict):continue
+        if str(sid) not in expected_ids or not isinstance(item,dict):continue
         o=item.get("ohlc") or {}
         try:
-            ltp=float(item.get("last_price") or 0);c=float(o.get("close") or 0)
-            rows.append({"Symbol":by_id.get(str(sid),str(sid)),"SecurityId":str(sid),"LTP":ltp,"TodayOpen":float(o.get("open") or 0),"TodayHigh":float(o.get("high") or 0),"TodayLow":float(o.get("low") or 0),"TodayClose":c,"PreviousClose":c,"NetChange":float(ltp-c),"Volume":0.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
+            ltp=float(item.get("last_price") or 0);c=float(o.get("close") or 0);op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0)
+            if ltp<=0 or c<=0:continue
+            rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":c,"PreviousClose":c,"NetChange":float(ltp-c),"Volume":0.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
         except (TypeError,ValueError):pass
-    _set_status(received=len(rows),requested=len(ids),ok=len(rows)>0,stage="/marketfeed/ohlc",message=f"Received {len(rows)}/{len(ids)} quotes" if rows else _LAST_DHAN_STATUS.get("message","No quotes returned"))
     result=pd.DataFrame(rows)
-    if not result.empty:
-        with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic()
+    if result.empty:
+        _set_status(received=0,requested=len(ids),ok=False,stage="/marketfeed/ohlc",message="No valid NSE_EQ quotes")
+        return result
+    result=result.drop_duplicates("SecurityId")
+    returned_ids=set(result["SecurityId"].astype(str));returned_symbols=set(result["Symbol"].astype(str).str.upper())
+    verified=len(result)==len(expected_ids) and returned_ids==expected_ids and returned_symbols==expected_symbols and result["LTP"].notna().all() and result["PreviousClose"].notna().all() and (result["LTP"]>0).all() and (result["PreviousClose"]>0).all()
+    _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/ohlc",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes" if verified else f"Quote integrity check failed: {len(result)}/{len(ids)} valid")
+    if not verified:return pd.DataFrame()
+    with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
     return result
 
 def index_quote(index_name="NIFTY 500"):
-    """Return an index snapshot using Dhan quote net_change for a stable day-over-day percentage."""
+    """Return the exact NSE index snapshot using Dhan net_change."""
     m=load_instrument_master()
     if m.empty or not configured():return None
     nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME","SEM_TRADING_SYMBOL"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"))
@@ -110,16 +121,13 @@ def index_quote(index_name="NIFTY 500"):
     if seg:mask&=x[seg].astype(str).str.upper().isin({"I","INDEX"})
     if ex:mask&=x[ex].astype(str).str.upper().eq("NSE")
     match=x.loc[mask]
-    if match.empty:
-        return None
-    sid=str(match.iloc[0][ic]).strip()
-    response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]})
-    item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid)
+    if len(match)!=1:return None
+    sid=str(match.iloc[0][ic]).strip();response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid)
     if not isinstance(item,dict):return None
     o=item.get("ohlc") or {}
     try:
-        ltp=float(item.get("last_price") or 0);net_change=float(item.get("net_change"))
-        prev=ltp-net_change
+        ltp=float(item.get("last_price") or 0);net_change=float(item.get("net_change"));prev=ltp-net_change
+        if ltp<=0 or prev<=0:return None
         return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":float(o.get("close") or 0),"PreviousClose":prev,"NetChange":net_change,"SecurityId":sid}
     except (TypeError,ValueError):return None
 
