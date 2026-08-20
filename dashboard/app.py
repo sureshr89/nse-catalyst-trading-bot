@@ -5,9 +5,6 @@ import sys
 
 import streamlit as st
 
-# Streamlit Cloud executes dashboard/app.py with the dashboard directory as the
-# script directory. The trading engine (main.py) lives at the repository root,
-# so make the repository root importable before importing the engine.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -40,24 +37,21 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
-# Keep the original dashboard exactly as it was. Only add a separate TEST tab.
-master_tab, test_tab = st.tabs(["📊 Master Dashboard", "🧪 TEST"])
+# KEEP THE ORIGINAL MASTER DASHBOARD. The TEST section is appended at the very
+# bottom of the same page so it cannot alter or replace the existing layout.
+runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
-with master_tab:
-    # Original master dashboard.
-    runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
+from dashboard.nifty500_sample import render_nifty500_sample
+render_nifty500_sample()
+render_trade_path()
 
-    # Render the NIFTY 500 sample and one aligned Trade Path panel only.
-    # execution_status.py previously rendered a second duplicate table with stale
-    # field names, which made the dashboard look broken and showed misleading zeros.
-    from dashboard.nifty500_sample import render_nifty500_sample
-    render_nifty500_sample()
-
-    render_trade_path()
-
-with test_tab:
-    from dashboard.test_tab import render_test_tab
-    render_test_tab()
+# Separate read-only TEST section at the very bottom. It does not create,
+# execute, store, journal, or score any trade and does not affect S1-S5.
+st.divider()
+st.markdown("## 🧪 TEST — Live Data / Entry Check")
+st.caption("READ-ONLY TEST • no signals • no trades • no journal • no win/loss • S1–S5 unchanged")
+from dashboard.test_tab import render_test_tab
+render_test_tab()
 
 st.markdown("""
 <style>
