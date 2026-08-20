@@ -117,7 +117,7 @@ class PriceData:
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
     def _download_multi_batch(self,tickers,interval="1m",period="1d"):return self._download(tickers=tickers,period=period,interval=interval,auto_adjust=False,progress=False,threads=False,prepost=False,group_by="ticker",timeout=self.download_timeout)
     def _extract_batch(self,batch,raw,completed=True,today_only=True):
-        result={};tickers=[f"{s}.NS" for s in batch]
+        result={};tickers=[self.yahoo_symbol(s) for s in batch]
         if raw is None or raw.empty:return result
         if isinstance(raw.columns,pd.MultiIndex):
             level0=set(raw.columns.get_level_values(0));level1=set(raw.columns.get_level_values(1))
@@ -126,11 +126,11 @@ class PriceData:
                     data=raw[ticker] if ticker in level0 else raw.xs(ticker,axis=1,level=1) if ticker in level1 else None
                     if data is None:continue
                     cleaned=self._clean_data(data);cleaned=self._completed_1m(cleaned) if completed else cleaned;cleaned=self._today_intraday(cleaned) if today_only else cleaned
-                    if not cleaned.empty:result[symbol]=cleaned
+                    if not cleaned.empty:result[str(symbol).upper().replace(".NS","")]=cleaned
                 except Exception:continue
         elif len(batch)==1:
             cleaned=self._clean_data(raw);cleaned=self._completed_1m(cleaned) if completed else cleaned;cleaned=self._today_intraday(cleaned) if today_only else cleaned
-            if not cleaned.empty:result[batch[0]]=cleaned
+            if not cleaned.empty:result[str(batch[0]).upper().replace(".NS","")]=cleaned
         return result
     @classmethod
     def _copy_cache(cls,cache):return {k:v.copy() for k,v in cache.items()}
@@ -141,7 +141,7 @@ class PriceData:
             if cached is not None and now-self._multi_daily_cache_at.get(key,0)<50:return self._copy_cache(cached)
         result={}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures={executor.submit(self._download_multi_batch,[f"{s}.NS" for s in b],"1d",period):b for b in self._chunks(list(symbols),self.batch_size)}
+            futures={executor.submit(self._download_multi_batch,b,"1d",period):b for b in self._chunks(list(symbols),self.batch_size)}
             for future in as_completed(futures):
                 try:result.update(self._extract_batch(futures[future],future.result(),False,False))
                 except Exception as error:print("Daily batch failed:",error)
@@ -158,7 +158,7 @@ class PriceData:
             if cached is not None and now-self._multi_1m_cache_at.get(key,0)<50:return self._copy_cache(cached)
         result={}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures={executor.submit(self._download_multi_batch,[f"{s}.NS" for s in b],"1m","1d"):b for b in self._chunks(list(symbols),self.batch_size)}
+            futures={executor.submit(self._download_multi_batch,b,"1m","1d"):b for b in self._chunks(list(symbols),self.batch_size)}
             for future in as_completed(futures):
                 try:result.update(self._extract_batch(futures[future],future.result(),True,True))
                 except Exception as error:print("1m batch failed:",error)
