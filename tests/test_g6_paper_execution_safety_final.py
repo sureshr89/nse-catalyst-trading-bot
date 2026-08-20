@@ -74,16 +74,20 @@ def test_ambiguous_bar_uses_stop_first(tmp_path):
     e = _engine(tmp_path)
     assert e.open_trade(_valid_trade())["opened"] is True
 
-    # process_live_price enforces the live market session using the engine's
-    # wall clock. Freeze that clock so this lifecycle test is deterministic
-    # when CI runs outside NSE hours.
-    from zoneinfo import ZoneInfo
+    # process_live_price enforces the live market session. Patch the module's
+    # datetime reference with a small subclass instead of mutating the
+    # immutable datetime.datetime type itself.
     import papertrade.paper_trade_engine as engine_module
 
-    session_now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(
-        hour=10, minute=30, second=0, microsecond=0
-    )
-    with patch.object(engine_module.datetime, "now", return_value=session_now):
+    class _SessionDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2026, 8, 21, 10, 30, 0)
+            if tz is not None:
+                return tz.localize(base) if hasattr(tz, "localize") else base.replace(tzinfo=tz)
+            return base
+
+    with patch.object(engine_module, "datetime", _SessionDateTime):
         result = e.process_live_price("ABC", 101.0, high=102.0, low=98.0)
 
     assert result is not None
