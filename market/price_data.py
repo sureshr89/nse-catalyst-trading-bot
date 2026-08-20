@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import threading, time
 import pandas as pd
-from market import dhan_data
+import market.dhan_data as dhan_data
 
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
 
@@ -47,16 +47,17 @@ class PriceData:
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","")
-        # A zero/negative max age is an explicit fresh-read contract. Do not
-        # let cache state or provider state bypass the Dhan mapping/quote path.
-        force_fresh = max_age_seconds <= 0
+        force_fresh=max_age_seconds<=0
+        # Always consult the live Dhan configuration before cache or quote access.
+        # Keeping this call on the module object makes the Dhan-only dependency
+        # explicit and gives tests a stable configuration seam.
         if not dhan_data.configured():return None
         if not force_fresh:
             now=time.monotonic()
             with self._cache_lock:
                 cached=self._live_price_cache.get(key)
                 age=now-self._live_price_cache_at.get(key,0)
-                if cached is not None and age <= max_age_seconds:return dict(cached)
+                if cached is not None and age<=max_age_seconds:return dict(cached)
         m=self._map([key])
         if m is None or len(m)!=1:return None
         q=dhan_data.market_quote(m,cache_seconds=1)
