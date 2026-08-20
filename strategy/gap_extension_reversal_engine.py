@@ -43,7 +43,6 @@ class GapExtensionReversalEngine:
     def evaluate(self, symbol, data, pdh, pdl, pdc, nifty_change_pct, previous_close=None, as_of=None):
         history = self._completed(data, as_of=as_of)
         if len(history) < 3: return None
-
         open_price = float(data.iloc[0]["Open"])
         pdh = float(pdh); pdc = float(pdc); pdl = float(pdl) if pdl is not None else None
         nifty = float(nifty_change_pct or 0)
@@ -51,23 +50,20 @@ class GapExtensionReversalEngine:
         try: entry = float(live["Close"])
         except (KeyError, TypeError, ValueError): return None
         if entry <= 0: return None
-
         highs = pd.to_numeric(history["High"], errors="coerce").dropna().tolist()
         lows = pd.to_numeric(history["Low"], errors="coerce").dropna().tolist()
         if not highs or not lows: return None
-        trigger_high = max(highs)
-        trigger_low = min(lows)
+        trigger_high = max(highs); trigger_low = min(lows)
 
-        # Sell: opening gap must be above PDH, followed by an extension above the
-        # open, then live LTP must reverse below the open. PDC is the target.
+        # SELL: open above PDH -> extension above open -> live LTP reverses below open.
         if open_price > pdh and pdc < open_price and trigger_high > open_price:
             if entry < open_price and nifty <= 0.25 and pdc < entry < trigger_high:
                 return self._result(symbol, "SELL", entry, pdc, trigger_high)
 
-        # Buy mirror: opening gap must be inside the PDH/PDL gap (above PDH but
-        # below PDL), followed by an extension below the open, then live LTP
-        # reclaims above the open. PDC is the target.
-        if pdl is not None and open_price > pdh and open_price < pdl and pdc > open_price and trigger_low < open_price:
+        # BUY mirror: open below PDL -> extension below open -> live LTP reclaims above open.
+        # The old implementation incorrectly required open > PDH and open < PDL,
+        # which is impossible for normal PDH > PDL data.
+        if pdl is not None and open_price < pdl and pdc > open_price and trigger_low < open_price:
             if entry > open_price and nifty >= -0.25 and trigger_low < entry < pdc:
                 return self._result(symbol, "BUY", entry, pdc, trigger_low)
         return None
