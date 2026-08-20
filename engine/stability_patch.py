@@ -8,15 +8,17 @@ from __future__ import annotations
 import time
 
 
-def fast_dhan_breadth_snapshot(max_attempts=5, delay_seconds=2.0):
+def fast_dhan_breadth_snapshot(max_attempts=1, delay_seconds=0.0):
     try:
         from market.nifty500_breadth import BREADTH
     except Exception:
         return None
-    last = None
     for attempt in range(max_attempts):
         try:
-            last = BREADTH.snapshot(force=True)
+            # Use the breadth engine's 15-second cache. Forcing a fresh 500-stock
+            # Dhan request on every scan was creating unnecessary latency and
+            # repeated partial responses.
+            last = BREADTH.snapshot(force=False)
             if (last.get("complete") and last.get("sector_complete") and
                 int(last.get("evaluated", 0)) == 500 and
                 int(last.get("sector_mapped", 0)) == 500 and
@@ -24,7 +26,7 @@ def fast_dhan_breadth_snapshot(max_attempts=5, delay_seconds=2.0):
                 return last
         except Exception:
             last = None
-        if attempt < max_attempts - 1:
+        if attempt < max_attempts - 1 and delay_seconds > 0:
             time.sleep(delay_seconds)
     return last
 
@@ -37,10 +39,7 @@ def install(MasterEngine):
     original_market_snapshot = MasterEngine._market_snapshot
 
     def market_snapshot(self):
-        # Dhan is authoritative for NIFTY-500 A/D + sector. Try quickly before
-        # the normal snapshot so a temporary partial response does not wait a
-        # full one-minute cycle.
-        dhan_snap = fast_dhan_breadth_snapshot(max_attempts=5, delay_seconds=2.0)
+        dhan_snap = fast_dhan_breadth_snapshot(max_attempts=1, delay_seconds=0.0)
         base = original_market_snapshot(self)
         if not isinstance(base, dict):
             base = {}
@@ -77,8 +76,6 @@ def install(MasterEngine):
                 "nifty500_change_pct": nifty,
             })
         else:
-            # Do not allow the fallback Yahoo calculation to become an
-            # apparently valid Dhan market gate.
             base["ad_complete"] = False
             base["ad_ratio"] = None
             base["buy_alignment"] = False
