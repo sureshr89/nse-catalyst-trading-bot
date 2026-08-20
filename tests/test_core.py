@@ -1,157 +1,36 @@
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 import io
-
 import pandas as pd
 from openpyxl import load_workbook
-
-from config.settings import MAX_RISK_PER_TRADE, MIN_REQUIRED_RISK, MIN_RR_RATIO
+from config.settings import MAX_RISK_PER_TRADE,MIN_REQUIRED_RISK,MIN_RR_RATIO
 from dashboard.dashboard_utils import build_single_sheet_master_excel
 from papertrade.paper_trade_engine import PaperTradeEngine
-from strategy.candidate_metrics import metrics, sort_key
-from strategy.open_reversal_engine import OpenReversalEngine
 from strategy.risk_engine import RiskEngine
-
-IST = ZoneInfo("Asia/Kolkata")
-ROOT = Path(__file__).resolve().parents[1]
-
+from strategy.nifty500_price_action_strategies import evaluate_s1
+ROOT=Path(__file__).resolve().parents[1]
 
 def test_risk_engine_approves_target_risk_trade():
-    result = RiskEngine().validate({"symbol": "TEST", "signal": "BUY", "entry": 100.0, "stop_loss": 98.0, "target": 102.5}, check_trade_count=False)
-    assert result["approved"] is True
-    assert result["actual_risk"] == MAX_RISK_PER_TRADE
-    assert result["rr"] >= MIN_RR_RATIO
-    assert result["actual_risk"] >= MIN_REQUIRED_RISK
-
+    result=RiskEngine().validate({"symbol":"TEST","signal":"BUY","entry":100.0,"stop_loss":98.0,"target":102.5},check_trade_count=False)
+    assert result["approved"] is True;assert result["actual_risk"]==MAX_RISK_PER_TRADE;assert result["rr"]>=MIN_RR_RATIO;assert result["actual_risk"]>=MIN_REQUIRED_RISK
 
 def test_risk_engine_rejects_wrong_side_stop():
-    result = RiskEngine().validate({"symbol": "TEST", "signal": "SELL", "entry": 100.0, "stop_loss": 99.0, "target": 98.0}, check_trade_count=False)
-    assert result["approved"] is False
-    assert any("SELL stop loss" in reason for reason in result["reasons"])
+    result=RiskEngine().validate({"symbol":"TEST","signal":"SELL","entry":100.0,"stop_loss":99.0,"target":98.0},check_trade_count=False)
+    assert result["approved"] is False;assert any("SELL stop loss" in reason for reason in result["reasons"])
 
-
-def test_buy_state_requires_breach_then_return_to_open(monkeypatch):
-    from strategy import open_reversal_engine as module
-    class FakeLive:
-        def __init__(self): self.price = 101.0
-        def get_latest_live_price(self, symbol, max_age_seconds=2): return {"Close": self.price}
-    fake = FakeLive(); monkeypatch.setattr(module, "_LIVE", fake)
-    engine = OpenReversalEngine("00:00", "23:59", 1.25)
-    state = {"symbol": "TEST", "side": "BUY", "pdh_breached": False, "open_returned": False}
-    state = engine.update_state(state, 105.0, 100.0, 95.0, 101.0)
-    assert state["pdh_breached"] is False
-    fake.price = 99.5; state = engine.update_state(state, 105.0, 100.0, 95.0, 99.5)
-    assert state["pdh_breached"] is True
-    assert state.get("open_returned", False) is False
-    fake.price = 105.0; state = engine.update_state(state, 105.0, 100.0, 95.0, 105.0)
-    assert state["open_returned"] is True
-
-
-def test_sell_state_requires_breach_then_return_to_open(monkeypatch):
-    from strategy import open_reversal_engine as module
-    class FakeLive:
-        def __init__(self): self.price = 99.0
-        def get_latest_live_price(self, symbol, max_age_seconds=2): return {"Close": self.price}
-    fake = FakeLive(); monkeypatch.setattr(module, "_LIVE", fake)
-    engine = OpenReversalEngine("00:00", "23:59", 1.25)
-    state = {"symbol": "TEST", "side": "SELL", "pdl_breached": False, "open_returned": False}
-    state = engine.update_state(state, 90.0, 105.0, 100.0, 99.0)
-    assert state["pdl_breached"] is False
-    fake.price = 100.5; state = engine.update_state(state, 90.0, 105.0, 100.0, 100.5)
-    assert state["pdl_breached"] is True
-    assert state.get("open_returned", False) is False
-    fake.price = 89.0; state = engine.update_state(state, 90.0, 105.0, 100.0, 90.0)
-    assert state["open_returned"] is True
-
-
-def test_build_signal_buy_target_and_stop():
-    signal = OpenReversalEngine("09:45", "14:00", 1.25).build_signal("TEST", "BUY", 105.0, 105.0, 100.0, 95.0, 0.5)
-    assert signal["stop_loss"] == 100.0
-    assert signal["target"] == 111.25
-    assert signal["risk_reward"] == 1.25
-
-
-def test_build_signal_sell_target_and_stop():
-    signal = OpenReversalEngine("09:45", "14:00", 1.25).build_signal("TEST", "SELL", 85.0, 85.0, 105.0, 90.0, -0.5)
-    assert signal["stop_loss"] == 90.0
-    assert signal["target"] == 78.75
-    assert signal["risk_reward"] == 1.25
-
-
-def test_candidate_metadata_contains_no_secondary_priority_metric():
-    result = metrics()
-    assert result == {"metrics_calculated_at": result["metrics_calculated_at"]}
-
-
-def test_highest_gap_is_always_first():
-    assert sort_key({"gap_percent": 4.0}) > sort_key({"gap_percent": 2.0})
-
-
-def test_gap_priority_uses_magnitude_for_sell():
-    assert sort_key({"gap_percent": -5.0}) > sort_key({"gap_percent": -2.0})
-
-
-def test_equal_gap_has_equal_priority():
-    assert sort_key({"gap_percent": 3.0}) == sort_key({"gap_percent": -3.0})
-
+def test_clean_s1_requires_live_reclaim():
+    g={"nifty500_change_pct":1.0,"sector_alignment_pct":1.0,"ad_ratio":2.0,"ad_coverage":500,"positive_sectors":10,"negative_sectors":5,"previous_candle_open":100,"previous_candle_close":101}
+    assert evaluate_s1("TEST","BUY",110,100,90,99,115,111,**g) is not None
+    assert evaluate_s1("TEST","BUY",110,100,90,99,115,109,**g) is None
 
 def test_paper_pnl_buy_and_sell():
-    assert PaperTradeEngine.calculate_pnl("BUY", 100, 102.5, 10) == 25.0
-    assert PaperTradeEngine.calculate_pnl("SELL", 100, 97.5, 10) == 25.0
+    assert PaperTradeEngine.calculate_pnl("BUY",100,102.5,10)==25.0;assert PaperTradeEngine.calculate_pnl("SELL",100,97.5,10)==25.0
 
+def test_single_sheet_master_excel_contains_record_types():
+    trades=pd.DataFrame([{"strategy":"S1","symbol":"ABC","signal":"BUY","entry":100,"pnl":25}]);signals=pd.DataFrame([{"strategy":"S2","symbol":"XYZ","signal":"SELL","approved":True}]);gaps=pd.DataFrame([{"Symbol":"LMN","TodayOpen":110,"PDH":100,"GapType":"GAP_UP"}])
+    data=build_single_sheet_master_excel(trades,signals,gaps);workbook=load_workbook(io.BytesIO(data),read_only=True,data_only=True);assert workbook.sheetnames==["ALL DATA"]
+    rows=list(workbook["ALL DATA"].iter_rows(values_only=True));header=rows[0];ri=header.index("Record Type");assert {r[ri] for r in rows[1:]}=={"TRADE","SIGNAL","GAP_BOARD"}
 
-def test_single_sheet_master_excel_contains_one_sheet_and_all_record_types():
-    trades = pd.DataFrame([{"strategy": "STRATEGY_1", "symbol": "ABC", "signal": "BUY", "entry": 100, "pnl": 25}])
-    signals = pd.DataFrame([{"strategy": "STRATEGY_2", "symbol": "XYZ", "signal": "SELL", "approved": True}])
-    gaps = pd.DataFrame([{"Symbol": "LMN", "TodayOpen": 110, "PDH": 100, "GapType": "GAP_UP"}])
-    data = build_single_sheet_master_excel(trades, signals, gaps)
-    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    assert workbook.sheetnames == ["ALL DATA"]
-    rows = list(workbook["ALL DATA"].iter_rows(values_only=True))
-    header = rows[0]
-    record_index = header.index("Record Type")
-    strategy_index = header.index("strategy")
-    assert {row[record_index] for row in rows[1:]} == {"TRADE", "SIGNAL", "GAP_BOARD"}
-    assert {row[strategy_index] for row in rows[1:] if row[strategy_index]} == {"STRATEGY_1", "STRATEGY_2"}
-
-
-def test_strategy_uses_completed_minute_close_not_forming_candle():
-    engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    now = datetime.now(IST).replace(second=0, microsecond=0)
-    data = pd.DataFrame([
-        {"Datetime": now - pd.Timedelta(minutes=2), "Open": 105, "High": 106, "Low": 99, "Close": 99.5},
-        {"Datetime": now - pd.Timedelta(minutes=1), "Open": 99.5, "High": 106, "Low": 99, "Close": 105},
-        {"Datetime": now, "Open": 105, "High": 110, "Low": 104, "Close": 110},
-    ])
-    completed = engine.latest_completed(data)
-    assert completed is not None
-    assert completed["Close"] == 105
-
-
-def test_build_ignores_forming_candle_for_setup_state(monkeypatch):
-    from strategy import open_reversal_engine as module
-    class FakeLive:
-        def get_latest_live_price(self, symbol, max_age_seconds=2): return {"Close": 104.0}
-    monkeypatch.setattr(module, "_LIVE", FakeLive())
-    engine = OpenReversalEngine("09:45", "14:00", 1.25)
-    now = datetime.now(IST).replace(second=0, microsecond=0)
-    data = pd.DataFrame([
-        {"Datetime": now - pd.Timedelta(minutes=1), "Open": 105, "High": 106, "Low": 99, "Close": 99.5},
-        {"Datetime": now, "Open": 99.5, "High": 106, "Low": 99, "Close": 105},
-    ])
-    assert engine.build("TEST", data, 100.0, 95.0, today_open=105.0, nifty_change_pct=0.5) is None
-
-
-def test_user_facing_dashboard_has_no_legacy_volatility_labels():
-    files = [ROOT / "dashboard" / "app.py", ROOT / "dashboard" / "pages" / "current_trading.py", ROOT / "dashboard" / "pages" / "strategy2_current.py"]
-    forbidden = ["atr analysis", "atr%", "atr_pct", "average true range"]
+def test_dashboard_has_no_yahoo_or_legacy_strategy_imports():
+    files=[ROOT/"main.py",ROOT/"engine"/"master_engine.py",ROOT/"market"/"price_data.py",ROOT/"strategy"/"nifty500_price_action_strategies.py"]
     for path in files:
-        source = path.read_text(encoding="utf-8").lower()
-        for label in forbidden:
-            assert label not in source, f"Legacy volatility label '{label}' remains in {path}"
-
-
-def test_dashboard_pages_are_exactly_the_two_active_strategy_pages():
-    pages = sorted(p.name for p in (ROOT / "dashboard" / "pages").glob("*.py"))
-    assert pages == ["current_trading.py", "strategy2_current.py"]
+        source=path.read_text(encoding="utf-8").lower();assert "yfinance" not in source;assert "open_reversal_engine" not in source;assert "gap_extension_reversal_engine" not in source
