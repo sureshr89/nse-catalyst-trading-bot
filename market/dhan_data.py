@@ -85,6 +85,27 @@ def market_quote(mapping,cache_seconds=10):
  if not verified:return pd.DataFrame()
  with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
  return result
+def index_quote(index_name="NIFTY 500"):
+ """Return a verified NSE index quote from Dhan's IDX_I market-feed segment."""
+ if not configured():return {}
+ m=load_instrument_master(False)
+ if m.empty:return {}
+ sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"))
+ if not sc or not ic:return {}
+ x=m.copy();x["_name"]=x[sc].astype(str).str.strip().str.upper();wanted=str(index_name).strip().upper();x=x[x["_name"].eq(wanted)]
+ if seg:x=x[x[seg].astype(str).str.upper().eq("I")]
+ if ex:x=x[x[ex].astype(str).str.upper().eq("NSE")]
+ if x.empty:return {}
+ sid=str(x.iloc[0][ic]).strip()
+ if not sid.isdigit():return {}
+ response=_marketfeed("IDX_I",[sid],"/marketfeed/quote");item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
+ if not isinstance(item,dict):return {}
+ o=item.get("ohlc") or {}
+ try:
+  ltp=float(item.get("last_price") or 0);net=float(item.get("net_change") or 0);prev=ltp-net;close=float(o.get("close") or 0)
+  if not _finite_positive(ltp) or not _finite_positive(prev):return {}
+  return {"Symbol":wanted,"SecurityId":sid,"LTP":ltp,"Close":close,"PreviousClose":prev,"NetChange":net,"change_pct":(ltp-prev)/prev*100.0,"price_source":"DHAN_INDEX_QUOTE"}
+ except (TypeError,ValueError,OverflowError):return {}
 def _history_frame(response):
  if not response:return pd.DataFrame()
  try:
