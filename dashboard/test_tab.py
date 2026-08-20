@@ -10,9 +10,10 @@ import streamlit as st
 
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-# Exactly one test-entry time each trading day. With the dashboard's 15-second
-# refresh, the first cycle at/after 09:45:00 performs the entry check.
-TEST_ENTRY_TIME = dt.time(9, 45)
+# Test entry: first qualifying live cycle at or after 09:15 IST.
+# There is deliberately no 09:45 deadline: if a complete aligned snapshot
+# becomes available at any time after market open, the test may enter then.
+TEST_ENTRY_TIME = dt.time(9, 15)
 FORCE_EXIT = dt.time(14, 45)
 MIN_HOLD = dt.timedelta(minutes=1)
 SL_PCT = 0.005
@@ -126,10 +127,10 @@ def _update_test_trade(live_rows, now):
 
 
 def _render_test_trade(rows, snap, idx):
-    st.markdown("### 5. 🧪 One isolated test trade — 09:45 AM to 02:45 PM")
+    st.markdown("### 5. 🧪 One isolated test trade — first available time after 09:15 AM to 02:45 PM")
     st.caption(
-        "Exactly one test entry check at 09:45 IST on a complete aligned live-data cycle. "
-        "Minimum 1-minute hold. SL/Target may close after 1 minute; otherwise forced exit at 02:45 PM IST. "
+        "After 09:15 IST, the first refresh with complete aligned live data and a qualifying stock opens the one test position. "
+        "There is no 09:45 deadline. Minimum 1-minute hold. SL/Target may close after 1 minute; otherwise forced exit at 02:45 PM IST. "
         "In-memory only; nothing is written to trading or journal storage."
     )
     now = _now_ist()
@@ -137,7 +138,7 @@ def _render_test_trade(rows, snap, idx):
     today = now.date().isoformat()
 
     if state.get("date") != today:
-        state = {"date": today, "status": "WAITING", "entry_attempted": False}
+        state = {"date": today, "status": "WAITING"}
         st.session_state["nse_test_trade"] = state
 
     complete = bool(snap.get("complete")) and len(rows) == 500
@@ -145,22 +146,19 @@ def _render_test_trade(rows, snap, idx):
     idx_change = float(idx.get("NetChange") or 0) if idx else 0.0
     aligned = complete and sector_ok and bool(idx) and snap.get("ad_ratio") is not None
 
-    if state.get("status") == "WAITING" and not state.get("entry_attempted"):
+    if state.get("status") == "WAITING":
         if now.time() >= TEST_ENTRY_TIME:
-            state["entry_attempted"] = True
             if aligned:
                 candidate = _eligible_stock(rows, idx_change)
                 if candidate:
                     _open_test_trade(candidate, now)
                     state = st.session_state["nse_test_trade"]
                 else:
-                    state["status"] = "NO_ENTRY"
-                    state["no_entry_reason"] = "No verified NIFTY 500 stock matched the simple price-vs-open test side at/after 09:45."
+                    st.info("Aligned live data is available, but no stock currently matches the simple price-vs-open side. The test will check again on the next 15-second refresh.")
             else:
-                state["status"] = "NO_ENTRY"
-                state["no_entry_reason"] = "Aligned 500-stock/sector/index/A-D snapshot was not available at 09:45. No synthetic entry was created."
+                st.info("Waiting for the complete aligned 500-stock/sector/index/A-D snapshot. The test will check again on the next 15-second refresh.")
         else:
-            st.info("Waiting for the exact 09:45 AM IST test-entry time. The test will use the first live refresh at/after 09:45.")
+            st.info("Waiting for market-open test window: first available qualifying cycle at/after 09:15 AM IST.")
 
     if state.get("status") == "OPEN":
         state = _update_test_trade(rows, now)
@@ -184,8 +182,6 @@ def _render_test_trade(rows, snap, idx):
             st.success(f"Test exit: {state.get('exit_reason', '—')} at ₹{_fmt(state.get('exit'))}. Temporary result only; not added to P&L/W-L or journal storage.")
         else:
             st.info("Test position is live in-memory only. It will close on SL/Target after the 1-minute minimum hold, or automatically at 02:45 PM IST.")
-    elif state.get("status") == "NO_ENTRY":
-        st.warning(f"No test trade was created: {state.get('no_entry_reason', 'entry conditions not met')} This is intentional; no fake price is used.")
 
 
 def render_test_tab():
