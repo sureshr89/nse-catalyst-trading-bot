@@ -47,13 +47,16 @@ class PriceData:
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","")
+        # A zero/negative max age is an explicit fresh-read contract. Do not
+        # let cache state or provider state bypass the Dhan mapping/quote path.
+        force_fresh = max_age_seconds <= 0
         if not dhan_data.configured():return None
-        now=time.monotonic()
-        with self._cache_lock:
-            cached=self._live_price_cache.get(key)
-            age=now-self._live_price_cache_at.get(key,0)
-            # max_age_seconds == 0 explicitly means force a fresh Dhan lookup.
-            if max_age_seconds > 0 and cached is not None and age <= max_age_seconds:return dict(cached)
+        if not force_fresh:
+            now=time.monotonic()
+            with self._cache_lock:
+                cached=self._live_price_cache.get(key)
+                age=now-self._live_price_cache_at.get(key,0)
+                if cached is not None and age <= max_age_seconds:return dict(cached)
         m=self._map([key])
         if m is None or len(m)!=1:return None
         q=dhan_data.market_quote(m,cache_seconds=1)
