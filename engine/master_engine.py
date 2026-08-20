@@ -30,7 +30,9 @@ class MasterEngine:
         try:u=self.universe_engine.get_dataframe(refresh=force)
         except Exception:u=pd.DataFrame()
         if u is None or u.empty or "Symbol" not in u.columns:self.references=pd.DataFrame();self.diagnostics["rejections"]["universe"]="NIFTY500_UNIVERSE_UNAVAILABLE";return
-        u=u.copy();u["Symbol"]=u["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False);u=u.drop_duplicates("Symbol").head(500)
+        u=u.copy();u["Symbol"]=u["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False);u=u.drop_duplicates("Symbol")
+        if len(u)!=500:
+            self.references=pd.DataFrame();self.diagnostics["rejections"]["universe"]=f"NIFTY500_UNIVERSE_INCOMPLETE_{len(u)}/500";return
         try:r=ReferenceStore(u).prepare()
         except Exception:r=pd.DataFrame()
         self.references=r if r is not None else pd.DataFrame();self.sector_map=load_sector_map(u,refresh=force) if not u.empty else pd.DataFrame();self._session_date=today
@@ -51,8 +53,8 @@ class MasterEngine:
     def _market_snapshot(self):
         self._refresh_reference_data()
         blocked={"intraday":{},"prices":pd.DataFrame(),"sector":{},"nifty_change":None,"ad_ratio":None,"ad_complete":False,"buy_alignment":False,"sell_alignment":False,"dhan_quotes":{},"verified":False}
-        if len(self.references)!=500 or not configured():
-            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_UNAVAILABLE";self.last_snapshot=blocked;self._write_diagnostics();return blocked
+        if len(self.references)!=500 or len(self.sector_map)!=500 or not configured():
+            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_OR_SECTOR_UNAVAILABLE";self.last_snapshot=blocked;self._write_diagnostics();return blocked
         symbols=self.references["Symbol"].astype(str).str.upper().tolist();mapping=map_nifty500(symbols)
         if len(mapping)!=500:self.diagnostics["rejections"]["mapping"]=f"DHAN_MAPPING_{len(mapping)}/500";self.last_snapshot=blocked;return blocked
         quotes=market_quote(mapping,cache_seconds=5)
@@ -60,14 +62,18 @@ class MasterEngine:
         prices=quotes[["Symbol","LTP","PreviousClose","change_pct"]].copy();prices["change_pct"]=pd.to_numeric(prices["change_pct"],errors="coerce")
         if prices["change_pct"].isna().any():self.diagnostics["rejections"]["market_data"]="DHAN_CHANGE_INVALID";self.last_snapshot=blocked;return blocked
         adv=int((prices["change_pct"]>0).sum());dec=int((prices["change_pct"]<0).sum());ad=adv/dec if dec else float("inf")
-        sector=calculate_sector_alignment(prices,self.sector_map) if len(self.sector_map)==500 else {"available":False}
-        try:iq=index_quote("NIFTY 500");nifty=float(iq["NetChange"])/float(iq["PreviousClose"])*100 if iq else float(prices["change_pct"].mean())
-        except Exception:nifty=float(prices["change_pct"].mean())
+        sector=calculate_sector_alignment(prices,self.sector_map)
+        if not bool(sector.get("available")) or int(sector.get("sector_priced",0) or 0)!=500:
+            self.diagnostics["rejections"]["sector"]="SECTOR_DATA_INCOMPLETE";self.last_snapshot=blocked;return blocked
+        iq=index_quote("NIFTY 500")
+        if not isinstance(iq,dict) or not iq.get("LTP") or not iq.get("PreviousClose"):
+            self.diagnostics["rejections"]["nifty500"]="DHAN_NIFTY500_INDEX_UNAVAILABLE";self.last_snapshot=blocked;return blocked
+        nifty=float(iq["NetChange"])/float(iq["PreviousClose"])*100
         pos=int(sector.get("positive_sectors",0) or 0);neg=int(sector.get("negative_sectors",0) or 0);sector_change=float(sector.get("alignment_pct",0) or 0)
         buy=bool(nifty>0 and ad>1 and pos>neg);sell=bool(nifty<0 and ad<1 and neg>pos)
         qmap={str(r["Symbol"]).upper():r.to_dict() for _,r in quotes.iterrows()}
         snap={"intraday":{},"prices":prices,"sector":{**sector,"positive_sectors":pos,"negative_sectors":neg,"alignment_pct":sector_change},"nifty_change":nifty,"ad_ratio":ad,"ad_complete":True,"buy_alignment":buy,"sell_alignment":sell,"dhan_quotes":qmap,"verified":True}
-        self.last_snapshot=snap;self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":500,"reference_data_count":500,"market_data_coverage":"500/500","nifty500_change_pct":nifty,"sector_change_pct":sector_change,"sector_available":bool(sector.get("available")),"sector_mapping":"500/500","sector_priced":"500/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sector_count",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":"500/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","trade_path_status":"READY" if buy or sell else "BLOCKED"})
+        self.last_snapshot=snap;self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":500,"reference_data_count":500,"market_data_coverage":"500/500","nifty500_change_pct":nifty,"sector_change_pct":sector_change,"sector_available":True,"sector_mapping":"500/500","sector_priced":"500/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sector_count",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":"500/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","trade_path_status":"READY" if buy or sell else "BLOCKED"})
         return snap
     def _candidate_symbols(self,snap):
         out=[]
@@ -123,7 +129,7 @@ class MasterEngine:
             result=self.paper_engine.open_trade({**sig,"approved":True,"strategy":s})
             if result.get("opened"):
                 p=result.get("position")
-                if p:self.daily_counts[s]+=1;self.journal.log_trade(p);opened.append(p)
+                if p:self.daily_counts[s]+=1;opened.append(p)
         return opened
     def run_cycle(self):
         self.process_positions();hhmm=self.now().strftime("%H:%M")
