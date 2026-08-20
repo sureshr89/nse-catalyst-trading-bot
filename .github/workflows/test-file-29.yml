@@ -1,4 +1,4 @@
-name: File 29 Test - Master Alignment And Coverage
+name: File 29 Test - Clean Master Diagnostics
 on:
   workflow_dispatch:
 jobs:
@@ -13,6 +13,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - run: python -m pytest -q tests/test_master_alignment_coverage.py
+      - run: python -m pytest -q tests/test_master_clean_diagnostics.py
         env:
           PYTHONPATH: .
