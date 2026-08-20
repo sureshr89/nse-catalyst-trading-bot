@@ -7,6 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # single_master.py is the one-page dashboard.
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
+# Live diagnostic: show 5 real NIFTY 500 constituents from the same verified 500/500 snapshot.
+from dashboard.nifty500_sample import render_nifty500_sample
+render_nifty500_sample()
+
 # Force the complete Streamlit viewport to the requested black theme.
 st.markdown("""
 <style>
