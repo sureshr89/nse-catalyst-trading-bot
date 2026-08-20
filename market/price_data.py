@@ -48,31 +48,42 @@ class PriceData:
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","").strip()
         if not key:return None
-        force_fresh=max_age_seconds<=0
         if not dhan_data.configured():return None
+        force_fresh=max_age_seconds<=0
         if not force_fresh:
             now=time.monotonic()
             with self._cache_lock:
                 cached=self._live_price_cache.get(key);age=now-self._live_price_cache_at.get(key,0)
                 if cached is not None and age<=max_age_seconds:return dict(cached)
-        m=self._map([key])
-        if m is None or len(m)!=1:return None
-        q=dhan_data.market_quote(m,cache_seconds=1)
-        if q is None or getattr(q,"empty",True):return None
-        q=q.copy()
-        if "Symbol" in q.columns:
-            q["_normalized_symbol"]=q["Symbol"].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
-            matched=q.loc[q["_normalized_symbol"].eq(key)]
-            if not matched.empty:q=matched
-        if q.empty:return None
-        r=q.iloc[0]
+        mapping=self._map([key])
+        if mapping is None or getattr(mapping,"empty",True) or len(mapping)!=1:return None
+        quote=dhan_data.market_quote(mapping,cache_seconds=1)
+        if quote is None or getattr(quote,"empty",True):return None
+        frame=quote.copy()
+        if "Symbol" in frame.columns:
+            normalized=frame["Symbol"].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
+            matched=frame.loc[normalized.eq(key)]
+            if not matched.empty:frame=matched
+        if frame.empty:return None
+        row=frame.iloc[0]
         try:
-            ltp=float(r.get("LTP"));op=float(r.get("TodayOpen"));hi=float(r.get("TodayHigh"));lo=float(r.get("TodayLow"));prev=float(r.get("PreviousClose"));net=float(r.get("NetChange"))
-            vals=(ltp,op,hi,lo,prev,net)
-            if not all(pd.notna(v) for v in vals) or any(v<=0 for v in (ltp,op,hi,lo,prev)) or hi<max(op,lo,ltp) or lo>min(op,hi,ltp):return None
-            out={"Close":ltp,"Datetime":datetime.now(INDIA_TZ),"Open":op,"High":hi,"Low":lo,"PreviousClose":prev,"NetChange":net,"price_source":"DHAN_OHLC"}
-        except (KeyError,TypeError,ValueError,OverflowError):return None
-        with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
+            values={
+                "Close":float(row["LTP"]),
+                "Open":float(row["TodayOpen"]),
+                "High":float(row["TodayHigh"]),
+                "Low":float(row["TodayLow"]),
+                "PreviousClose":float(row["PreviousClose"]),
+                "NetChange":float(row["NetChange"]),
+            }
+        except (KeyError,TypeError,ValueError,OverflowError):
+            return None
+        if any(pd.isna(v) for v in values.values()):return None
+        if any(values[k]<=0 for k in ("Close","Open","High","Low","PreviousClose")):return None
+        if values["High"]<max(values["Open"],values["Low"],values["Close"]):return None
+        if values["Low"]>min(values["Open"],values["High"],values["Close"]):return None
+        out={**values,"Datetime":datetime.now(INDIA_TZ),"price_source":"DHAN_OHLC"}
+        with self._cache_lock:
+            self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
         return out
     def get_latest_market_price(self,symbol):return self.get_latest_live_price(symbol,max_age_seconds=8)
     def get_index_1m(self,*args,**kwargs):return pd.DataFrame()
