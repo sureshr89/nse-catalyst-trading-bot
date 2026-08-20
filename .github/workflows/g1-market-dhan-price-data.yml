@@ -7,8 +7,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Show tested commit
+        run: git rev-parse HEAD
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
