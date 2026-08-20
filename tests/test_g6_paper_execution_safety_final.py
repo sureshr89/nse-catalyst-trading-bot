@@ -73,7 +73,19 @@ def test_stop_closes_buy_position_and_releases_capital(tmp_path):
 def test_ambiguous_bar_uses_stop_first(tmp_path):
     e = _engine(tmp_path)
     assert e.open_trade(_valid_trade())["opened"] is True
-    result = e.process_live_price("ABC", 101.0, high=102.0, low=98.0)
+
+    # process_live_price enforces the live market session using the engine's
+    # wall clock. Freeze that clock so this lifecycle test is deterministic
+    # when CI runs outside NSE hours.
+    from zoneinfo import ZoneInfo
+    import papertrade.paper_trade_engine as engine_module
+
+    session_now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(
+        hour=10, minute=30, second=0, microsecond=0
+    )
+    with patch.object(engine_module.datetime, "now", return_value=session_now):
+        result = e.process_live_price("ABC", 101.0, high=102.0, low=98.0)
+
     assert result is not None
     assert result["exit_reason"] == "AMBIGUOUS_LIVE_BAR_STOP_FIRST"
     assert result["exit_price"] == 98.6
