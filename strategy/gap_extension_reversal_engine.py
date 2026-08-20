@@ -54,10 +54,17 @@ class GapExtensionReversalEngine:
         lows = pd.to_numeric(history["Low"], errors="coerce").dropna().tolist()
         if not highs or not lows: return None
         trigger_high = max(highs); trigger_low = min(lows)
-        if open_price > pdh and pdc < open_price and trigger_high > open_price:
+
+        # Sell mirror: open must be above PDH, price must extend to/above the
+        # opening price, then live LTP reverses below the open. PDC is target.
+        if open_price > pdh and pdc < open_price and trigger_high >= open_price:
             if entry < open_price and nifty <= 0.25 and pdc < entry < trigger_high:
                 return self._result(symbol, "SELL", entry, pdc, trigger_high)
-        if pdl is not None and open_price < pdl and pdc > open_price and trigger_low < open_price:
+
+        # Buy mirror: open must be below PDL but above PDH (inside the prior-day
+        # gap/range represented by PDH < Open < PDL), then extend below open,
+        # followed by a live reclaim. PDC is target.
+        if pdl is not None and open_price > pdh and open_price < pdl and pdc > open_price and trigger_low < open_price:
             if entry > open_price and nifty >= -0.25 and trigger_low < entry < pdc:
                 return self._result(symbol, "BUY", entry, pdc, trigger_low)
         return None
