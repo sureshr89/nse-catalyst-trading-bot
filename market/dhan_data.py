@@ -6,10 +6,16 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math, os, threading, time
 import pandas as pd, requests
-BASE_URL="https://api.dhan.co/v2"; MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"; MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
-CACHE_DIR=Path("data"); MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv"; IST="Asia/Kolkata"
+
+BASE_URL="https://api.dhan.co/v2"
+MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"
+MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
+CACHE_DIR=Path("data")
+MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv"
+IST="Asia/Kolkata"
 _LOCK=threading.RLock(); _QUOTE_CACHE={}; _QUOTE_CACHE_AT=0.0; _QUOTE_CACHE_KEY=None
 _LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
+
 def _secret(name):
     value=os.getenv(name,"")
     if value:return str(value).strip()
@@ -17,6 +23,7 @@ def _secret(name):
         import streamlit as st
         return str(st.secrets.get(name,"")).strip()
     except Exception:return ""
+
 def configured():return bool(_secret("DHAN_CLIENT_ID") and _secret("DHAN_ACCESS_TOKEN"))
 def dhan_status():return dict(_LAST_DHAN_STATUS)
 def _set_status(**kwargs):
@@ -27,12 +34,17 @@ def _post(path,payload,timeout=15):
     try:
         r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout);body=r.json() if r.content else {}
         if r.status_code!=200:
-            code=body.get("errorCode") or body.get("error_code") or body.get("code") if isinstance(body,dict) else None;msg=body.get("errorMessage") or body.get("error_message") or body.get("message") if isinstance(body,dict) else r.text[:300];_set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
+            code=body.get("errorCode") or body.get("error_code") or body.get("code") if isinstance(body,dict) else None
+            msg=body.get("errorMessage") or body.get("error_message") or body.get("message") if isinstance(body,dict) else r.text[:300]
+            _set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
         _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
     except Exception as exc:_set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
+
 def _valid_master(x):
     if x is None or x.empty:return False
-    cols={str(c).strip().upper() for c in x.columns};return bool({"SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"}&cols) and bool({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols)
+    cols={str(c).strip().upper() for c in x.columns}
+    return bool({"SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"}&cols) and bool({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols)
+
 def load_instrument_master(force=False):
     CACHE_DIR.mkdir(parents=True,exist_ok=True)
     if MASTER_CACHE.exists() and not force:
@@ -46,8 +58,10 @@ def load_instrument_master(force=False):
             if _valid_master(x):x.to_csv(MASTER_CACHE,index=False);_set_status(stage="INSTRUMENT_MASTER",message=f"Dhan master loaded: {len(x)} rows");return x
         except Exception as exc:_set_status(ok=False,stage="INSTRUMENT_MASTER",message=f"{type(exc).__name__}: {exc}")
     return pd.DataFrame()
+
 def _col(frame,names):
     lookup={str(c).strip().upper():c for c in frame.columns};return next((lookup[n.upper()] for n in names if n.upper() in lookup),None)
+
 def map_nifty500(symbols,force=False):
     wanted={str(s).strip().upper().replace(".NS","") for s in symbols if str(s).strip()};m=load_instrument_master(force)
     if m.empty or not wanted:return pd.DataFrame(columns=["Symbol","SecurityId","ExchangeSegment","Instrument"])
@@ -59,12 +73,14 @@ def map_nifty500(symbols,force=False):
     if ser:x=x[x[ser].astype(str).str.upper().isin({"EQ","BE","BZ","SM","ST","SZ"})]
     x=x[x["_symbol"].isin(wanted)].copy();x["Symbol"]=x["_symbol"];x["SecurityId"]=x[ic].astype(str).str.strip();x["ExchangeSegment"]="NSE_EQ";x["Instrument"]=x[ins].astype(str).str.upper() if ins else "EQUITY"
     return x[x["SecurityId"].ne("")&x["SecurityId"].ne("NAN")][["Symbol","SecurityId","ExchangeSegment","Instrument"]].drop_duplicates("Symbol")
+
 def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
     ids=[int(x) for x in security_ids[:1000] if str(x).isdigit()];_set_status(stage=endpoint,requested=len(ids),received=0);return _post(endpoint,{exchange_segment:ids})
 def _finite_positive(v):
     try:return math.isfinite(float(v)) and float(v)>0
     except (TypeError,ValueError):return False
 def _valid_ohlc(op,hi,lo,close,ltp):return all(_finite_positive(v) for v in (op,hi,lo,close,ltp)) and hi>=max(op,lo,ltp) and lo<=min(op,hi,ltp)
+
 def market_quote(mapping,cache_seconds=10):
     global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
     if mapping is None or mapping.empty or not configured() or not {"SecurityId","Symbol"}.issubset(mapping.columns):return pd.DataFrame()
@@ -89,19 +105,40 @@ def market_quote(mapping,cache_seconds=10):
     if not verified:return pd.DataFrame()
     with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
     return result
+
+def _index_candidates(master):
+    """Return plausible Dhan index-master rows for NIFTY 500, without hard-coded IDs."""
+    if master is None or master.empty:return pd.DataFrame()
+    name_col=_col(master,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));id_col=_col(master,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg_col=_col(master,("SEM_SEGMENT","SEGMENT"));ex_col=_col(master,("SEM_EXM_EXCH_ID","EXCH_ID"));ins_col=_col(master,("SEM_INSTRUMENT_NAME","INSTRUMENT"));
+    if not name_col or not id_col:return pd.DataFrame()
+    x=master.copy();name=x[name_col].astype(str).str.strip().str.upper();
+    mask=name.isin({"NIFTY 500","NIFTY500"})
+    if seg_col:mask &= x[seg_col].astype(str).str.upper().isin({"I","IDX_I","INDEX"})
+    if ex_col:mask &= x[ex_col].astype(str).str.upper().eq("NSE")
+    if ins_col:mask |= x[ins_col].astype(str).str.upper().str.contains("INDEX",na=False) & name.isin({"NIFTY 500","NIFTY500"})
+    return x.loc[mask,[name_col,id_col]].drop_duplicates()
+
 def index_quote(ticker="NIFTY 500"):
-    """Return a verified Dhan index quote when available; no equity fallback is used."""
-    aliases={"NIFTY 500":"NIFTY 500","NIFTY500":"NIFTY 500","NIFTY 50":"NIFTY","NIFTY":"NIFTY"};name=aliases.get(str(ticker).strip().upper(),str(ticker).strip().upper())
+    """Return a verified Dhan index quote; index security IDs are resolved from Dhan master."""
+    requested=str(ticker).strip().upper();aliases={"NIFTY500":"NIFTY 500","NIFTY 500":"NIFTY 500","NIFTY 50":"NIFTY 50","NIFTY":"NIFTY 50"};name=aliases.get(requested,requested)
     if not configured():return None
     try:
-        response=_post("/marketfeed/quote",{"IDX_I":[13]})
+        master=load_instrument_master()
+        candidates=_index_candidates(master) if name=="NIFTY 500" else pd.DataFrame()
+        if candidates.empty:
+            _set_status(ok=False,stage="INDEX_MAPPING",message=f"Dhan master has no verified {name} index mapping")
+            return None
+        id_col=_col(candidates,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));ids=pd.to_numeric(candidates[id_col],errors="coerce").dropna().astype(int).astype(str).tolist()
+        response=_post("/marketfeed/quote",{"IDX_I":ids})
         data=response.get("data",{}).get("IDX_I",{}) if response else {}
-        for _,item in data.items():
-            if isinstance(item,dict):
-                ltp=float(item.get("last_price") or item.get("ltp") or 0);net=float(item.get("net_change") or 0);prev=ltp-net
-                if _finite_positive(ltp) and _finite_positive(prev):return {"Name":name,"LTP":ltp,"NetChange":net,"PreviousClose":prev,"change_pct":net/prev*100.0,"price_source":"DHAN_INDEX_QUOTE"}
-    except Exception:pass
+        for sid,item in data.items():
+            if str(sid) not in set(ids) or not isinstance(item,dict):continue
+            ltp=float(item.get("last_price") or item.get("ltp") or 0);net=float(item.get("net_change") or 0);prev=ltp-net
+            if _finite_positive(ltp) and _finite_positive(prev):
+                return {"Name":name,"LTP":ltp,"NetChange":net,"PreviousClose":prev,"change_pct":net/prev*100.0,"SecurityId":str(sid),"price_source":"DHAN_INDEX_QUOTE"}
+    except Exception as exc:_set_status(ok=False,stage="INDEX_QUOTE",message=f"{type(exc).__name__}: {exc}")
     return None
+
 def _history_frame(response):
     if not response:return pd.DataFrame()
     try:
@@ -111,8 +148,10 @@ def _history_frame(response):
         for c in ["Open","High","Low","Close","Volume"]:x[c]=pd.to_numeric(x[c],errors="coerce")
         x=x.dropna(subset=["Open","High","Low","Close"]);return x[(x["Open"]>0)&(x["High"]>=x[["Open","Low","Close"]].max(axis=1))&(x["Low"]<=x[["Open","High","Close"]].min(axis=1))].sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
     except Exception:return pd.DataFrame()
+
 def intraday_history(security_id,from_dt,to_dt,interval=1):return _history_frame(_post("/charts/intraday",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","interval":str(interval),"oi":False,"fromDate":from_dt,"toDate":to_dt},timeout=20))
 def daily_history(security_id,from_date,to_date):return _history_frame(_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20))
+
 def previous_day_references(mapping,force=False):
     if mapping is None or mapping.empty or not configured():return pd.DataFrame()
     today=datetime.now().date();fd=(today-timedelta(days=10)).isoformat();td=(today+timedelta(days=1)).isoformat()
