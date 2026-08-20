@@ -62,7 +62,7 @@ def live_dashboard():
         from market.dhan_data import configured as dhan_configured,dhan_status
         market=BREADTH.snapshot(force=False); dhan_ok=dhan_configured(); api_status=dhan_status()
     except Exception as exc:
-        market={"complete":False,"sector_complete":False,"evaluated":0,"sector_priced":0,"nifty500_change_pct":None,"sector_alignment_pct":None,"ad_ratio":None,"reason":str(exc)}
+        market={"complete":False,"sector_complete":False,"evaluated":0,"sector_priced":0,"nifty500_change_pct":None,"sector_alignment_pct":None,"ad_ratio":None,"reason":str(exc),"quote_rows":pd.DataFrame()}
         dhan_ok=False; api_status={"ok":False,"received":0,"requested":0,"message":str(exc)}
 
     trades_all=read_csv("trades.csv"); signals_all=read_csv("signals.csv"); today=now.date()
@@ -76,7 +76,7 @@ def live_dashboard():
             trades_today=trades_today[d.dt.date==today]
     signals_today=signals_all.copy()
     if not signals_today.empty:
-        dc=next((c for c in ["timestamp","entry_time","logged_at"] if c in signals_today.columns),None)
+        dc=next((c for c in ["timestamp","entry_time","logged_at"] if c in signals_all.columns),None)
         if dc:
             d=pd.to_datetime(signals_today[dc],errors="coerce",utc=True)
             try: d=d.dt.tz_convert(IST)
@@ -90,6 +90,8 @@ def live_dashboard():
     ad=market.get("ad_ratio") if complete else None
     evaln=int(market.get("evaluated",0) or 0) if complete else 0
     sp=int(market.get("sector_priced",0) or 0) if sector_complete else 0
+    quote_rows=market.get("quote_rows")
+    quote_count=len(quote_rows) if isinstance(quote_rows,pd.DataFrame) else 0
     buy=bool(complete and sector_complete and num(n,0)>0 and num(sec,0)>0 and num(ad,0)>1)
     sell=bool(complete and sector_complete and num(n,0)<0 and num(sec,0)<0 and num(ad,2)<1)
     bias="🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
@@ -99,8 +101,10 @@ def live_dashboard():
     cards=[("NIFTY 500",pct(n) if complete else "WAITING"),("SECTORS",pct(sec) if sector_complete else "WAITING"),("A/D RATIO",fmt(ad) if complete and ad is not None else "WAITING"),("BREADTH",f"{evaln}/500"),("SECTOR DATA",f"{sp}/500"),("MASTER BIAS",bias)]
     st.markdown('<div class="grid6">'+''.join(card(l,v) for l,v in cards)+'</div>',unsafe_allow_html=True)
     reason=str(market.get("reason") or "").replace("<","&lt;").replace(">","&gt;")
-    status_text=f'<b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • API: {"PASS" if api_status.get("ok") else "WAIT/ERROR"} • Quotes {api_status.get("received",0)}/{api_status.get("requested",0)}'
+    status_ok=bool(complete and quote_count==500)
+    status_text=f'<b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • API: {"PASS" if status_ok else "WAIT/ERROR"} • NIFTY 500 quotes {quote_count}/500'
     if not complete: status_text += f' • NIFTY 500 breadth waiting: {reason or "market data incomplete"}'
+    elif not status_ok: status_text += f' • Dhan status: {api_status.get("message") or "incomplete quote data"}'
     status_text += ' • Every value refreshes with this 15s cycle'
     st.markdown(f'<div class="status">{status_text}</div>',unsafe_allow_html=True)
 
@@ -143,4 +147,9 @@ def live_dashboard():
     st.markdown(f'<div class="tip">💡 {tips[now.date().toordinal()%len(tips)]}</div>',unsafe_allow_html=True)
     st.caption("NSE Catalyst • paper trading only • dashboard refreshes every 15 seconds")
 
-live_dashboard()
+def render_dashboard():
+    """Public entrypoint used by main.py and direct execution."""
+    live_dashboard()
+
+if __name__ == "__main__":
+    render_dashboard()
