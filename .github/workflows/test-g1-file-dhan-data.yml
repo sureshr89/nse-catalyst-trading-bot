@@ -15,14 +15,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
-      - name: Show tested revision
-        run: |
-          git rev-parse HEAD
-          python -c "import market.dhan_data as d; print(d.__file__)"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Verify runtime dependencies
+        run: |
+          python -c "import pandas, requests; print('pandas', pandas.__version__); print('requests', requests.__version__)"
+      - name: Show tested revision and source
+        run: |
+          git rev-parse HEAD
+          python -c "import market.dhan_data as d; print(d.__file__)"
       - name: Run File 02 tests
         run: python -m pytest -q tests/test_dhan_data.py
