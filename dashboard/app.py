@@ -50,16 +50,15 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
-# KEEP THE ORIGINAL MASTER DASHBOARD. The TEST section is appended at the very
-# bottom of the same page so it cannot alter or replace the existing layout.
+# Keep the original master dashboard. Additional diagnostics/test content is
+# appended after it without changing S1-S5.
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
-from dashboard.nifty500_sample import render_nifty500_sample
-render_nifty500_sample()
+# Do not render the old five-stock sample here. It duplicated live data after
+# the dashboard's trading tip.
 render_trade_path()
 
-# Separate read-only TEST section at the very bottom. It does not create,
-# execute, store, journal, or score any trade and does not affect S1-S5.
+# Separate read-only TEST section. It does not alter normal S1-S5 state.
 st.divider()
 st.markdown("### 🧪 TEST — Live Data / Entry Check")
 st.caption("READ-ONLY TEST • one isolated test trade • no journal • no win/loss • S1–S5 unchanged")
@@ -69,10 +68,17 @@ try:
 except Exception as exc:
     st.error(f"TEST section unavailable: {type(exc).__name__}: {exc}")
 
+# Keep one and only one DAILY TRADING TIP, at the very end of the page.
+# Hide the copy emitted by single_master.py without changing its trading logic.
 st.markdown("""
 <style>
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="stMainBlockContainer"],[data-testid="stHeader"],header,main,section{background:#000!important}
 .block-container{background:#000!important}
 .stMarkdown,.stMarkdown p,.stCaption,.stCaption p{color:#fff!important}
+.tip{display:none!important}
+.tip-final{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700;color:#fff}
 </style>
 """, unsafe_allow_html=True)
+
+st.markdown('<div class="sec">💡 DAILY TRADING TIP</div>', unsafe_allow_html=True)
+st.markdown('<div class="tip-final">💡 One disciplined trade is better than many emotional trades.</div>', unsafe_allow_html=True)
