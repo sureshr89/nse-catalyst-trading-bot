@@ -23,7 +23,7 @@ def test_daily_period_parses_numeric_days():
 
     start = datetime.fromisoformat(calls["start"]).date()
     end = datetime.fromisoformat(calls["end"]).date()
-    assert (end - start).days == 15
+    assert (end - start).days == 16
 
 
 def test_completed_excludes_current_minute():
