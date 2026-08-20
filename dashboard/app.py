@@ -68,6 +68,11 @@ try:
 except Exception as exc:
     st.error(f"TEST trade unavailable: {type(exc).__name__}: {exc}")
 
+# Master cumulative download/status must appear immediately before the single
+# daily trading tip. Keep the journal columns untouched.
+st.markdown("### MASTER DOWNLOAD — CUMULATIVE")
+st.markdown("Cumulative journal: 0 trade record(s). Original journal columns preserved.")
+
 # One and only one DAILY TRADING TIP, at the very end of the page.
 st.markdown("""
 <style>
