@@ -1,102 +1,95 @@
 # NSE Catalyst Trading Bot
 
-## Active strategy — NIFTY 500 PDH/PDL + Today's Open Return
+## Clean active system — Dhan-only NIFTY 500 S1-S5
 
-A Python-based **paper-trading** scanner for the **NIFTY 500 universe**. The active strategy uses previous-day High/Low, today's Open, completed 1-minute CLOSE data for setup detection, and the NIFTY 500 market filter.
+NSE Catalyst is a **paper-trading-only** NIFTY 500 scanner. The active runtime has one market-data source (**Dhan**) and one strategy engine containing exactly five strategies: S1-S5.
 
-### BUY setup
+### Authoritative data flow
 
-1. Activate the BUY side when NIFTY 500 is **≥ +0.25%** versus the previous trading close.
-2. Build the BUY candidate pool from stocks where **Today's Open > PDH**.
-3. Maintain those candidates in the waiting list using completed 1-minute **Close** prices.
-4. When a candidate's Close goes **below PDH**, mark `PDH_BREACHED` and keep waiting.
-5. When a breached candidate's Close returns to/reaches **Today's Open**, mark it **BUY QUALIFIED**.
-6. No separate reversal-candle Open/Close pattern is required.
-7. For qualified candidates, **larger opening gap % versus PDH has highest priority**; ATR% is the secondary tie-break/ranking metric.
-8. Immediately before entry, re-check NIFTY 500 ≥ +0.25% and the stock is at/above Today's Open.
-9. Use the current available market price as the entry price.
-10. Stop-loss = **PDH**; target = **1.25R**.
+Dhan instrument master → verified NIFTY 500 mapping → Dhan 500-stock market quote → A/D + sector counts + NIFTY 500 alignment → candidate prefilter → Dhan completed 1-minute candles for candidates → S1-S5 → risk → paper trade → journal/dashboard.
 
-### SELL setup
+**Yahoo Finance is not used.** No Yahoo price, Yahoo fallback, Yahoo news or legacy strategy path may create a signal.
 
-1. Activate the SELL side when NIFTY 500 is **≤ −0.25%** versus the previous trading close.
-2. Build the SELL candidate pool from stocks where **Today's Open < PDL**.
-3. Maintain those candidates in the waiting list using completed 1-minute **Close** prices.
-4. When a candidate's Close goes **above PDL**, mark `PDL_BREACHED` and keep waiting.
-5. When a breached candidate's Close returns to/reaches **Today's Open**, mark it **SELL QUALIFIED**.
-6. No separate reversal-candle Open/Close pattern is required.
-7. For qualified candidates, **larger opening gap magnitude % versus PDL has highest priority**; ATR% is the secondary tie-break/ranking metric.
-8. Immediately before entry, re-check NIFTY 500 ≤ −0.25% and the stock is at/below Today's Open.
-9. Use the current available market price as the entry price.
-10. Stop-loss = **PDL**; target = **1.25R**.
+### Common market gate
 
-### Candidate priority
+BUY requires:
+- NIFTY 500 change > 0%
+- A/D ratio > 1
+- positive sector count > negative sector count
+- 500/500 verified market coverage
 
-Priority is applied **only after the complete price-action setup qualifies**. A larger gap does not by itself create a trade.
+SELL requires the inverse:
+- NIFTY 500 change < 0%
+- A/D ratio < 1
+- negative sector count > positive sector count
+- 500/500 verified market coverage
 
-1. **Gap magnitude % — highest priority**
-2. **ATR% — secondary priority**
-3. If both are equal, the existing candidate ordering is retained.
+### S1 — PDH/PDL Sweep + Open Reclaim
 
-For BUY, gap % is `(Today's Open − PDH) / PDH × 100`.
-For SELL, gap magnitude % is `abs((Today's Open − PDL) / PDL × 100)`.
+BUY: Today's Open > PDH → today's Low touches/sweeps PDH → live Dhan LTP > Today's Open → BUY.
 
-### Runtime and data flow
+SELL: Today's Open < PDL → today's High touches/sweeps PDL → live Dhan LTP < Today's Open → SELL.
 
-- Market setup data: completed **1-minute** data.
-- Control cycle: **30 seconds**.
-- Market-data refresh/cache: approximately **60 seconds**.
-- Waiting and qualified candidate states persist between cycles; the bot does not restart the setup from zero each cycle.
-- Once a stock is finalized for entry, entry/risk/SL/target are calculated immediately rather than waiting for another control cycle.
+SL = PDH for BUY / PDL for SELL.
 
-### Risk controls
+### S2 — PDH/PDL Breakout + Retest
 
-- Universe: **NIFTY 500**
-- Starting paper capital: **₹2,50,000**
-- Maximum risk per trade: **₹1,500**
-- Required actual risk: **₹1,400–₹1,500**
-- Minimum risk/reward: **1:1.25**
-- Maximum 1 trade per stock per day
-- Maximum 2 open positions
-- Maximum daily loss: **₹3,000**
-- Daily profit target: **₹5,000**
-- Entry window: **09:45–14:00 IST**
-- Mandatory square-off: **15:00 IST**
-- Paper trading: **ON**
-- Live trading: **OFF**
+BUY: completed 1-minute history breaks PDH → pullback reaches PDH → live Dhan LTP ≥ PDH → BUY.
 
-### News gate
+SELL: completed 1-minute history breaks PDL → pullback reaches PDL → live Dhan LTP ≤ PDL → SELL.
 
-After a candidate qualifies and passes the price/risk checks, the current final gate requires directional Yahoo Finance headline sentiment:
+SL = pullback Low for BUY / pullback High for SELL.
 
-- BUY → POSITIVE news
-- SELL → NEGATIVE news
-- NEUTRAL/unusable/no directional news → rejected
+### S3 — Opposite PDH/PDL Sweep + Open Reversal
 
-This is an additional execution filter, not part of the PDH/PDL setup itself.
+BUY: Today's Open is inside PDH/PDL → today's Low touches/sweeps PDL → live Dhan LTP > Today's Open → BUY.
 
-### What is NOT a strategy condition
+SELL: Today's Open is inside PDH/PDL → today's High touches/sweeps PDH → live Dhan LTP < Today's Open → SELL.
 
-- **Industry/Sector is not a trading filter.**
-- There is no separate stock-direction alignment filter.
-- No EMA, VWAP, BOS/CHOCH, FVG or other technical-pattern filter is used.
-- Gap size and ATR rank already-qualified candidates only; they do not create a trade by themselves.
+SL = Today's Low for BUY / Today's High for SELL.
 
-### Main modules
+### S4 — Intraday High/Low Breakout
 
-- `scanner/scanner_engine.py` — NIFTY 500 scanning, waiting states, qualification and ranking
-- `strategy/open_reversal_engine.py` — PDH/PDL + Today's Open state logic
-- `strategy/candidate_metrics.py` — gap-first and ATR ranking metrics
-- `strategy/risk_engine.py` — risk approval, position sizing and daily worst-case loss protection
-- `market/price_data.py` — NIFTY 500 and NIFTY market price data
-- `market/live_price.py` — fresh available 1-minute market price for paper entry
-- `data/stock_universe.py` — NIFTY 500 universe
-- `data/reference_store.py` — PDH/PDL daily references
-- `bot_runner.py` — persistent paper worker
-- `dashboard/` — status, current trading, analysis, stock scanner and downloads
+BUY: live Dhan LTP breaks the previously completed intraday High.
+
+SELL: live Dhan LTP breaks the previously completed intraday Low.
+
+SL = previous intraday Low for BUY / previous intraday High for SELL.
+
+### S5 — Direct PDH/PDL Breakout
+
+BUY: live Dhan LTP > PDH.
+
+SELL: live Dhan LTP < PDL.
+
+SL = PDH for BUY / PDL for SELL.
+
+### Risk and execution
+
+- Paper trading only; live order placement is disabled.
+- Capital allocation: ₹2,50,000 per trade.
+- Required actual risk: ₹1,400–₹1,500.
+- Target: 1.25R.
+- Entry window: 09:45–14:00 IST.
+- Mandatory paper square-off: 15:00 IST.
+- Strategy-level trade/loss limits are controlled centrally by configuration and the risk engine.
+
+### Clean architecture
+
+- `engine/master_engine.py` — single runtime decision path
+- `market/dhan_data.py` — Dhan authentication, instrument mapping, quotes and historical candles
+- `market/price_data.py` — Dhan-only candle/live-price adapter
+- `data/reference_store.py` — PDH/PDL/PDC references
+- `strategy/nifty500_price_action_strategies.py` — pure S1-S5 signal contract
+- `strategy/contracts.py` — authoritative S1-S5 documentation contract
+- `strategy/risk_engine.py` — final risk gate
+- `papertrade/` — paper execution and journal
+- `dashboard/` — presentation only
+
+Legacy open-reversal, gap-extension, Yahoo and monkey-patch strategy layers have been removed from the active runtime.
 
 ### Testing
 
-GitHub Actions runs Python compilation and the real `pytest` suite on pushes and pull requests. The tests cover the current state-machine strategy, risk rules, completed-candle behavior, paper P&L, and the gap-first ranking rule.
+GitHub Actions compiles the repository and runs pytest on every push and pull request. Tests are being migrated to the clean S1-S5 contract; no legacy strategy test should be required for the active runtime.
 
-The application remains paper-trading only. Live order execution is explicitly disabled.
+**Real-money trading must remain disabled until the complete paper-trading path and CI suite are verified.**
