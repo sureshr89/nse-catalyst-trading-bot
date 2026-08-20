@@ -87,13 +87,17 @@ class MasterEngine:
         prior_high=float(pre["High"].max()) if not pre.empty else None;prior_low=float(pre["Low"].min()) if not pre.empty else None
         pull_low=float(pre["Low"].min()) if not pre.empty else None;pull_high=float(pre["High"].max()) if not pre.empty else None
         buy_break=bool(not pre.empty and (pre["High"]>pdh).any());sell_break=bool(not pre.empty and (pre["Low"]<pdl).any())
-        common={"nifty500_change_pct":snap["nifty_change"],"sector_alignment_pct":snap["sector"].get("alignment_pct",0),"ad_ratio":snap["ad_ratio"],"ad_coverage":500,"positive_sectors":snap["sector"].get("positive_sectors",0),"negative_sectors":snap["sector"].get("negative_sectors",0),"previous_candle_open":float(prev["Open"]),"previous_candle_close":float(prev["Close"]),"symbol":symbol,"side":"BUY","ltp":ltp,"today_open":op,"pdh":pdh,"pdl":pdl,"today_low":lo,"today_high":hi,"prior_intraday_high":prior_high,"prior_intraday_low":prior_low,"pullback_low":pull_low,"pullback_high":pull_high,"breakout_seen":buy_break}
+        gate={"nifty500_change_pct":snap["nifty_change"],"sector_alignment_pct":snap["sector"].get("alignment_pct",0),"ad_ratio":snap["ad_ratio"],"ad_coverage":500,"positive_sectors":snap["sector"].get("positive_sectors",0),"negative_sectors":snap["sector"].get("negative_sectors",0),"previous_candle_open":float(prev["Open"]),"previous_candle_close":float(prev["Close"])}
         out=[]
         for side in ("BUY","SELL"):
             if (side=="BUY" and not snap["buy_alignment"]) or (side=="SELL" and not snap["sell_alignment"]):continue
-            common["side"]=side;common["breakout_seen"]=buy_break if side=="BUY" else sell_break
             for strategy in STRATEGY_DEFINITIONS:
-                try:sig=evaluate(strategy,**common)
+                kwargs=dict(gate);kwargs.update(symbol=symbol,side=side,ltp=ltp)
+                if strategy in ("S1","S3"):kwargs.update(today_open=op,pdh=pdh,pdl=pdl,today_low=lo,today_high=hi)
+                elif strategy=="S2":kwargs.update(pdh=pdh,pdl=pdl,pullback_low=pull_low,pullback_high=pull_high,breakout_seen=buy_break if side=="BUY" else sell_break)
+                elif strategy=="S4":kwargs.update(today_high=hi,today_low=lo,prior_intraday_high=prior_high,prior_intraday_low=prior_low)
+                elif strategy=="S5":kwargs.update(pdh=pdh,pdl=pdl)
+                try:sig=evaluate(strategy,**kwargs)
                 except (TypeError,ValueError,KeyError):sig=None
                 if sig:
                     row=sig.to_dict();row.update({"strategy_name":STRATEGY_DEFINITIONS[strategy]["name"],"today_open":op,"today_low":lo,"today_high":hi,"pdh":pdh,"pdl":pdl,"previous_day_close":float(ref["PreviousDayClose"]),"entry_time":self.now().isoformat(timespec="seconds"),"signal_status":"ELIGIBLE","price_source":"Dhan"});out.append(row)
@@ -103,8 +107,7 @@ class MasterEngine:
         if not snap.get("verified"):self.last_signals=[];self.diagnostics["final_signals"]=0;self._write_diagnostics();return []
         candidates=self._candidate_symbols(snap)
         if candidates:
-            fresh=self.price_data.get_multi_1m(candidates)
-            snap["intraday"]=fresh
+            fresh=self.price_data.get_multi_1m(candidates);snap["intraday"]=fresh
             for _,ref in self.references[self.references["Symbol"].isin(candidates)].iterrows():signals.extend(self._evaluate_stock(str(ref["Symbol"]).upper(),ref,snap))
         self._write_signal_ledger(signals);selected=[];used=set();priority={"S1":5,"S2":4,"S3":4,"S4":3,"S5":2}
         for sig in sorted(signals,key=lambda x:(-priority.get(str(x.get("strategy","")),0),str(x.get("symbol","")))):
