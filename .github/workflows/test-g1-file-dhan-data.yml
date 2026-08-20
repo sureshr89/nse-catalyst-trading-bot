@@ -20,13 +20,14 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements.txt
-      - name: Install dependencies
+      - name: Install application and test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install pytest
       - name: Verify runtime dependencies
         run: |
-          python -c "import pandas, requests; print('pandas', pandas.__version__); print('requests', requests.__version__)"
+          python -c "import pandas, requests, pytest; print('pandas', pandas.__version__); print('requests', requests.__version__); print('pytest', pytest.__version__)"
       - name: Show tested revision and source
         run: |
           git rev-parse HEAD
