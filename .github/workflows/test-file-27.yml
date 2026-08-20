@@ -1,4 +1,4 @@
-name: File 27 Test - Risk And Position Sizing
+name: File 27 Test - Clean Risk And Position Sizing
 on:
   workflow_dispatch:
 jobs:
@@ -13,6 +13,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - run: python -m pytest -q tests/test_risk_position_sizing.py
+      - run: python -m pytest -q tests/test_risk_position_sizing_clean.py
         env:
           PYTHONPATH: .
