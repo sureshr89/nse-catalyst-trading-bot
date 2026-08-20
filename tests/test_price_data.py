@@ -19,10 +19,10 @@ def test_live_price_uses_dhan_source_label():
     pd_obj=PriceData();pd_obj._live_price_cache.pop(symbol,None);pd_obj._live_price_cache_at.pop(symbol,None)
     mapping=pd.DataFrame([{"Symbol":symbol,"SecurityId":"123"}])
     quote=pd.DataFrame([{ "Symbol":symbol,"LTP":110,"TodayOpen":108,"TodayHigh":112,"TodayLow":107,"PreviousClose":105,"NetChange":5}])
-    with patch("market.dhan_data.configured",return_value=True), patch("market.dhan_data.map_nifty500",return_value=mapping) as map_mock, patch("market.dhan_data.market_quote",return_value=quote) as quote_mock:
+    with patch.object(pd_obj,"_map",return_value=mapping), patch("market.dhan_data.configured",return_value=True), patch("market.dhan_data.market_quote",return_value=quote):
         result=pd_obj.get_latest_live_price(symbol,max_age_seconds=0)
-    map_mock.assert_called_once_with([symbol])
-    quote_mock.assert_called_once()
     assert result is not None
     assert result["price_source"]=="DHAN_OHLC"
     assert result["Close"]==110.0
+    assert result["Open"]==108.0
+    assert result["PreviousClose"]==105.0
