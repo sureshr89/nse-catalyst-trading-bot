@@ -6,9 +6,6 @@ import streamlit as st
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 ENTRY_START = dt.time(9, 15)
 FORCE_EXIT = dt.time(14, 45)
-MIN_HOLD = dt.timedelta(minutes=1)
-SL_PCT = 0.005
-TARGET_PCT = 0.010
 
 
 def _fmt(v, digits=2):
@@ -45,11 +42,9 @@ def _eligible_stock(rows):
 
 
 def _open_test_trade(candidate, now):
-    entry = candidate["entry"]
     st.session_state["nse_test_trade"] = {
         "date": now.date().isoformat(), "status": "OPEN", "symbol": candidate["symbol"], "side": "BUY",
-        "entry_time": now.isoformat(), "entry": entry, "open": candidate["open"],
-        "sl": entry * (1 - SL_PCT), "target": entry * (1 + TARGET_PCT), "qty": 1,
+        "entry_time": now.isoformat(), "entry": candidate["entry"], "open": candidate["open"],
         "exit_time": None, "exit": None, "pnl": None, "exit_reason": None,
     }
 
@@ -60,12 +55,8 @@ def _update_test_trade(rows, now):
     row = rows[rows["Symbol"].astype(str) == str(state.get("symbol"))]
     if row.empty: return state
     ltp = float(row.iloc[0]["LTP"]); state["last_ltp"] = ltp
-    try: entry_time = dt.datetime.fromisoformat(state["entry_time"])
-    except Exception: return state
-    if now - entry_time < MIN_HOLD: return state
-    reason = "SL" if ltp <= state["sl"] else "TARGET" if ltp >= state["target"] else "2:45 PM TIME EXIT" if now.time() >= FORCE_EXIT else None
-    if reason:
-        state.update({"status":"CLOSED", "exit_time":now.isoformat(), "exit":ltp, "exit_reason":reason, "pnl":(ltp-state["entry"])*state["qty"]})
+    if now.time() >= FORCE_EXIT:
+        state.update({"status":"CLOSED", "exit_time":now.isoformat(), "exit":ltp, "exit_reason":"2:45 PM TIME EXIT", "pnl":ltp-state["entry"]})
     return state
 
 
@@ -75,7 +66,7 @@ def _card(label, value):
 
 def _render_test_trade(rows, snap, idx):
     st.markdown("#### 🧪 One aligned BUY test trade")
-    st.caption("First available live cycle after 09:15 IST when NIFTY is positive, A/D > 1, positive sectors exceed negative sectors, 500/500 data is complete, and a stock is above open. One trade only • minimum hold 1 minute • SL 0.5% • target 1% • exit 2:45 PM IST • memory-only.")
+    st.caption("First available live cycle after 09:15 IST when NIFTY is positive, A/D > 1, positive sectors exceed negative sectors, 500/500 data is complete, and a stock is above open. One trade only • no SL • no Target • live monitoring until 2:45 PM IST • memory-only.")
     now = _now_ist(); state = _test_state(); today = now.date().isoformat()
     if state.get("date") != today:
         state = {"date": today, "status": "WAITING"}; st.session_state["nse_test_trade"] = state
@@ -95,19 +86,18 @@ def _render_test_trade(rows, snap, idx):
         else: st.info("Today's test-entry window has ended. No late test entry will be created.")
     if state.get("status") == "OPEN": state = _update_test_trade(rows, now)
     if state.get("status") in {"OPEN", "CLOSED"}:
-        current = state.get("last_ltp", state.get("entry")); price = current if state.get("status") == "OPEN" else state.get("exit"); pnl = state.get("pnl")
+        current = state.get("last_ltp", state.get("entry")); price = current if state.get("status") == "OPEN" else state.get("exit")
+        pnl = state.get("pnl") if state.get("status") == "CLOSED" else price - state.get("entry")
         st.markdown("<div class='test-grid'>" +
                     _card("Stock / Side", f"{state.get('symbol','—')} / BUY") +
                     _card("Entry", f"₹{_fmt(state.get('entry'))}") +
                     _card("Current / Exit", f"₹{_fmt(price)}") +
-                    _card("P&L", f"₹{_fmt(pnl) if pnl is not None else '—'}") +
+                    _card("P&L", f"₹{_fmt(pnl)}") +
                     _card("Entry Time", state.get("entry_time", "—")[11:19] if state.get("entry_time") else "—") +
-                    _card("SL", f"₹{_fmt(state.get('sl'))}") +
-                    _card("Target", f"₹{_fmt(state.get('target'))}") +
                     _card("Exit Time", state.get("exit_time", "—")[11:19] if state.get("exit_time") else "—") +
                     "</div>", unsafe_allow_html=True)
         if state.get("status") == "CLOSED": st.success(f"Test exit: {state.get('exit_reason','—')} at ₹{_fmt(state.get('exit'))}. Temporary only; not added to journal/P&L/W-L.")
-        else: st.info("One aligned BUY test position is open in memory only. No second test trade will be taken today.")
+        else: st.info("One aligned BUY test position is open in memory only. No SL or Target. It will run until 2:45 PM IST.")
 
 
 def render_test_tab():
@@ -124,7 +114,7 @@ def render_test_tab():
         st.info("The test position is memory-only. It does not write signals.csv, trades.csv, journal data, win/loss, P&L, or S1–S5 state.")
         st.markdown("""
         <style>
-        .test-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:4px 0 14px}
+        .test-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:4px 0 14px}
         .test-card{background:#0b1726;border:1px solid #294b70;border-radius:9px;padding:9px 11px;min-height:58px;box-sizing:border-box}
         .test-label{font-size:11px;color:#9fb0c3;line-height:1.2;margin-bottom:6px;font-weight:600;text-transform:uppercase}
         .test-value{font-size:18px;color:#f2f6fa;line-height:1.2;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
