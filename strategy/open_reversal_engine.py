@@ -28,11 +28,11 @@ class OpenReversalEngine:
         if price is None:return state
         price=float(price);open_price=float(open_price);pdh=float(pdh);pdl=float(pdl);side=str(state.get("side","")).upper()
         if side=="BUY":
-            if price<open_price: state["pdh_breached"]=True
-            if state.get("pdh_breached") and price>=pdh: state["open_returned"]=True
+            if price < pdh and price < open_price: state["pdh_breached"]=True
+            if state.get("pdh_breached") and price >= open_price: state["open_returned"]=True
         elif side=="SELL":
-            if price>open_price: state["pdl_breached"]=True
-            if state.get("pdl_breached") and price<=pdl: state["open_returned"]=True
+            if price > pdl and price > open_price: state["pdl_breached"]=True
+            if state.get("pdl_breached") and price <= open_price: state["open_returned"]=True
         return state
     def build(self,*args,**kwargs): return None
     def initial_side(self,*args,**kwargs):
