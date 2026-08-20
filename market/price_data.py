@@ -1,22 +1,21 @@
 """Live market price data.
 
-Dhan is the single source for live NSE equity prices used by the paper-trading
-path. Yahoo remains only as a fallback for historical/1-minute candles when
-Dhan historical data is unavailable.
+Dhan is the authoritative source for live NSE equity prices used by the
+paper-trading path. Yahoo is retained only for historical/1-minute candles.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
-import threading
-import time
+import threading, time
+import math
 import pandas as pd
 import yfinance as yf
 
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
-_YAHOO_LOCK = threading.RLock(); _LAST_YAHOO_CALL = 0.0; _MIN_YAHOO_GAP = 0.20
+INDIA_TZ=ZoneInfo("Asia/Kolkata")
+_YAHOO_LOCK=threading.RLock(); _LAST_YAHOO_CALL=0.0; _MIN_YAHOO_GAP=0.20
 
 class PriceData:
-    _cache_lock = threading.RLock(); _multi_1m_cache={}; _multi_1m_cache_at={}; _multi_daily_cache={}; _multi_daily_cache_at={}; _index_cache={}; _index_cache_at={}; _index_change_cache={}; _index_change_cache_at={}; _live_price_cache={}; _live_price_cache_at={}
+    _cache_lock=threading.RLock(); _multi_1m_cache={}; _multi_1m_cache_at={}; _multi_daily_cache={}; _multi_daily_cache_at={}; _index_cache={}; _index_cache_at={}; _index_change_cache={}; _index_change_cache_at={}; _live_price_cache={}; _live_price_cache_at={}
     def __init__(self): self.valid_intervals={"1m","5m","1d"}; self.download_timeout=10; self.batch_size=50; self.max_workers=2; self.batch_retries=1
     def yahoo_symbol(self,symbol):
         symbol=str(symbol).strip().upper(); return symbol if symbol.startswith("^") or symbol.endswith(".NS") else f"{symbol}.NS"
@@ -26,12 +25,21 @@ class PriceData:
         try:return values.dt.tz_localize(INDIA_TZ) if getattr(values.dt,"tz",None) is None else values.dt.tz_convert(INDIA_TZ)
         except Exception:return values
     @staticmethod
+    def _valid_ohlc(data):
+        if data is None or data.empty:return False
+        required=["Open","High","Low","Close"]
+        if any(c not in data.columns for c in required):return False
+        x=data[required].apply(pd.to_numeric,errors="coerce")
+        if x.isna().any().any() or (x<=0).any().any():return False
+        return bool((x["High"]>=x[["Open","Low","Close"]].max(axis=1)).all() and (x["Low"]<=x[["Open","High","Close"]].min(axis=1)).all())
+    @staticmethod
     def _completed_1m(df):
         if df is None or df.empty or "Datetime" not in df.columns:return pd.DataFrame()
         data=df.copy();timestamps=pd.to_datetime(data["Datetime"],errors="coerce")
         try:
             timestamps=timestamps.dt.tz_localize(INDIA_TZ) if getattr(timestamps.dt,"tz",None) is None else timestamps.dt.tz_convert(INDIA_TZ)
-            valid=timestamps.notna()&(timestamps<datetime.now(INDIA_TZ).replace(second=0,microsecond=0));return data.loc[valid].copy().reset_index(drop=True)
+            valid=timestamps.notna()&(timestamps<datetime.now(INDIA_TZ).replace(second=0,microsecond=0)); data=data.loc[valid].copy().reset_index(drop=True)
+            return data if PriceData._valid_ohlc(data) else pd.DataFrame()
         except Exception:return pd.DataFrame()
     def _clean_data(self,df):
         if df is None or df.empty:return pd.DataFrame()
@@ -51,7 +59,8 @@ class PriceData:
         data["Datetime"]=self._to_ist(data["Datetime"])
         for c in ["Open","High","Low","Close","Volume"]:
             if c in data.columns:data[c]=pd.to_numeric(data[c],errors="coerce")
-        return data.dropna(subset=required)[required+(["Volume"] if "Volume" in data.columns else [])].sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
+        data=data.dropna(subset=required)[required+(["Volume"] if "Volume" in data.columns else [])].sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
+        return data if self._valid_ohlc(data) else pd.DataFrame()
     @staticmethod
     def _throttle():
         global _LAST_YAHOO_CALL
@@ -71,9 +80,9 @@ class PriceData:
     def _today_intraday(self,data):
         if data is None or data.empty or "Datetime" not in data.columns:return pd.DataFrame()
         result=data.copy();result["Datetime"]=self._to_ist(result["Datetime"]);result=result.dropna(subset=["Datetime"])
-        return result[result["Datetime"].dt.date==datetime.now(INDIA_TZ).date()].sort_values("Datetime").reset_index(drop=True) if not result.empty else result
+        result=result[result["Datetime"].dt.date==datetime.now(INDIA_TZ).date()].sort_values("Datetime").reset_index(drop=True)
+        return result if self._valid_ohlc(result) else pd.DataFrame()
     def _dhan_live_quote(self,symbol):
-        """Use the same Dhan quote path as the NIFTY 500 breadth engine."""
         try:
             from market.dhan_data import configured,map_nifty500,market_quote
             if not configured():return None
@@ -81,8 +90,9 @@ class PriceData:
             if len(mapping)!=1:return None
             q=market_quote(mapping,cache_seconds=0)
             if q.empty:return None
-            row=q.iloc[0]
-            return {"Close":float(row["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(row.get("TodayOpen",row["LTP"])),"High":float(row.get("TodayHigh",row["LTP"])),"Low":float(row.get("TodayLow",row["LTP"])),"PreviousClose":float(row["PreviousClose"]),"NetChange":float(row["NetChange"]),"price_source":"Dhan live quote"}
+            row=q.iloc[0]; ltp=float(row["LTP"]); op=float(row.get("TodayOpen",ltp)); hi=float(row.get("TodayHigh",ltp)); lo=float(row.get("TodayLow",ltp)); prev=float(row["PreviousClose"])
+            if not all(math.isfinite(v) and v>0 for v in (ltp,op,hi,lo,prev)) or hi<max(op,lo,ltp) or lo>min(op,hi,ltp):return None
+            return {"Close":ltp,"Datetime":datetime.now(INDIA_TZ),"Open":op,"High":hi,"Low":lo,"PreviousClose":prev,"NetChange":float(row["NetChange"]),"price_source":"Dhan live quote"}
         except Exception:return None
     def get_latest_available_1m(self,symbol):
         try:
@@ -98,6 +108,12 @@ class PriceData:
         if dhan:
             with self._cache_lock:self._live_price_cache[key]=dict(dhan);self._live_price_cache_at[key]=time.monotonic()
             return dhan
+        # Do not silently substitute Yahoo for a live paper-trade price when Dhan
+        # is configured. Historical Yahoo candles remain allowed for strategy setup.
+        try:
+            from market.dhan_data import configured
+            if configured(): return cached
+        except Exception: pass
         try:
             raw=self._download(tickers=self.yahoo_symbol(key),period="1d",interval="1m",auto_adjust=False,progress=False,threads=False,prepost=False,timeout=self.download_timeout);data=self._today_intraday(self._clean_data(raw))
             if data.empty:return cached
@@ -110,7 +126,8 @@ class PriceData:
         if latest:
             try:
                 ts=pd.Timestamp(latest["Datetime"]);ts=ts.tz_localize(INDIA_TZ) if ts.tzinfo is None else ts.tz_convert(INDIA_TZ)
-                if 0<=(datetime.now(INDIA_TZ)-ts.to_pydatetime()).total_seconds()<=180:return {"Close":float(latest["Close"]),"Datetime":ts.to_pydatetime(),"price_source":latest.get("price_source","Dhan live quote")}
+                age=(datetime.now(INDIA_TZ)-ts.to_pydatetime()).total_seconds()
+                if 0<=age<=180 and math.isfinite(float(latest["Close"])) and float(latest["Close"])>0:return {"Close":float(latest["Close"]),"Datetime":ts.to_pydatetime(),"price_source":latest.get("price_source","Dhan live quote")}
             except Exception:pass
         return None
     def get_5m(self,symbol):return self.get_candles(symbol,"5m","1d")
@@ -184,6 +201,7 @@ class PriceData:
             prior=data[data["Datetime"].dt.date<datetime.now(INDIA_TZ).date()];intraday=intraday if intraday is not None else self.get_index_1m(ticker,max_age_seconds=max_age_seconds)
             if prior.empty or intraday is None or intraday.empty:return cached
             value=(float(intraday.iloc[-1]["Close"])/float(prior.iloc[-1]["Close"])-1)*100
+            if not math.isfinite(value):return cached
             with self._cache_lock:self._index_change_cache[ticker]=float(value);self._index_change_cache_at[ticker]=time.monotonic()
             return float(value)
         except Exception:return cached
