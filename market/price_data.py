@@ -51,10 +51,9 @@ class PriceData:
     def _quote_frame(quote):
         if isinstance(quote,pd.DataFrame): return quote.copy()
         if isinstance(quote,dict):
-            data=quote.get("data",quote)
-            rows=[]
+            data=quote.get("data",quote);rows=[]
             if isinstance(data,dict):
-                for segment,items in data.items():
+                for items in data.values():
                     if isinstance(items,dict):
                         for security_id,item in items.items():
                             if isinstance(item,dict):
@@ -62,10 +61,24 @@ class PriceData:
                                 rows.append({"SecurityId":str(security_id),"LTP":item.get("last_price"),"TodayOpen":o.get("open"),"TodayHigh":o.get("high"),"TodayLow":o.get("low"),"PreviousClose":o.get("close"),"NetChange":item.get("net_change")})
             return pd.DataFrame(rows)
         return pd.DataFrame()
+    @staticmethod
+    def _normalize_live_quote(frame,security_id):
+        if not isinstance(frame,pd.DataFrame) or frame.empty:return None
+        x=frame.copy()
+        if "SecurityId" in x.columns:
+            x=x.loc[x["SecurityId"].astype(str).str.strip().eq(str(security_id).strip())]
+        if x.empty:return None
+        row=x.iloc[0]
+        try:
+            out={"Close":float(row["LTP"]),"Open":float(row["TodayOpen"]),"High":float(row["TodayHigh"]),"Low":float(row["TodayLow"]),"PreviousClose":float(row["PreviousClose"]),"NetChange":float(row["NetChange"])}
+        except (KeyError,TypeError,ValueError,OverflowError):return None
+        if any(pd.isna(v) or not float(v)>0 for k,v in out.items() if k!="NetChange"):return None
+        if pd.isna(out["NetChange"]) or not float(out["High"])>=max(out["Open"],out["Low"],out["Close"]):return None
+        if not float(out["Low"])<=min(out["Open"],out["High"],out["Close"]):return None
+        return out
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","").strip()
-        if not key:return None
-        if not self._dhan_configured():return None
+        if not key or not self._dhan_configured():return None
         force_fresh=max_age_seconds<=0
         if not force_fresh:
             now=time.monotonic()
@@ -75,22 +88,9 @@ class PriceData:
         mapping=self._map([key])
         if mapping is None or getattr(mapping,"empty",True) or len(mapping)!=1:return None
         security_id=str(mapping.iloc[0]["SecurityId"]).strip()
-        quote=self._dhan_market_quote(mapping)
-        frame=self._quote_frame(quote)
-        if frame.empty:return None
-        if "SecurityId" in frame.columns:
-            sid=frame["SecurityId"].astype(str).str.strip()
-            matched=frame.loc[sid.eq(security_id)]
-            if not matched.empty:frame=matched
-        if frame.empty:return None
-        row=frame.iloc[0]
-        try:
-            values={"Close":float(row["LTP"]),"Open":float(row["TodayOpen"]),"High":float(row["TodayHigh"]),"Low":float(row["TodayLow"]),"PreviousClose":float(row["PreviousClose"]),"NetChange":float(row["NetChange"])}
-        except (KeyError,TypeError,ValueError,OverflowError):return None
-        if any(pd.isna(v) for v in values.values()):return None
-        if any(values[k]<=0 for k in ("Close","Open","High","Low","PreviousClose")):return None
-        if values["High"]<max(values["Open"],values["Low"],values["Close"]):return None
-        if values["Low"]>min(values["Open"],values["High"],values["Close"]):return None
+        frame=self._quote_frame(self._dhan_market_quote(mapping))
+        values=self._normalize_live_quote(frame,security_id)
+        if values is None:return None
         out={**values,"Datetime":datetime.now(INDIA_TZ),"price_source":"DHAN_OHLC"}
         with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
         return out
