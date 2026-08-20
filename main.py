@@ -2,10 +2,12 @@
 from engine.master_engine import MasterEngine
 from engine.dhan_patch import install as install_dhan_patch
 from engine.stability_patch import install as install_stability_patch, install_dhan_retry
+from engine.live_data_alignment_patch import install as install_live_data_alignment_patch
 
 install_dhan_retry()
 install_dhan_patch(MasterEngine)
 install_stability_patch(MasterEngine)
+install_live_data_alignment_patch(MasterEngine)
 TradingBot = MasterEngine
 __all__ = ["TradingBot", "MasterEngine"]
 
