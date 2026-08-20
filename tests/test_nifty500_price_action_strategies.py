@@ -12,7 +12,7 @@ def test_risk_band_and_capital():
 
 def test_s1_requires_live_open_reclaim():
     buy=evaluate_s1("ABC","BUY",110,100,90,98,115,111,**G_BUY);assert buy and buy.stop_loss==100
-    assert evaluate_s1("ABC","BUY",110,100,90,98,110,**G_BUY) is None
+    assert evaluate_s1("ABC","BUY",110,100,90,98,110,110,**G_BUY) is None
     sell=evaluate_s1("XYZ","SELL",90,100,95,85,102,89,**G_SELL);assert sell and sell.stop_loss==95
     assert evaluate_s1("XYZ","SELL",90,100,95,85,102,90,**G_SELL) is None
 
