@@ -9,4 +9,3 @@ feedparser>=6.0,<7
 watchdog>=4,<7
 openpyxl>=3.1,<4
 protobuf>=3.20,<7
-yfinance>=0.2.54,<1
