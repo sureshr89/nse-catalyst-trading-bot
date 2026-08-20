@@ -39,21 +39,18 @@ def _update_test_trade(rows,now):
     row=rows[rows["Symbol"].astype(str)==str(state.get("symbol"))]
     if row.empty:return state
     ltp=float(row.iloc[0]["LTP"]);state["last_ltp"]=ltp;state["last_update_time"]=now.isoformat()
-    side=state.get("side","BUY")
-    state["pnl_live"]=ltp-state["entry"] if side=="BUY" else state["entry"]-ltp
-    if now.time()>=FORCE_EXIT:
-        state.update({"status":"CLOSED","exit_time":now.isoformat(),"exit":ltp,"exit_reason":"2:45 PM TIME EXIT","pnl":state["pnl_live"]})
+    side=state.get("side","BUY");state["pnl_live"]=ltp-state["entry"] if side=="BUY" else state["entry"]-ltp
+    if now.time()>=FORCE_EXIT:state.update({"status":"CLOSED","exit_time":now.isoformat(),"exit":ltp,"exit_reason":"2:45 PM TIME EXIT","pnl":state["pnl_live"]})
     return state
 
-def _card(label,value,wide=False):
-    cls="test-card wide" if wide else "test-card"
-    return f'<div class="{cls}"><div class="test-label">{label}</div><div class="test-value">{value}</div></div>'
+def _card(label,value):return f'<div class="test-card"><div class="test-label">{label}</div><div class="test-value">{value}</div></div>'
 
 def _render_test_trade(rows,snap,idx):
     st.markdown("#### 🧪 Test trade")
     st.caption("One isolated paper test trade • first aligned BUY or SELL after 09:15 IST • no SL/Target • live monitoring until 2:45 PM IST")
     now=_now_ist();state=_test_state();today=now.date().isoformat()
-    if state.get("date")!=today:state={"date":today,"status":"WAITING"};st.session_state["nse_test_trade"]=state
+    # Entry time is immutable for the day: once OPEN, never reset it on refresh.
+    if state.get("date")!=today and state.get("status")!="OPEN":state={"date":today,"status":"WAITING"};st.session_state["nse_test_trade"]=state
     complete=bool(snap.get("complete")) and len(rows)==500;sector_ok=bool(snap.get("sector_complete")) and int(snap.get("sector_priced",0) or 0)==500;alignment=_alignment(snap,idx) if complete and sector_ok else None
     if state.get("status")=="WAITING":
         if ENTRY_START<=now.time()<FORCE_EXIT:
