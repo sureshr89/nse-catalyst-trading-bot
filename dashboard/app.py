@@ -10,7 +10,20 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import main as _engine_main
-from dashboard.trade_path_diagnostics import capture as capture_trade_path, render as render_trade_path
+
+# Keep diagnostics optional so a diagnostic-module/import problem can NEVER stop
+# the master dashboard from loading.
+try:
+    from dashboard.trade_path_diagnostics import capture as capture_trade_path, render as render_trade_path
+    _DIAGNOSTICS_IMPORT_ERROR = None
+except Exception as exc:
+    _DIAGNOSTICS_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+    def capture_trade_path(*args, **kwargs):
+        return None
+
+    def render_trade_path():
+        st.info("Trade-path diagnostics are temporarily unavailable; the master dashboard is still running.")
 
 
 @st.cache_resource(show_spinner=False)
@@ -49,9 +62,12 @@ render_trade_path()
 # execute, store, journal, or score any trade and does not affect S1-S5.
 st.divider()
 st.markdown("### 🧪 TEST — Live Data / Entry Check")
-st.caption("READ-ONLY TEST • no signals • no trades • no journal • no win/loss • S1–S5 unchanged")
-from dashboard.test_tab import render_test_tab
-render_test_tab()
+st.caption("READ-ONLY TEST • one isolated test trade • no journal • no win/loss • S1–S5 unchanged")
+try:
+    from dashboard.test_tab import render_test_tab
+    render_test_tab()
+except Exception as exc:
+    st.error(f"TEST section unavailable: {type(exc).__name__}: {exc}")
 
 st.markdown("""
 <style>
