@@ -48,24 +48,27 @@ class PriceData:
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","")
         force_fresh=max_age_seconds<=0
-        # Always consult the live Dhan configuration before cache or quote access.
-        # Keeping this call on the module object makes the Dhan-only dependency
-        # explicit and gives tests a stable configuration seam.
         if not dhan_data.configured():return None
         if not force_fresh:
             now=time.monotonic()
             with self._cache_lock:
-                cached=self._live_price_cache.get(key)
-                age=now-self._live_price_cache_at.get(key,0)
+                cached=self._live_price_cache.get(key);age=now-self._live_price_cache_at.get(key,0)
                 if cached is not None and age<=max_age_seconds:return dict(cached)
         m=self._map([key])
         if m is None or len(m)!=1:return None
         q=dhan_data.market_quote(m,cache_seconds=1)
         if q is None or q.empty:return None
-        if "Symbol" in q.columns:q=q[q["Symbol"].astype(str).str.upper().eq(key)]
+        q=q.copy()
+        if "Symbol" in q.columns:
+            symbols=q["Symbol"].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
+            matched=q.loc[symbols.eq(key)]
+            if not matched.empty:q=matched
         if q.empty:return None
         r=q.iloc[0]
-        try:out={"Close":float(r["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(r["TodayOpen"]),"High":float(r["TodayHigh"]),"Low":float(r["TodayLow"]),"PreviousClose":float(r["PreviousClose"]),"NetChange":float(r["NetChange"]),"price_source":"DHAN_OHLC"}
+        try:
+            ltp=float(r["LTP"]);op=float(r["TodayOpen"]);hi=float(r["TodayHigh"]);lo=float(r["TodayLow"]);prev=float(r["PreviousClose"]);net=float(r["NetChange"])
+            if not all(pd.notna(v) for v in (ltp,op,hi,lo,prev,net)) or min(ltp,op,hi,lo,prev)<=0:return None
+            out={"Close":ltp,"Datetime":datetime.now(INDIA_TZ),"Open":op,"High":hi,"Low":lo,"PreviousClose":prev,"NetChange":net,"price_source":"DHAN_OHLC"}
         except (KeyError,TypeError,ValueError,OverflowError):return None
         with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
         return out
