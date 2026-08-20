@@ -7,6 +7,9 @@ if hasattr(time, "tzset"):
 
 STOCK_UNIVERSE = "NIFTY_500"
 MAX_STOCKS = 500
+# Live constituent-data tolerance: the universe remains exactly 500, but temporary Dhan failures may exclude individual constituents when >=95% are verified.
+MIN_DATA_COVERAGE_PCT = 95.0
+MIN_DATA_COVERAGE_COUNT = int(MAX_STOCKS * MIN_DATA_COVERAGE_PCT / 100)
 MARKET_OPEN = "09:15"
 OBSERVATION_START = "09:15"
 PREMARKET_PREP_TIME = "09:20"
