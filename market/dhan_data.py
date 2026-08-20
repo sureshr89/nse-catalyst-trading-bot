@@ -101,33 +101,26 @@ def market_quote(mapping,cache_seconds=10):
     return result
 
 def index_quote(index_name="NIFTY 500"):
+    """Return an index snapshot using Dhan quote net_change for a stable day-over-day percentage."""
     m=load_instrument_master()
     if m.empty or not configured():return None
     nc=_col(m,("SEM_CUSTOM_SYMBOL","SM_CUSTOM_SYMBOL","DISPLAY_NAME","SYMBOL_NAME","SEM_TRADING_SYMBOL"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"))
     if not nc or not ic:return None
-    x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();names={index_name.upper(),index_name.upper().replace(" ","-")};mask=x["_name"].isin(names)
-    if not mask.any():mask=x["_name"].str.contains(index_name.upper(),regex=False,na=False)
+    x=m.copy();x["_name"]=x[nc].astype(str).str.strip().str.upper();target=index_name.upper().strip();names={target,target.replace(" ","-")};mask=x["_name"].isin(names)
     if seg:mask&=x[seg].astype(str).str.upper().isin({"I","INDEX"})
-    if ex:mask&=x[ex].astype(str).str.upper().isin({"NSE","BSE"})
+    if ex:mask&=x[ex].astype(str).str.upper().eq("NSE")
     match=x.loc[mask]
     if match.empty:
-        x2=m.copy();x2["_name2"]=x2[nc].astype(str).str.upper();mask2=x2["_name2"].str.contains(index_name.upper(),regex=False,na=False)
-        if seg:mask2&=x2[seg].astype(str).str.upper().isin({"I","INDEX"})
-        match=x2.loc[mask2]
-    if match.empty:return None
-    sid=str(match.iloc[0][ic]).strip();response=_marketfeed("IDX_I",[sid]);item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid)
-    if not isinstance(item,dict):
-        response=_post("/charts/historical",{"securityId":sid,"exchangeSegment":"IDX_I","instrument":"INDEX","expiryCode":0,"oi":False,"fromDate":(datetime.now()-timedelta(days=10)).date().isoformat(),"toDate":(datetime.now()+timedelta(days=1)).date().isoformat()},timeout=20)
-        if response and response.get("close"):
-            try:
-                closes=pd.to_numeric(pd.Series(response.get("close",[])),errors="coerce").dropna()
-                if len(closes):
-                    last=float(closes.iloc[-1]);prev=float(closes.iloc[-2]) if len(closes)>1 else last;return {"LTP":last,"Open":0.0,"High":0.0,"Low":0.0,"Close":last,"PreviousClose":prev,"NetChange":last-prev,"SecurityId":sid}
-            except Exception:pass
         return None
+    sid=str(match.iloc[0][ic]).strip()
+    response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]})
+    item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid)
+    if not isinstance(item,dict):return None
     o=item.get("ohlc") or {}
     try:
-        ltp=float(item.get("last_price") or 0);c=float(o.get("close") or 0);return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":c,"PreviousClose":c,"NetChange":ltp-c,"SecurityId":sid}
+        ltp=float(item.get("last_price") or 0);net_change=float(item.get("net_change"))
+        prev=ltp-net_change
+        return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":float(o.get("close") or 0),"PreviousClose":prev,"NetChange":net_change,"SecurityId":sid}
     except (TypeError,ValueError):return None
 
 def daily_history(security_id,from_date,to_date):
