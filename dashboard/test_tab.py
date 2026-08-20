@@ -86,8 +86,7 @@ def _render_test_trade(rows, snap, idx):
         else: st.info("Today's test-entry window has ended. No late test entry will be created.")
     if state.get("status") == "OPEN": state = _update_test_trade(rows, now)
     if state.get("status") in {"OPEN", "CLOSED"}:
-        current = state.get("last_ltp", state.get("entry")); price = current if state.get("status") == "OPEN" else state.get("exit")
-        pnl = state.get("pnl") if state.get("status") == "CLOSED" else price - state.get("entry")
+        current = state.get("last_ltp", state.get("entry")); price = current if state.get("status") == "OPEN" else state.get("exit"); pnl = state.get("pnl") if state.get("status") == "CLOSED" else price - state.get("entry")
         st.markdown("<div class='test-grid'>" +
                     _card("Stock / Side", f"{state.get('symbol','—')} / BUY") +
                     _card("Entry", f"₹{_fmt(state.get('entry'))}") +
@@ -110,8 +109,8 @@ def render_test_tab():
         rows = q.copy() if isinstance(q, pd.DataFrame) else pd.DataFrame()
         idx = index_quote("NIFTY 500")
         _render_test_trade(rows, snap, idx)
-        st.markdown("#### TEST isolation")
-        st.info("The test position is memory-only. It does not write signals.csv, trades.csv, journal data, win/loss, P&L, or S1–S5 state.")
+        st.markdown("#### 💡 Trading tip")
+        st.info("One disciplined trade is better than many emotional trades. Use the TEST position only to verify live-data alignment and the entry/exit pipeline; it does not represent a validated S1–S5 signal.")
         st.markdown("""
         <style>
         .test-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:4px 0 14px}
