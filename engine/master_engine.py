@@ -29,7 +29,7 @@ class MasterEngine:
     @staticmethod
     def now(): return datetime.now(IST)
     def _empty_diagnostics(self):
-        return {"timestamp":None,"strategy":"S1-S5","strategy_version":"2026.08.20.v4","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{},"market_data_source":"UNKNOWN"}
+        return {"timestamp":None,"strategy":"S1-S5","strategy_version":"2026.08.20.v5","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{},"strategy_rejections":{s:{} for s in STRATEGY_DEFINITIONS},"market_data_source":"UNKNOWN"}
     def _refresh_reference_data(self,force=False):
         today=self.now().date()
         if not force and self._session_date==today and not self.references.empty:return
@@ -76,7 +76,6 @@ class MasterEngine:
         symbols=self.references["Symbol"].drop_duplicates().tolist()
         try: intraday=self.price_data.get_multi_1m(symbols)
         except Exception: intraday={}
-        available=sum(1 for s in symbols if s in intraday and not intraday[s].empty)
         rows=[]
         for _,ref in self.references.iterrows():
             symbol=str(ref["Symbol"]).upper(); d=intraday.get(symbol)
@@ -97,8 +96,6 @@ class MasterEngine:
         sector_change=sector.get("alignment_pct") if sector.get("available") else None
         buy=bool(complete and sector.get("available") and nifty_change is not None and nifty_change>0 and sector_change is not None and sector_change>0 and ad_ratio>1)
         sell=bool(complete and sector.get("available") and nifty_change is not None and nifty_change<0 and sector_change is not None and sector_change<0 and ad_ratio<1)
-        # CRITICAL: use Dhan's current LTP/OHLC for live entry/SL/TP calculations when configured.
-        # Completed 1-minute candles remain the confirmation layer; Dhan is the authoritative live price.
         dhan_quotes={}
         try:
             from market.dhan_data import configured, map_nifty500, market_quote
@@ -107,34 +104,49 @@ class MasterEngine:
                 if not mapping.empty:
                     q=market_quote(mapping,cache_seconds=10)
                     if not q.empty:
-                        dhan_quotes={str(r["Symbol"]).upper():r for r in q.to_dict("records")}
-                        self.diagnostics["market_data_source"]="DHAN_OHLC_LTP"
+                        dhan_quotes={str(r["Symbol"]).upper():r for r in q.to_dict("records")}; self.diagnostics["market_data_source"]="DHAN_OHLC_LTP"
                     else:self.diagnostics["market_data_source"]="YAHOO_1M_DHAN_UNAVAILABLE"
             else:self.diagnostics["market_data_source"]="YAHOO_1M"
         except Exception:self.diagnostics["market_data_source"]="YAHOO_1M_DHAN_ERROR"
         self.last_snapshot={"intraday":intraday,"prices":prices,"sector":sector,"nifty_change":nifty_change,"ad_ratio":ad_ratio,"ad_complete":complete,"buy_alignment":buy,"sell_alignment":sell,"dhan_quotes":dhan_quotes}
-        self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":len(symbols),"reference_data_count":len(self.references),"market_data_coverage":f"{available}/500","nifty500_change_pct":nifty_change,"sector_change_pct":sector_change,"sector_available":bool(sector.get("available")),"sector_mapping":f"{sector.get('mapped',0)}/500","sector_priced":f"{sector.get('priced',0)}/500","ad_ratio":ad_ratio,"ad_advances":advances,"ad_declines":declines,"ad_coverage":f"{len(prices)}/500","buy_alignment":buy,"sell_alignment":sell})
+        self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":len(symbols),"reference_data_count":len(self.references),"market_data_coverage":f"{len(prices)}/500","nifty500_change_pct":nifty_change,"sector_change_pct":sector_change,"sector_available":bool(sector.get("available")),"sector_mapping":f"{sector.get('mapped',0)}/500","sector_priced":f"{sector.get('priced',0)}/500","ad_ratio":ad_ratio,"ad_advances":advances,"ad_declines":declines,"ad_coverage":f"{len(prices)}/500","buy_alignment":buy,"sell_alignment":sell})
         return self.last_snapshot
     @staticmethod
     def _prior_range(d):
         if d is None or len(d)<2:return None,None
         previous=d.iloc[:-1]; return float(previous["High"].max()),float(previous["Low"].min())
+    @staticmethod
+    def _record_rejection(diagnostics,strategy,reason):
+        bucket=diagnostics.setdefault("strategy_rejections",{}).setdefault(strategy,{})
+        bucket[reason]=int(bucket.get(reason,0))+1
     def _evaluate_stock(self,symbol,ref,d,snap):
         if d is None or d.empty:return []
-        symbol=str(symbol).upper(); prev=d.iloc[-1]; dhan=snap.get("dhan_quotes",{}).get(symbol,{})
+        symbol=str(symbol).upper(); d=self.price_data.today_only(d)
+        if d.empty:return []
+        prev=d.iloc[-1]; dhan=snap.get("dhan_quotes",{}).get(symbol,{})
         today_open=float(dhan.get("TodayOpen") or d.iloc[0]["Open"]); today_low=float(dhan.get("TodayLow") or d["Low"].min()); today_high=float(dhan.get("TodayHigh") or d["High"].max()); ltp=float(dhan.get("LTP") or prev["Close"])
         pdh=float(ref["PDH"]); pdl=float(ref["PDL"]); pdc=float(ref["PreviousDayClose"]); prior_high,prior_low=self._prior_range(d); out=[]
+        pre=d.iloc[:-1] if len(d)>=2 else d.iloc[0:0]
+        # Direction-specific sweeps: BUY uses a prior PDL sweep; SELL uses a prior PDH sweep.
+        pdl_swept=bool((pre["Low"]<pdl).any()) if not pre.empty else False
+        pdh_swept=bool((pre["High"]>pdh).any()) if not pre.empty else False
+        # Breakout is directional and must precede the current confirmation candle.
+        buy_breakout=bool((pre["High"]>pdh).any()) if not pre.empty else False
+        sell_breakout=bool((pre["Low"]<pdl).any()) if not pre.empty else False
+        pullback_low=float(pre["Low"].min()) if not pre.empty else today_low
+        pullback_high=float(pre["High"].max()) if not pre.empty else today_high
         for side in ("BUY","SELL"):
-            if side=="BUY" and (not snap["buy_alignment"] or float(prev["Close"])<=float(prev["Open"])):continue
-            if side=="SELL" and (not snap["sell_alignment"] or float(prev["Close"])>=float(prev["Open"])):continue
-            common={"nifty500_change_pct":snap["nifty_change"],"sector_alignment_pct":snap["sector"].get("alignment_pct"),"ad_ratio":snap["ad_ratio"],"ad_coverage":500,"previous_candle_open":float(prev["Open"]),"previous_candle_close":float(prev["Close"]),"symbol":symbol,"side":side,"ltp":ltp,"today_open":today_open,"pdh":pdh,"pdl":pdl,"today_low":today_low,"today_high":today_high,"prior_intraday_high":prior_high,"prior_intraday_low":prior_low,"pullback_low":today_low,"pullback_high":today_high,"breakout_seen":False,"pdh_swept":False,"pdl_swept":False}
-            if len(d)>=2:
-                pre=d.iloc[:-1]; common["pdh_swept"]=bool((pre["Low"]<pdh).any() or (pre["High"]>pdh).any()); common["pdl_swept"]=bool((pre["Low"]<pdl).any() or (pre["High"]>pdl).any()); common["breakout_seen"]=bool((pre["High"]>pdh).any() if side=="BUY" else (pre["Low"]<pdl).any()); common["pullback_low"]=float(pre["Low"].min()); common["pullback_high"]=float(pre["High"].max())
+            if side=="BUY" and not snap["buy_alignment"]: continue
+            if side=="SELL" and not snap["sell_alignment"]: continue
+            if side=="BUY" and ltp<=0: self._record_rejection(self.diagnostics,"S1","INVALID_LTP"); continue
+            if side=="SELL" and ltp<=0: self._record_rejection(self.diagnostics,"S1","INVALID_LTP"); continue
+            common={"nifty500_change_pct":snap["nifty_change"],"sector_alignment_pct":snap["sector"].get("alignment_pct"),"ad_ratio":snap["ad_ratio"],"ad_coverage":500,"previous_candle_open":float(prev["Open"]),"previous_candle_close":float(prev["Close"]),"symbol":symbol,"side":side,"ltp":ltp,"today_open":today_open,"pdh":pdh,"pdl":pdl,"today_low":today_low,"today_high":today_high,"prior_intraday_high":prior_high,"prior_intraday_low":prior_low,"pullback_low":pullback_low,"pullback_high":pullback_high,"breakout_seen":buy_breakout if side=="BUY" else sell_breakout,"pdh_swept":pdh_swept,"pdl_swept":pdl_swept,"previous_day_close":pdc}
             for strategy in STRATEGY_DEFINITIONS:
-                try:signal=evaluate(strategy,**common)
-                except (TypeError,ValueError,KeyError):signal=None
+                try: signal=evaluate(strategy,**common)
+                except (TypeError,ValueError,KeyError): signal=None
                 if signal:
                     row=signal.to_dict(); row.update({"strategy_name":STRATEGY_DEFINITIONS[strategy]["name"],"today_open":today_open,"today_low":today_low,"today_high":today_high,"pdh":pdh,"pdl":pdl,"previous_day_close":pdc,"entry_time":self.now().isoformat(timespec="seconds"),"signal_status":"ELIGIBLE","price_source":"Dhan" if dhan else "1m close"}); out.append(row)
+                else:self._record_rejection(self.diagnostics,strategy,"SETUP_NOT_CONFIRMED")
         return out
     def _write_signal_ledger(self,signals):
         if not signals:return
