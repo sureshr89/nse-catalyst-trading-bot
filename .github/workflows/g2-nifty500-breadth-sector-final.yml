@@ -1,0 +1,38 @@
+name: G2 NIFTY 500 Breadth Sector FINAL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Verify G2 modules
+        env:
+          PYTHONPATH: .
+        run: |
+          git rev-parse HEAD
+          python -c "import market.nifty500_breadth, data.sector_alignment; print('G2 modules OK')"
+      - name: Run G2 NIFTY 500 breadth and sector tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_nifty500_breadth.py \
+            tests/test_sector_alignment.py
