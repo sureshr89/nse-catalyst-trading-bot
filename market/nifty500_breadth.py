@@ -6,7 +6,7 @@ import pandas as pd
 from data.stock_universe import StockUniverse
 from data.sector_alignment import load_sector_map,calculate_sector_alignment
 from market.dhan_data import configured as dhan_configured,dhan_status,map_nifty500,market_quote,index_quote
-INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30);REQUIRED=500
+INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30);REQUIRED=500;QUOTE_RETRIES=4;QUOTE_RETRY_DELAY=0.75
 class Nifty500Breadth:
  def __init__(self):self.universe_engine=StockUniverse();self._lock=threading.RLock();self._cached_at=0.0;self._cached=None;self._mapping=pd.DataFrame();self._mapping_at=0.0;self._universe=pd.DataFrame()
  def _get_universe(self):
@@ -43,10 +43,16 @@ class Nifty500Breadth:
   mapping_symbols=set(mapping.Symbol.astype(str).str.upper()) if not mapping.empty else set()
   if len(mapping)!=REQUIRED or len(mapping_symbols)!=REQUIRED or mapping.SecurityId.astype(str).nunique()!=REQUIRED:return self._fail(f"DHAN_SECURITY_MAPPING_INVALID_{len(mapping)}/500",mode,now,len(mapping),stage="MAPPING")
   if mapping_symbols!=set(symbols):return self._fail("DHAN_SECURITY_MAPPING_SYMBOL_MISMATCH",mode,now,len(mapping),stage="MAPPING")
-  quotes=market_quote(mapping,cache_seconds=10)
+  quotes=pd.DataFrame();last_quote_error=""
+  for attempt in range(1,QUOTE_RETRIES+1):
+   quotes=market_quote(mapping,cache_seconds=0)
+   quote_symbols=set(quotes.Symbol.astype(str).str.upper()) if not quotes.empty else set()
+   if len(quotes)==REQUIRED and len(quote_symbols)==REQUIRED and quote_symbols==set(symbols):break
+   status=dhan_status();last_quote_error=status.get("message") or f"Dhan returned {len(quotes)}/500 verified quotes"
+   if attempt<QUOTE_RETRIES:time.sleep(QUOTE_RETRY_DELAY)
   quote_symbols=set(quotes.Symbol.astype(str).str.upper()) if not quotes.empty else set()
-  if quotes.empty:return self._fail("DHAN_MARKET_DATA_0/500",mode,now,0,stage="QUOTE")
-  if len(quotes)!=REQUIRED or len(quote_symbols)!=REQUIRED or quote_symbols!=set(symbols):return self._fail(f"DHAN_MARKET_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="QUOTE")
+  if quotes.empty:return self._fail(f"DHAN_MARKET_DATA_RETRY_FAILED_0/500 ({last_quote_error})",mode,now,0,stage="QUOTE")
+  if len(quotes)!=REQUIRED or len(quote_symbols)!=REQUIRED or quote_symbols!=set(symbols):return self._fail(f"DHAN_MARKET_DATA_RETRY_FAILED_{len(quotes)}/500 ({last_quote_error})",mode,now,len(quotes),stage="QUOTE")
   for c in ["LTP","PreviousClose","TodayClose"]:quotes[c]=pd.to_numeric(quotes[c],errors="coerce")
   quotes["SessionClose"]=quotes["TodayClose"] if mode=="closed" else quotes["LTP"];bad=quotes.SessionClose.isna()|(quotes.SessionClose<=0)
   if mode=="closed":quotes.loc[bad,"SessionClose"]=quotes.loc[bad,"LTP"]
