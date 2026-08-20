@@ -32,7 +32,7 @@ jobs:
           PYTHONPATH: .
         run: |
           git rev-parse HEAD
-          python -c "from engine.master_engine import MasterEngine; from papertrade.paper_trade_engine import PaperTradeEngine; from strategy.nifty500_price_action_strategies import evaluate; print('G7 production imports OK')"
+          python -c "from engine.master_engine import MasterEngine; from papertrade.paper_trade_engine import PaperTradeEngine; from strategy.nifty500_price_action_strategies import evaluate; from engine.cycle_runner import run_cycle; print('G7 production imports OK')"
 
       - name: Run cross-group regression contracts
         env:
@@ -44,4 +44,5 @@ jobs:
             tests/test_clean_s1_s5_regression.py \
             tests/test_master_engine.py \
             tests/test_master_clean_diagnostics.py \
-            tests/test_g6_paper_execution_safety_final.py
+            tests/test_g6_paper_execution_safety_final.py \
+            tests/test_final_system_health_check.py
