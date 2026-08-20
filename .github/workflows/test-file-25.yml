@@ -1,0 +1,19 @@
+name: File 25 Test - Clean End to End Contract
+on:
+  workflow_dispatch:
+jobs:
+  test-file-25:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - run: python -m py_compile strategy/nifty500_price_action_strategies.py engine/master_engine.py papertrade/paper_trade_engine.py
+      - run: python -m pytest -q tests/test_clean_end_to_end_contract.py
+        env:
+          PYTHONPATH: .
