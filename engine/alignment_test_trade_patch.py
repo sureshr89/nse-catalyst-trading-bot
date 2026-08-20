@@ -42,40 +42,34 @@ def install(MasterEngine):
             dhan = (snap.get("dhan_quotes") or {}).get(symbol, {})
             entry = float(dhan.get("LTP") or prev["Close"])
             today_open = float(dhan.get("TodayOpen") or d.iloc[0]["Open"])
-            today_low = float(dhan.get("TodayLow") or d["Low"].min())
-            today_high = float(dhan.get("TodayHigh") or d["High"].max())
             if entry <= 0 or today_open <= 0:
                 continue
 
             if snap.get("buy_alignment") and entry > today_open:
                 side = "BUY"
-                stop = today_low
-                if stop >= entry or stop <= 0:
-                    continue
                 reason = "TEST: all master alignment PASS + LTP above today's open"
-                target = entry + RR * (entry - stop)
             elif snap.get("sell_alignment") and entry < today_open:
                 side = "SELL"
-                stop = today_high
-                if stop <= entry or stop <= 0:
-                    continue
                 reason = "TEST: all master alignment PASS + LTP below today's open"
-                target = entry - RR * (stop - entry)
             else:
                 continue
 
-            risk_per_share = abs(entry - stop)
-            if risk_per_share <= 0:
+            # Simple, deterministic paper-test risk: allocate exactly ₹1,400
+            # risk using the ₹2.5L test capital cap, then target 1.25R.
+            qty = int(CAPITAL // entry)
+            if qty < 1:
                 continue
-            max_qty_cap = int(CAPITAL // entry)
-            min_qty = max(1, int((MIN_RISK + risk_per_share - 1e-12) // risk_per_share))
-            max_qty = min(max_qty_cap, int(MAX_RISK // risk_per_share))
-            if max_qty < min_qty:
+            risk_per_share = MIN_RISK / qty
+            risk = risk_per_share * qty
+            if side == "BUY":
+                stop = entry - risk_per_share
+                target = entry + RR * risk_per_share
+            else:
+                stop = entry + risk_per_share
+                target = entry - RR * risk_per_share
+            if stop <= 0 or target <= 0:
                 continue
-            qty = max_qty
-            risk = qty * risk_per_share
-            if not (MIN_RISK <= risk <= MAX_RISK):
-                continue
+
             now = datetime.now(IST).isoformat(timespec="seconds")
             return {
                 "strategy": TEST_STRATEGY,
@@ -109,8 +103,6 @@ def install(MasterEngine):
 
     def scan_with_test(self):
         result = original_scan(self)
-        # Only test when normal S1-S5 generated no signal. This avoids changing
-        # normal strategy selection when a real setup exists.
         if result or self.daily_counts.get(TEST_STRATEGY, 0) >= 1:
             return result
         test_signal = make_test_signal(self, self.last_snapshot or {})
@@ -118,7 +110,7 @@ def install(MasterEngine):
             result = [test_signal]
             self.last_signals = result
             self.diagnostics["final_signals"] = 1
-            self.diagnostics["signals_by_strategy"][TEST_STRATEGY] = 1
+            self.diagnostics.setdefault("signals_by_strategy", {})[TEST_STRATEGY] = 1
             self.diagnostics["test_trade"] = "ELIGIBLE"
         else:
             self.diagnostics["test_trade"] = "NOT_ELIGIBLE"
