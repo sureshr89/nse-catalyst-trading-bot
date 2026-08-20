@@ -88,7 +88,7 @@ class PriceData:
         from market.dhan_data import map_nifty500,market_quote
         m=map_nifty500([key]);q=market_quote(m,cache_seconds=1) if len(m)==1 else pd.DataFrame()
         if q.empty:return None
-        r=q.iloc[0];out={"Close":float(r["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(r["TodayOpen"]),"High":float(r["TodayHigh"]),"Low":float(r["TodayLow"]),"PreviousClose":float(r["PreviousClose"]),"NetChange":float(r["NetChange"]),"price_source":"DHAN_OHLC"}
+        r=q.iloc[0];out={"Close":float(r["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(r["TodayOpen"]),"High":float(r["TodayHigh"]),"Low":float(r["TodayLow"]),"PreviousClose":float(r["PreviousClose"]),"NetChange":float(r["NetChange"]),"price_source":"Dhan"}
         with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
         return out
     def get_latest_market_price(self,symbol):return self.get_latest_live_price(symbol,max_age_seconds=8)
