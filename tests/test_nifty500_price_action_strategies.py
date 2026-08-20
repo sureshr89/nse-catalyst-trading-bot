@@ -16,8 +16,10 @@ def test_s2_buy_and_sell():
     buy=evaluate_s2("ABC","BUY",100,90,99,120,101,True,**G_BUY); sell=evaluate_s2("XYZ","SELL",100,90,80,91,89,True,**G_SELL)
     assert buy and buy.stop_loss==99; assert sell and sell.stop_loss==91
 def test_s3_buy_and_sell():
-    buy=evaluate_s3("ABC","BUY",110,120,100,98,115,110,True,False,**G_BUY); sell=evaluate_s3("XYZ","SELL",90,100,80,85,90,102,False,True,**G_SELL)
-    assert buy and buy.stop_loss==98; assert sell and sell.stop_loss==102
+    buy=evaluate_s3("ABC","BUY",110,120,100,98,115,110,True,False,**G_BUY)
+    # SELL contract: open below PDH -> sweep above PDH -> reject below Open.
+    sell=evaluate_s3("XYZ","SELL",90,100,80,85,90,89,False,True,**G_SELL)
+    assert buy and buy.stop_loss==98; assert sell and sell.stop_loss==85
 def test_s4_buy_and_sell():
     buy=evaluate_s4("ABC","BUY",120,98,115,105,116,**G_BUY); sell=evaluate_s4("XYZ","SELL",102,80,95,85,84,**G_SELL)
     assert buy and buy.stop_loss==105; assert sell and sell.stop_loss==95
