@@ -119,19 +119,25 @@ def previous_day_references(mapping,force=False):
     if mapping is None or mapping.empty or not configured():return pd.DataFrame()
     today=datetime.now().date();fd=(today-timedelta(days=10)).isoformat();td=(today+timedelta(days=1)).isoformat()
     def one(item):
-        try:
-            h=daily_history(str(item["SecurityId"]),fd,td)
-            if h.empty:return None
-            prior=h[h["Datetime"].dt.date<today]
-            if prior.empty:return None
-            r=prior.iloc[-1]
-            return {"Symbol":str(item["Symbol"]),"SecurityId":str(item["SecurityId"]),"PDH":float(r["High"]),"PDL":float(r["Low"]),"PreviousDayClose":float(r["Close"]),"PreviousDayOpen":float(r["Open"]),"PreviousDayVolume":float(r.get("Volume",0) or 0)}
-        except Exception:return None
+        for attempt in range(3):
+            try:
+                h=daily_history(str(item["SecurityId"]),fd,td)
+                if h.empty:
+                    if attempt<2: time.sleep(0.25*(attempt+1)); continue
+                    return None
+                prior=h[h["Datetime"].dt.date<today]
+                if prior.empty:return None
+                r=prior.iloc[-1]
+                return {"Symbol":str(item["Symbol"]),"SecurityId":str(item["SecurityId"]),"PDH":float(r["High"]),"PDL":float(r["Low"]),"PreviousDayClose":float(r["Close"]),"PreviousDayOpen":float(r["Open"]),"PreviousDayVolume":float(r.get("Volume",0) or 0)}
+            except Exception:
+                if attempt<2:time.sleep(0.25*(attempt+1))
+        return None
     rows=[]
-    # Bounded concurrency reduces the chance that one slow symbol blocks the entire 500-stock reference build.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures=[pool.submit(one,row) for _,row in mapping.iterrows()]
         for future in as_completed(futures):
-            row=future.result()
-            if row:rows.append(row)
+            try:
+                row=future.result()
+                if row:rows.append(row)
+            except Exception:pass
     return pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
