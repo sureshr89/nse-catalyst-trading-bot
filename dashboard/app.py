@@ -1,6 +1,5 @@
 """Primary NSE Catalyst Streamlit entrypoint."""
 from pathlib import Path
-import runpy
 import sys
 
 import streamlit as st
@@ -39,7 +38,11 @@ def _live_trade_worker():
 
 
 _live_trade_worker()
-runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
+
+# The master dashboard and the diagnostic TEST panel are separate UI tabs.
+# TEST is presentation-only and is not connected to the trading engine journal.
+from dashboard.tabbed_app import render_dashboard
+render_dashboard()
 
 # Render the NIFTY 500 sample and one aligned Trade Path panel only.
 # execution_status.py previously rendered a second duplicate table with stale
