@@ -18,15 +18,16 @@ def _engine(tmp_path):
 
 
 def _valid_trade():
+    # Match production risk controls: Rs 1,400 risk and 1.25+ R:R.
     return {
         "approved": True,
         "symbol": "ABC",
         "signal": "BUY",
         "entry": 100.0,
-        "stop_loss": 98.0,
-        "target": 104.0,
-        "quantity": 10,
-        "actual_risk": 20.0,
+        "stop_loss": 98.6,
+        "target": 101.75,
+        "quantity": 1000,
+        "actual_risk": 1400.0,
         "entry_time": datetime.now().replace(hour=10, minute=0, second=0, microsecond=0),
     }
 
@@ -61,10 +62,10 @@ def test_stop_closes_buy_position_and_releases_capital(tmp_path):
     e = _engine(tmp_path)
     opened = e.open_trade(_valid_trade())
     assert opened["opened"] is True
-    closed = e.close_position("ABC", 98.0, datetime.now(), "STOP_LOSS")
+    closed = e.close_position("ABC", 98.6, datetime.now(), "STOP_LOSS")
     assert closed is not None
     assert closed["status"] == "CLOSED"
-    assert closed["pnl"] == -20.0
+    assert closed["pnl"] == -1400.0
     assert not e.open_positions
     assert e.available_capital == e.total_capital
 
@@ -72,7 +73,7 @@ def test_stop_closes_buy_position_and_releases_capital(tmp_path):
 def test_ambiguous_bar_uses_stop_first(tmp_path):
     e = _engine(tmp_path)
     assert e.open_trade(_valid_trade())["opened"] is True
-    result = e.process_live_price("ABC", 101.0, high=105.0, low=97.0)
+    result = e.process_live_price("ABC", 101.0, high=102.0, low=98.0)
     assert result is not None
     assert result["exit_reason"] == "AMBIGUOUS_LIVE_BAR_STOP_FIRST"
-    assert result["exit_price"] == 98.0
+    assert result["exit_price"] == 98.6
