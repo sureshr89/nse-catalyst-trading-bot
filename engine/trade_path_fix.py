@@ -23,9 +23,6 @@ def install(MasterEngine):
                 if len(saved)==len(symbols) and set(saved["Symbol"].astype(str).str.upper())==set(symbols) and self._cached_file_is_valid(saved):return saved
             except Exception:pass
         parts=[];have=set()
-        # PDH/PDL/PDC are historical reference data. Do not block startup on
-        # hundreds of individual Dhan historical calls; use the shared batched
-        # daily provider first and Dhan only for symbols still missing.
         for source_name, loader in [
             ("HISTORICAL_FALLBACK", lambda missing: self._prepare_with_price_data(missing)),
             ("YFINANCE_FALLBACK", lambda missing: self._prepare_with_yfinance(missing)),
@@ -38,7 +35,7 @@ def install(MasterEngine):
                 if frame is not None and not frame.empty:
                     frame=frame.drop_duplicates("Symbol").copy();frame["ReferenceSource"]=source_name;parts.append(frame);have|=set(frame["Symbol"].astype(str).str.upper())
             except Exception as exc:
-                self.diagnostics.setdefault("reference_errors", {})[source_name]=f"{type(exc).__name__}: {exc}"
+                print(f"Reference source {source_name} failed: {type(exc).__name__}: {exc}")
         if not parts:
             try:return original_prepare(self)
             except Exception:return pd.DataFrame()
@@ -51,7 +48,7 @@ def install(MasterEngine):
         if len(result)<len(symbols): return result
         try:return self._save_result(result)
         except Exception as exc:
-            self.diagnostics.setdefault("reference_errors", {})["SAVE"]=f"{type(exc).__name__}: {exc}"
+            print(f"Reference save failed: {type(exc).__name__}: {exc}")
             return result
 
     ReferenceStore.prepare=complete_prepare
