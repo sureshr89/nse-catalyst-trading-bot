@@ -26,7 +26,7 @@ class MasterEngine:
     def _blank_diag(self):return {"timestamp":None,"strategy":"S1-S5","strategy_version":"clean-dhan-v1","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","positive_sectors":0,"negative_sectors":0,"sector_count":0,"ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{},"strategy_rejections":{s:{} for s in STRATEGY_DEFINITIONS},"market_data_source":"DHAN_ONLY","trade_path_status":"BLOCKED"}
     def _refresh_reference_data(self,force=False):
         today=self.now().date()
-        if not force and self._session_date==today and len(self.references)==500:return
+        if not force and self._session_date==today and len(self.references)>=MIN_DATA_COVERAGE_COUNT:return
         try:u=self.universe_engine.get_dataframe(refresh=force)
         except Exception:u=pd.DataFrame()
         if u is None or u.empty or "Symbol" not in u.columns:self.references=pd.DataFrame();self.diagnostics["rejections"]["universe"]="NIFTY500_UNIVERSE_UNAVAILABLE";return
@@ -36,8 +36,8 @@ class MasterEngine:
         try:r=ReferenceStore(u).prepare()
         except Exception:r=pd.DataFrame()
         self.references=r if r is not None else pd.DataFrame();self.sector_map=load_sector_map(u,refresh=force) if not u.empty else pd.DataFrame();self._session_date=today
-        if len(self.references)!=500:self.diagnostics["rejections"]["reference"]=f"REFERENCE_INCOMPLETE_{len(self.references)}/500"
-        if len(self.sector_map)!=500:self.diagnostics["rejections"]["sector_mapping"]=f"SECTOR_MAPPING_INCOMPLETE_{len(self.sector_map)}/500"
+        if len(self.references)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["reference"]=f"REFERENCE_BELOW_95PCT_{len(self.references)}/500"
+        if len(self.sector_map)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["sector_mapping"]=f"SECTOR_MAPPING_BELOW_95PCT_{len(self.sector_map)}/500"
     def prepare_reference_data(self,force=False):self._refresh_reference_data(force);return self.references
     def prepare_opening_candidates(self,force=False):
         self._refresh_reference_data(force);return self.references[[c for c in ["Symbol","TodayOpen","PDH","PDL","PreviousDayClose"] if c in self.references.columns]].copy()
@@ -53,8 +53,8 @@ class MasterEngine:
     def _market_snapshot(self):
         self._refresh_reference_data()
         blocked={"intraday":{},"prices":pd.DataFrame(),"sector":{},"nifty_change":None,"ad_ratio":None,"ad_complete":False,"buy_alignment":False,"sell_alignment":False,"dhan_quotes":{},"verified":False}
-        if len(self.references)!=500 or len(self.sector_map)!=500 or not configured():
-            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_OR_SECTOR_UNAVAILABLE";self.last_snapshot=blocked;self._write_diagnostics();return blocked
+        if len(self.references)<MIN_DATA_COVERAGE_COUNT or len(self.sector_map)<MIN_DATA_COVERAGE_COUNT or not configured():
+            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_OR_SECTOR_BELOW_95PCT";self.last_snapshot=blocked;self._write_diagnostics();return blocked
         symbols=self.references["Symbol"].astype(str).str.upper().tolist();mapping=map_nifty500(symbols)
         mapping_symbols=set(mapping.Symbol.astype(str).str.upper()) if not mapping.empty else set()
         if len(mapping)<MIN_DATA_COVERAGE_COUNT or len(mapping_symbols)<MIN_DATA_COVERAGE_COUNT:
@@ -80,90 +80,5 @@ class MasterEngine:
         qmap={str(r["Symbol"]).upper():r.to_dict() for _,r in quotes.iterrows()}
         coverage=len(prices)
         snap={"intraday":{},"prices":prices,"sector":{**sector,"positive_sectors":pos,"negative_sectors":neg,"alignment_pct":sector_change},"nifty_change":nifty,"ad_ratio":ad,"ad_complete":coverage>=MIN_DATA_COVERAGE_COUNT,"buy_alignment":buy,"sell_alignment":sell,"dhan_quotes":qmap,"verified":True}
-        self.last_snapshot=snap;self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":coverage,"reference_data_count":500,"market_data_coverage":f"{coverage}/500","nifty500_change_pct":nifty,"sector_change_pct":sector_change,"sector_available":True,"sector_mapping":"500/500","sector_priced":f"{int(sector.get('priced',0))}/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sectors",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":f"{coverage}/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","trade_path_status":"READY" if buy or sell else "BLOCKED"})
+        self.last_snapshot=snap;self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":coverage,"reference_data_count":len(self.references),"market_data_coverage":f"{coverage}/500","nifty500_change_pct":nifty,"sector_change_pct":sector_change,"sector_available":True,"sector_mapping":f"{len(self.sector_map)}/500","sector_priced":f"{int(sector.get('priced',0))}/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sectors",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":f"{coverage}/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","trade_path_status":"READY" if buy or sell else "BLOCKED"})
         return snap
-    def _candidate_symbols(self,snap):
-        out=[]
-        for _,r in self.references.iterrows():
-            s=str(r["Symbol"]).upper();q=snap["dhan_quotes"].get(s)
-            if not q:continue
-            op,pdh,pdl,ltp,hi,lo=map(float,(q["TodayOpen"],r["PDH"],r["PDL"],q["LTP"],q["TodayHigh"],q["TodayLow"]))
-            near_break=(hi>pdh or lo<pdl or ltp>pdh or ltp<pdl or (hi>0 and ltp>=hi*0.995) or (lo>0 and ltp<=lo*1.005))
-            if near_break or (op>pdh and lo<=pdh) or (op<pdl and hi>=pdl) or (pdl<op<pdh and (lo<=pdl or hi>=pdh)):out.append(s)
-        return out
-    def _evaluate_stock(self,symbol,ref,snap):
-        q=snap["dhan_quotes"].get(symbol);d=snap["intraday"].get(symbol)
-        if not q or d is None or d.empty:return []
-        d=self.price_data.today_only(d)
-        if len(d)<1:return []
-        prev=d.iloc[-1];pre=d.iloc[:-1];pdh,pdl=float(ref["PDH"]),float(ref["PDL"]);op,hi,lo,ltp=map(float,(q["TodayOpen"],q["TodayHigh"],q["TodayLow"],q["LTP"]))
-        prior_high=float(pre["High"].max()) if not pre.empty else None;prior_low=float(pre["Low"].min()) if not pre.empty else None
-        pull_low=float(pre["Low"].min()) if not pre.empty else None;pull_high=float(pre["High"].max()) if not pre.empty else None
-        buy_break=bool(not pre.empty and (pre["High"]>pdh).any());sell_break=bool(not pre.empty and (pre["Low"]<pdl).any())
-        gate={"nifty500_change_pct":snap["nifty_change"],"sector_alignment_pct":snap["sector"].get("alignment_pct",0),"ad_ratio":snap["ad_ratio"],"ad_coverage":len(snap["prices"]),"positive_sectors":snap["sector"].get("positive_sectors",0),"negative_sectors":snap["sector"].get("negative_sectors",0),"previous_candle_open":float(prev["Open"]),"previous_candle_close":float(prev["Close"])}
-        out=[]
-        for side in ("BUY","SELL"):
-            if (side=="BUY" and not snap["buy_alignment"]) or (side=="SELL" and not snap["sell_alignment"]):continue
-            for strategy in STRATEGY_DEFINITIONS:
-                kwargs=dict(gate);kwargs.update(symbol=symbol,side=side,ltp=ltp)
-                if strategy in ("S1","S3"):kwargs.update(today_open=op,pdh=pdh,pdl=pdl,today_low=lo,today_high=hi)
-                elif strategy=="S2":kwargs.update(pdh=pdh,pdl=pdl,pullback_low=pull_low,pullback_high=pull_high,breakout_seen=buy_break if side=="BUY" else sell_break)
-                elif strategy=="S4":kwargs.update(today_high=hi,today_low=lo,prior_intraday_high=prior_high,prior_intraday_low=prior_low)
-                elif strategy=="S5":kwargs.update(pdh=pdh,pdl=pdl)
-                try:sig=evaluate(strategy,**kwargs)
-                except (TypeError,ValueError,KeyError):sig=None
-                if sig:
-                    row=sig.to_dict();row.update({"strategy_name":STRATEGY_DEFINITIONS[strategy]["name"],"today_open":op,"today_low":lo,"today_high":hi,"pdh":pdh,"pdl":pdl,"previous_day_close":float(ref["PreviousDayClose"]),"entry_time":self.now().isoformat(timespec="seconds"),"signal_status":"ELIGIBLE","price_source":"Dhan"});out.append(row)
-        return out
-    def scan(self):
-        snap=self._market_snapshot();signals=[]
-        if not snap.get("verified"):self.last_signals=[];self.diagnostics["final_signals"]=0;self._write_diagnostics();return []
-        candidates=self._candidate_symbols(snap)
-        if candidates:
-            fresh=self.price_data.get_multi_1m(candidates);snap["intraday"]=fresh
-            for _,ref in self.references[self.references["Symbol"].isin(candidates)].iterrows():signals.extend(self._evaluate_stock(str(ref["Symbol"]).upper(),ref,snap))
-        self._write_signal_ledger(signals);selected=[];used=set();priority={"S1":5,"S2":4,"S3":4,"S4":3,"S5":2}
-        for sig in sorted(signals,key=lambda x:(-priority.get(str(x.get("strategy","")),0),str(x.get("symbol","")))):
-            s=sig["strategy"]
-            if s in used or self.daily_counts[s]>=MAX_TRADES_PER_STRATEGY_PER_DAY or self.daily_pnl_by_strategy[s]<=-DAILY_MAX_LOSS_PER_STRATEGY:continue
-            selected.append(sig);used.add(s)
-        self.last_signals=selected;self.diagnostics["final_signals"]=len(selected);self.diagnostics["signals_by_strategy"]={s:sum(x.get("strategy")==s for x in selected) for s in STRATEGY_DEFINITIONS};self._write_diagnostics();return selected
-    def process_signals(self,signals):
-        opened=[]
-        for sig in signals:
-            s=sig["strategy"]
-            if self.daily_counts[s]>=MAX_TRADES_PER_STRATEGY_PER_DAY or self.daily_pnl_by_strategy[s]<=-DAILY_MAX_LOSS_PER_STRATEGY:continue
-            result=self.paper_engine.open_trade({**sig,"approved":True,"strategy":s})
-            if result.get("opened"):
-                p=result.get("position")
-                if p:self.daily_counts[s]+=1;opened.append(p)
-        return opened
-    def run_cycle(self):
-        self.process_positions();hhmm=self.now().strftime("%H:%M")
-        if hhmm<TRADING_START or hhmm>LAST_ENTRY_TIME:return []
-        return self.process_signals(self.scan())
-    def process_positions(self):
-        for symbol in list(self.paper_engine.open_positions):
-            live=self.price_data.get_latest_live_price(symbol,max_age_seconds=8)
-            if not live:continue
-            closed=self.paper_engine.process_live_price(symbol,live["Close"],live["Datetime"],live.get("High"),live.get("Low"))
-            if closed:
-                s=str(closed.get("strategy","S1")).upper();self.daily_pnl_by_strategy[s]+=float(closed.get("pnl",0) or 0);self.journal.log_trade(closed)
-        self._write_diagnostics()
-    def square_off_all(self):
-        out=[];now=self.now()
-        for symbol in list(self.paper_engine.open_positions):
-            live=self.price_data.get_latest_live_price(symbol,max_age_seconds=8)
-            if live:out.append(self.paper_engine.close_position(symbol,live["Close"],now,"SQUARE_OFF_15:00"))
-        for c in [x for x in out if x]:self.journal.log_trade(c)
-        self._write_diagnostics();return out
-    def _write_signal_ledger(self,signals):
-        if not signals:return
-        OUTPUT.mkdir(parents=True,exist_ok=True)
-        try:
-            new=pd.DataFrame(signals);new["logged_at"]=self.now().isoformat(timespec="seconds");old=pd.read_csv(SIGNAL_FILE) if SIGNAL_FILE.exists() else pd.DataFrame();pd.concat([old,new],ignore_index=True).drop_duplicates(subset=[c for c in ["strategy","symbol","side","entry"] if c in new.columns]).to_csv(SIGNAL_FILE,index=False)
-        except Exception:pass
-    def _write_diagnostics(self):
-        OUTPUT.mkdir(parents=True,exist_ok=True)
-        try:(OUTPUT/"diagnostics.json").write_text(json.dumps(self.diagnostics,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
-        except Exception:pass
