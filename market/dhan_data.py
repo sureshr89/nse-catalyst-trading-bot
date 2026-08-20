@@ -87,25 +87,26 @@ def market_quote(mapping,cache_seconds=10):
  return result
 def index_quote(index_name="NIFTY 500"):
  """Return a verified NSE index quote from Dhan's IDX_I market-feed segment."""
- if not configured():return {}
+ if not configured():return None
  m=load_instrument_master(False)
- if m.empty:return {}
+ if m.empty:return None
  sc=_col(m,("SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"));ic=_col(m,("SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"));seg=_col(m,("SEM_SEGMENT","SEGMENT"));ex=_col(m,("SEM_EXM_EXCH_ID","EXCH_ID"))
- if not sc or not ic:return {}
+ if not sc or not ic:return None
  x=m.copy();x["_name"]=x[sc].astype(str).str.strip().str.upper();wanted=str(index_name).strip().upper();x=x[x["_name"].eq(wanted)]
  if seg:x=x[x[seg].astype(str).str.upper().eq("I")]
  if ex:x=x[x[ex].astype(str).str.upper().eq("NSE")]
- if x.empty:return {}
+ if x.empty:return None
  sid=str(x.iloc[0][ic]).strip()
- if not sid.isdigit():return {}
- response=_marketfeed("IDX_I",[sid],"/marketfeed/quote");item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
- if not isinstance(item,dict):return {}
+ if not sid.isdigit():return None
+ response=_post("/marketfeed/quote",{"IDX_I":[sid]})
+ item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
+ if not isinstance(item,dict):return None
  o=item.get("ohlc") or {}
  try:
   ltp=float(item.get("last_price") or 0);net=float(item.get("net_change") or 0);prev=ltp-net;close=float(o.get("close") or 0)
-  if not _finite_positive(ltp) or not _finite_positive(prev):return {}
+  if not _finite_positive(ltp) or not _finite_positive(prev):return None
   return {"Symbol":wanted,"SecurityId":sid,"LTP":ltp,"Close":close,"PreviousClose":prev,"NetChange":net,"change_pct":(ltp-prev)/prev*100.0,"price_source":"DHAN_INDEX_QUOTE"}
- except (TypeError,ValueError,OverflowError):return {}
+ except (TypeError,ValueError,OverflowError):return None
 def _history_frame(response):
  if not response:return pd.DataFrame()
  try:
