@@ -48,7 +48,7 @@ render_trade_path()
 # Separate read-only TEST section at the very bottom. It does not create,
 # execute, store, journal, or score any trade and does not affect S1-S5.
 st.divider()
-st.markdown("## 🧪 TEST — Live Data / Entry Check")
+st.markdown("### 🧪 TEST — Live Data / Entry Check")
 st.caption("READ-ONLY TEST • no signals • no trades • no journal • no win/loss • S1–S5 unchanged")
 from dashboard.test_tab import render_test_tab
 render_test_tab()
