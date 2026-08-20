@@ -6,23 +6,24 @@ import pandas as pd
 from data.stock_universe import StockUniverse
 from data.sector_alignment import load_sector_map,calculate_sector_alignment
 from market.dhan_data import configured as dhan_configured,dhan_status,map_nifty500,market_quote,index_quote
-INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30)
+INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30);REQUIRED=500
 class Nifty500Breadth:
  def __init__(self):self.universe_engine=StockUniverse();self._lock=threading.RLock();self._cached_at=0.0;self._cached=None;self._mapping=pd.DataFrame();self._mapping_at=0.0;self._universe=pd.DataFrame()
  def _get_universe(self):
-  if self._universe is not None and len(self._universe)==500 and "Sector" in self._universe.columns and self._universe["Sector"].astype(str).str.upper().ne("UNKNOWN").sum()>=450:return self._universe
+  if self._universe is not None and len(self._universe)==REQUIRED and self._universe["Symbol"].nunique()==REQUIRED and "Sector" in self._universe.columns and self._universe["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).sum()==0:return self._universe
   u=self.universe_engine.get_dataframe(refresh=False)
-  sector_ok=u is not None and not u.empty and "Sector" in u.columns and u["Sector"].astype(str).str.upper().ne("UNKNOWN").sum()>=450
-  if u is None or u.empty or "Symbol" not in u.columns or not sector_ok:u=self.universe_engine.get_dataframe(refresh=True)
+  valid=u is not None and not u.empty and "Symbol" in u.columns and "Sector" in u.columns and len(u)==REQUIRED and u["Symbol"].nunique()==REQUIRED and u["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).sum()==0
+  if not valid:u=self.universe_engine.get_dataframe(refresh=True)
   if u is None or u.empty or "Symbol" not in u.columns:return pd.DataFrame()
   u=u.copy();u["Symbol"]=u["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False);u=u.drop_duplicates("Symbol").reset_index(drop=True)
   if "Sector" not in u.columns:u["Sector"]=u.get("Industry","UNKNOWN")
-  if len(u)>=500:self._universe=u.head(500).reset_index(drop=True)
-  return u.head(500).reset_index(drop=True)
+  if len(u)!=REQUIRED or u["Symbol"].nunique()!=REQUIRED:return pd.DataFrame()
+  if u["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).any():return pd.DataFrame()
+  self._universe=u.reset_index(drop=True);return self._universe
  def _get_mapping(self,symbols):
   now=time.monotonic()
   if not self._mapping.empty and now-self._mapping_at<3600 and set(self._mapping.Symbol.astype(str).str.upper())==set(symbols):return self._mapping
-  self._mapping=map_nifty500(symbols);self._mapping_at=now;return self._mapping
+  self._mapping=map_nifty500(symbols,force=False);self._mapping_at=now;return self._mapping
  @staticmethod
  def _closed_session_mode(now):return now.timetz().replace(tzinfo=None)>=MARKET_CLOSE or now.timetz().replace(tzinfo=None)<MARKET_OPEN
  def _fail(self,reason,mode,now,evaluated=0,sector=None,stage=None):
@@ -34,39 +35,43 @@ class Nifty500Breadth:
   with self._lock:
    if not force and self._cached is not None and now.date()==self._cached.get("_cache_date") and mode==self._cached.get("_cache_mode") and mono-self._cached_at<CACHE_SECONDS:return dict(self._cached)
   u=self._get_universe()
-  if u.empty or "Symbol" not in u.columns:return self._fail("NIFTY_500_UNIVERSE_UNAVAILABLE",mode,now)
+  if u.empty or "Symbol" not in u.columns:return self._fail("NIFTY_500_UNIVERSE_NOT_EXACTLY_500",mode,now)
   symbols=u.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False).drop_duplicates().tolist()
-  if len(symbols)!=500:return self._fail(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}/500",mode,now,len(symbols))
+  if len(symbols)!=REQUIRED:return self._fail(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}/500",mode,now,len(symbols))
   if not dhan_configured():return self._fail("DHAN_NOT_CONFIGURED",mode,now)
   mapping=self._get_mapping(symbols)
-  if len(mapping)!=500:return self._fail(f"DHAN_SECURITY_MAPPING_{len(mapping)}/500",mode,now,len(mapping),stage="MAPPING")
+  mapping_symbols=set(mapping.Symbol.astype(str).str.upper()) if not mapping.empty else set()
+  if len(mapping)!=REQUIRED or len(mapping_symbols)!=REQUIRED or mapping.SecurityId.astype(str).nunique()!=REQUIRED:return self._fail(f"DHAN_SECURITY_MAPPING_INVALID_{len(mapping)}/500",mode,now,len(mapping),stage="MAPPING")
+  if mapping_symbols!=set(symbols):return self._fail("DHAN_SECURITY_MAPPING_SYMBOL_MISMATCH",mode,now,len(mapping),stage="MAPPING")
   quotes=market_quote(mapping,cache_seconds=10)
+  quote_symbols=set(quotes.Symbol.astype(str).str.upper()) if not quotes.empty else set()
   if quotes.empty:return self._fail("DHAN_MARKET_DATA_0/500",mode,now,0,stage="QUOTE")
-  if len(quotes)!=500:return self._fail(f"DHAN_MARKET_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="QUOTE")
+  if len(quotes)!=REQUIRED or len(quote_symbols)!=REQUIRED or quote_symbols!=set(symbols):return self._fail(f"DHAN_MARKET_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="QUOTE")
   for c in ["LTP","PreviousClose","TodayClose"]:quotes[c]=pd.to_numeric(quotes[c],errors="coerce")
   quotes["SessionClose"]=quotes["TodayClose"] if mode=="closed" else quotes["LTP"];bad=quotes.SessionClose.isna()|(quotes.SessionClose<=0)
   if mode=="closed":quotes.loc[bad,"SessionClose"]=quotes.loc[bad,"LTP"]
   quotes=quotes.dropna(subset=["SessionClose","PreviousClose"]);quotes=quotes[(quotes.SessionClose>0)&(quotes.PreviousClose>0)]
-  if len(quotes)!=500:return self._fail(f"DHAN_VALID_PRICE_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="PRICE")
+  if len(quotes)!=REQUIRED:return self._fail(f"DHAN_VALID_PRICE_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="PRICE")
   quotes["change_pct"]=(quotes.SessionClose-quotes.PreviousClose)/quotes.PreviousClose*100
   advances=int((quotes.change_pct>0).sum());declines=int((quotes.change_pct<0).sum());unchanged=int((quotes.change_pct==0).sum());ad_ratio=(advances/declines if declines else None)
   try:
    sm=load_sector_map(u,refresh=True);sector=calculate_sector_alignment(quotes[["Symbol","change_pct"]],sm,"change_pct")
   except Exception as exc:sector={"available":False,"alignment_pct":None,"mapped":0,"priced":0,"sectors":0,"positive_sectors":0,"negative_sectors":0,"coverage":"0/500","error":str(exc)}
+  if not sector.get("available") or int(sector.get("mapped",0))!=REQUIRED or int(sector.get("priced",0))!=REQUIRED:return self._fail(f"NIFTY_500_SECTOR_INCOMPLETE_{sector.get('priced',0)}/500",mode,now,len(quotes),sector=sector,stage="SECTOR")
   nifty=None
   try:nifty=index_quote("NIFTY 500")
   except Exception:nifty=None
   prev_close=float(nifty.get("PreviousClose") or 0) if nifty else 0.0;live_ltp=float(nifty.get("LTP") or 0) if nifty else 0.0;day_close=float(nifty.get("Close") or 0) if nifty else 0.0
   if mode=="closed":session_close=day_close if day_close>0 else live_ltp;nifty_change=((session_close-prev_close)/prev_close*100) if prev_close>0 else None;display_close=session_close;label="Latest completed NSE session"
   else:nifty_change=((live_ltp-prev_close)/prev_close*100) if prev_close>0 else None;display_close=prev_close;label="Previous completed NSE session"
-  result={"universe":"NIFTY 500","total":500,"evaluated":500,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad_ratio,"direction":"BULLISH" if advances>declines else "BEARISH" if declines>advances else "NEUTRAL","complete":True,"reason":"OK" if nifty else "DHAN_500_QUOTES_OK_INDEX_QUOTE_UNAVAILABLE","updated_at":f"{label} • market close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":nifty_change,"nifty500_ltp":live_ltp,"nifty500_previous_close":display_close if display_close>0 else None,"nifty500_reference_close":prev_close if prev_close>0 else None,"closed_session_label":label,"closed_session_basis":"Dhan completed-session close" if mode=="closed" else "Dhan live LTP","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":bool(sector.get("available")),"sector_coverage":sector.get("coverage","0/500"),"sector_mapped":sector.get("mapped",0),"sector_priced":sector.get("priced",0),"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":quotes[[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","TodayClose","PreviousClose","NetChange","Volume","change_pct"] if c in quotes.columns]].copy(),"_cache_date":now.date(),"_cache_mode":mode}
+  result={"universe":"NIFTY 500","total":REQUIRED,"evaluated":REQUIRED,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad_ratio,"direction":"BULLISH" if advances>declines else "BEARISH" if declines>advances else "NEUTRAL","complete":True,"reason":"OK" if nifty else "DHAN_500_QUOTES_OK_INDEX_QUOTE_UNAVAILABLE","updated_at":f"{label} • market close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":nifty_change,"nifty500_ltp":live_ltp,"nifty500_previous_close":display_close if display_close>0 else None,"nifty500_reference_close":prev_close if prev_close>0 else None,"closed_session_label":label,"closed_session_basis":"Dhan completed-session close" if mode=="closed" else "Dhan live LTP","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":True,"sector_coverage":sector.get("coverage","500/500"),"sector_mapped":REQUIRED,"sector_priced":REQUIRED,"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":quotes[[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","TodayClose","PreviousClose","NetChange","Volume","change_pct"] if c in quotes.columns]].copy(),"_cache_date":now.date(),"_cache_mode":mode}
   return self._store(result)
  def _store(self,result):
   with self._lock:self._cached=result;self._cached_at=time.monotonic()
   return dict(result)
  @staticmethod
  def _unknown(reason,mode,now,evaluated=0,sector=None):
-  sector=sector or {};return {"universe":"NIFTY 500","total":500,"evaluated":int(evaluated),"advances":0,"declines":0,"unchanged":0,"ad_ratio":None,"direction":"UNKNOWN","complete":False,"reason":reason,"updated_at":f"Latest completed session • market close 15:30 IST • waiting for Dhan data • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":None,"nifty500_ltp":None,"nifty500_previous_close":None,"nifty500_reference_close":None,"closed_session_label":"Latest completed NSE session","closed_session_basis":"waiting for Dhan closed-session data","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":bool(sector.get("available")),"sector_coverage":sector.get("coverage",f"{evaluated}/500"),"sector_mapped":sector.get("mapped",0),"sector_priced":sector.get("priced",0),"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN" if dhan_configured() else "UNCONFIGURED","quote_rows":pd.DataFrame(),"_cache_date":now.date(),"_cache_mode":mode}
+  sector=sector or {};return {"universe":"NIFTY 500","total":REQUIRED,"evaluated":int(evaluated),"advances":0,"declines":0,"unchanged":0,"ad_ratio":None,"direction":"UNKNOWN","complete":False,"reason":reason,"updated_at":f"Latest completed session • market close 15:30 IST • waiting for Dhan data • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":None,"nifty500_ltp":None,"nifty500_previous_close":None,"nifty500_reference_close":None,"closed_session_label":"Latest completed NSE session","closed_session_basis":"waiting for Dhan closed-session data","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":False,"sector_coverage":sector.get("coverage",f"{evaluated}/500"),"sector_mapped":sector.get("mapped",0),"sector_priced":sector.get("priced",0),"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN" if dhan_configured() else "UNCONFIGURED","quote_rows":pd.DataFrame(),"_cache_date":now.date(),"_cache_mode":mode}
  def allows(self,side):
   s=self.snapshot();side=str(side).upper()
   if not s.get("complete") or not s.get("sector_complete"):return False,s
