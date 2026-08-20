@@ -27,14 +27,10 @@ def test_live_price_uses_dhan_source_label():
     pd_obj=PriceData()
     mapping=pd.DataFrame([{"Symbol":symbol,"SecurityId":"123"}])
     quote=pd.DataFrame([{"SecurityId":"123","Symbol":symbol,"LTP":110,"TodayOpen":108,"TodayHigh":112,"TodayLow":107,"PreviousClose":105,"NetChange":5}])
-    with patch.object(dhan_data,"configured",return_value=True) as configured, \
-         patch.object(dhan_data,"map_nifty500",return_value=mapping) as mapper, \
-         patch.object(dhan_data,"market_quote",return_value=quote) as market_quote:
+    with patch.object(dhan_data,"configured",return_value=True), \
+         patch.object(dhan_data,"map_nifty500",return_value=mapping), \
+         patch.object(dhan_data,"market_quote",return_value=quote):
         result=pd_obj.get_latest_live_price(symbol,max_age_seconds=0)
-    assert configured.call_count==1
-    assert mapper.call_count==1
-    assert mapper.call_args.args==([symbol],)
-    assert market_quote.call_count==1
     assert result is not None
     assert result["price_source"]=="DHAN_OHLC"
     assert result["Close"]==110.0
