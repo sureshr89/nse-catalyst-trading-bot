@@ -22,17 +22,22 @@ def test_completed_excludes_current_minute():
     assert all(result["Datetime"]<now)
 
 def test_live_price_uses_dhan_source_label():
+    """Verify PriceData's Dhan quote normalization without relying on module identity."""
     symbol="PRICE_TEST_UNIQUE"
     PriceData._live_price_cache.pop(symbol,None);PriceData._live_price_cache_at.pop(symbol,None)
     pd_obj=PriceData()
     mapping=pd.DataFrame([{"Symbol":symbol,"SecurityId":"123"}])
     quote=pd.DataFrame([{"SecurityId":"123","Symbol":symbol,"LTP":110,"TodayOpen":108,"TodayHigh":112,"TodayLow":107,"PreviousClose":105,"NetChange":5}])
-    # Patch the exact namespace used by PriceData. This avoids module-identity/import-order
-    # differences when the test is run alone versus together with the G1 suite.
+
+    # Patch the exact instance boundary used by this behavioral test.  The
+    # production implementation remains Dhan-only; the test must not depend
+    # on whether another test imported market.dhan_data through a second
+    # module reference in the same pytest process.
     with patch.object(pd_obj,"_map",return_value=mapping), \
-         patch.object(price_data_module.dhan_data,"configured",return_value=True), \
-         patch.object(price_data_module.dhan_data,"market_quote",return_value=quote):
+         patch.object(pd_obj, "_dhan_configured", return_value=True), \
+         patch.object(pd_obj, "_dhan_market_quote", return_value=quote):
         result=pd_obj.get_latest_live_price(symbol,max_age_seconds=0)
+
     assert result is not None
     assert result["price_source"]=="DHAN_OHLC"
     assert result["Close"]==110.0
