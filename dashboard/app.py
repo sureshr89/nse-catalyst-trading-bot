@@ -4,6 +4,35 @@ import runpy
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Install the same Dhan/data-alignment patches used by the trading engine.
+# Importing main.py does not render the dashboard; it only installs the patches.
+import main as _engine_main
+
+@st.cache_resource(show_spinner=False)
+def _get_trading_engine():
+    return _engine_main.MasterEngine()
+
+@st.fragment(run_every="15s")
+def _live_trade_worker():
+    """Actually run the paper-trading engine on every live refresh cycle.
+
+    The dashboard previously only displayed signals.csv/trades.csv. That meant
+    the Streamlit app could show perfect market data forever without ever
+    invoking MasterEngine.run_cycle(). This fragment is the missing execution
+    loop. It remains paper-only because LIVE_TRADING is hard-disabled in config.
+    """
+    try:
+        engine = _get_trading_engine()
+        engine.run_cycle()
+    except Exception as exc:
+        # Do not crash the dashboard; the engine writes its own diagnostics.
+        st.session_state["trade_worker_error"] = f"{type(exc).__name__}: {exc}"
+
+# Register the live worker before rendering the dashboard. Streamlit fragments
+# rerun independently, so the trading cycle continues every 15 seconds.
+_live_trade_worker()
+
 # single_master.py is the one-page dashboard.
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
