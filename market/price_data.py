@@ -47,6 +47,21 @@ class PriceData:
     def get_1m(self,symbol):return self.get_candles(symbol,"1m","1d")
     def get_5m(self,symbol):return self.get_candles(symbol,"5m","1d")
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
+    @staticmethod
+    def _quote_frame(quote):
+        if isinstance(quote,pd.DataFrame): return quote.copy()
+        if isinstance(quote,dict):
+            data=quote.get("data",quote)
+            rows=[]
+            if isinstance(data,dict):
+                for segment,items in data.items():
+                    if isinstance(items,dict):
+                        for security_id,item in items.items():
+                            if isinstance(item,dict):
+                                o=item.get("ohlc",{}) or {}
+                                rows.append({"SecurityId":str(security_id),"LTP":item.get("last_price"),"TodayOpen":o.get("open"),"TodayHigh":o.get("high"),"TodayLow":o.get("low"),"PreviousClose":o.get("close"),"NetChange":item.get("net_change")})
+            return pd.DataFrame(rows)
+        return pd.DataFrame()
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","").strip()
         if not key:return None
@@ -59,12 +74,13 @@ class PriceData:
                 if cached is not None and age<=max_age_seconds:return dict(cached)
         mapping=self._map([key])
         if mapping is None or getattr(mapping,"empty",True) or len(mapping)!=1:return None
+        security_id=str(mapping.iloc[0]["SecurityId"]).strip()
         quote=self._dhan_market_quote(mapping)
-        if quote is None or getattr(quote,"empty",True):return None
-        frame=quote.copy()
-        if "Symbol" in frame.columns:
-            normalized=frame["Symbol"].astype(str).str.strip().str.upper().str.replace(".NS","",regex=False)
-            matched=frame.loc[normalized.eq(key)]
+        frame=self._quote_frame(quote)
+        if frame.empty:return None
+        if "SecurityId" in frame.columns:
+            sid=frame["SecurityId"].astype(str).str.strip()
+            matched=frame.loc[sid.eq(security_id)]
             if not matched.empty:frame=matched
         if frame.empty:return None
         row=frame.iloc[0]
