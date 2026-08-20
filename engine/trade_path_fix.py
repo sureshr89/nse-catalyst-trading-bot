@@ -22,44 +22,37 @@ def install(MasterEngine):
                 saved=pd.read_csv(self.path)
                 if len(saved)==len(symbols) and set(saved["Symbol"].astype(str).str.upper())==set(symbols) and self._cached_file_is_valid(saved):return saved
             except Exception:pass
-        parts=[]
-        try:
-            dhan=self._prepare_with_dhan(symbols)
-            if not dhan.empty:
-                dhan=dhan.drop_duplicates("Symbol");dhan["ReferenceSource"]="DHAN";parts.append(dhan)
-        except Exception:pass
-        have=set(parts[0]["Symbol"].astype(str).str.upper()) if parts else set()
-        missing=[s for s in symbols if s not in have]
-        if missing:
+        parts=[];have=set()
+        # PDH/PDL/PDC are historical reference data. Do not block startup on
+        # hundreds of individual Dhan historical calls; use the shared batched
+        # daily provider first and Dhan only for symbols still missing.
+        for source_name, loader in [
+            ("HISTORICAL_FALLBACK", lambda missing: self._prepare_with_price_data(missing)),
+            ("YFINANCE_FALLBACK", lambda missing: self._prepare_with_yfinance(missing)),
+            ("DHAN", lambda missing: self._prepare_with_dhan(missing)),
+        ]:
+            missing=[s for s in symbols if s not in have]
+            if not missing:break
             try:
-                from market.dhan_data import map_nifty500, previous_day_references
-                retry=previous_day_references(map_nifty500(missing))
-                if not retry.empty:
-                    retry=retry.drop_duplicates("Symbol");retry["ReferenceSource"]="DHAN_RETRY";parts.append(retry);have|=set(retry["Symbol"].astype(str).str.upper())
-            except Exception:pass
-        missing=[s for s in symbols if s not in have]
-        if missing:
-            try:
-                fallback=self._prepare_with_price_data(missing)
-                if not fallback.empty:
-                    fallback=fallback.drop_duplicates("Symbol");fallback["ReferenceSource"]="HISTORICAL_FALLBACK";parts.append(fallback);have|=set(fallback["Symbol"].astype(str).str.upper())
-            except Exception:pass
-        missing=[s for s in symbols if s not in have]
-        if missing:
-            try:
-                fallback2=self._prepare_with_yfinance(missing)
-                if not fallback2.empty:
-                    fallback2=fallback2.drop_duplicates("Symbol");fallback2["ReferenceSource"]="YFINANCE_FALLBACK";parts.append(fallback2);have|=set(fallback2["Symbol"].astype(str).str.upper())
-            except Exception:pass
-        if not parts:return original_prepare(self)
+                frame=loader(missing)
+                if frame is not None and not frame.empty:
+                    frame=frame.drop_duplicates("Symbol").copy();frame["ReferenceSource"]=source_name;parts.append(frame);have|=set(frame["Symbol"].astype(str).str.upper())
+            except Exception as exc:
+                self.diagnostics.setdefault("reference_errors", {})[source_name]=f"{type(exc).__name__}: {exc}"
+        if not parts:
+            try:return original_prepare(self)
+            except Exception:return pd.DataFrame()
         result=pd.concat(parts,ignore_index=True,sort=False)
-        priority={"DHAN":0,"DHAN_RETRY":1,"HISTORICAL_FALLBACK":2,"YFINANCE_FALLBACK":3}
+        priority={"HISTORICAL_FALLBACK":0,"YFINANCE_FALLBACK":1,"DHAN":2}
         result["_priority"]=result["ReferenceSource"].map(priority).fillna(9)
+        result["Symbol"]=result["Symbol"].astype(str).str.upper().str.strip()
         result=result.sort_values(["Symbol","_priority"]).drop_duplicates("Symbol").drop(columns=["_priority"])
-        result=result[result["Symbol"].astype(str).str.upper().isin(set(symbols))].copy()
-        # Never save a partial reference set as if it were a valid strategy universe.
+        result=result[result["Symbol"].isin(set(symbols))].copy()
         if len(result)<len(symbols): return result
-        return self._save_result(result)
+        try:return self._save_result(result)
+        except Exception as exc:
+            self.diagnostics.setdefault("reference_errors", {})["SAVE"]=f"{type(exc).__name__}: {exc}"
+            return result
 
     ReferenceStore.prepare=complete_prepare
     original_scan=MasterEngine.scan
@@ -75,7 +68,6 @@ def install(MasterEngine):
         self.diagnostics["stocks_scanned"]=reference_count
         if reference_count<500:
             self.diagnostics["rejections"]["strategy_reference"]=f"STRATEGY_REFERENCE_INCOMPLETE_{reference_count}/500"
-            # Do not allow a partial universe to create a paper trade.
             result=[]
         self.diagnostics["strategy_market_gate"]="PASS" if market_data_ok and gate!="NO_ALIGNMENT" and reference_count==500 else "BLOCKED"
         self.diagnostics["signals_generated_total"]=int(len(result))
