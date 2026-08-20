@@ -25,6 +25,11 @@ def fmt(v):
     try: return f"{float(v):,.2f}"
     except Exception: return str(v)
 
+def pct(v):
+    if v is None or v=="" or (isinstance(v,float) and pd.isna(v)): return "—"
+    try: return f"{float(v):,.2f}%"
+    except Exception: return str(v)
+
 def first(row,*names,default=""):
     if row is None: return default
     for name in names:
@@ -57,7 +62,7 @@ def live_dashboard():
         from market.dhan_data import configured as dhan_configured,dhan_status
         market=BREADTH.snapshot(force=False); dhan_ok=dhan_configured(); api_status=dhan_status()
     except Exception as exc:
-        market={"complete":False,"sector_complete":False,"evaluated":0,"sector_priced":0,"nifty500_change_pct":None,"sector_alignment_pct":None,"ad_ratio":None}
+        market={"complete":False,"sector_complete":False,"evaluated":0,"sector_priced":0,"nifty500_change_pct":None,"sector_alignment_pct":None,"ad_ratio":None,"reason":str(exc)}
         dhan_ok=False; api_status={"ok":False,"received":0,"requested":0,"message":str(exc)}
 
     trades_all=read_csv("trades.csv"); signals_all=read_csv("signals.csv"); today=now.date()
@@ -73,22 +78,31 @@ def live_dashboard():
     if not signals_today.empty:
         dc=next((c for c in ["timestamp","entry_time","logged_at"] if c in signals_today.columns),None)
         if dc:
-            d=pd.to_datetime(signals_today[dc],errors="coerce",utc=True)
+            d=pd.to_datetime(signals_today[dc],errors="coerce',utc=True)
             try: d=d.dt.tz_convert(IST)
             except Exception: pass
             signals_today=signals_today[d.dt.date==today]
     master_csv=trades_all.copy()
 
-    n=market.get("nifty500_change_pct"); sec=market.get("sector_alignment_pct"); ad=market.get("ad_ratio"); evaln=int(market.get("evaluated",0) or 0); sp=int(market.get("sector_priced",0) or 0)
-    buy=bool(market.get("complete") and market.get("sector_complete") and num(n,0)>0 and num(sec,0)>0 and num(ad,0)>1)
-    sell=bool(market.get("complete") and market.get("sector_complete") and num(n,0)<0 and num(sec,0)<0 and num(ad,2)<1)
+    complete=bool(market.get("complete")); sector_complete=bool(market.get("sector_complete"))
+    n=market.get("nifty500_change_pct") if complete else None
+    sec=market.get("sector_alignment_pct") if sector_complete else None
+    ad=market.get("ad_ratio") if complete else None
+    evaln=int(market.get("evaluated",0) or 0) if complete else 0
+    sp=int(market.get("sector_priced",0) or 0) if sector_complete else 0
+    buy=bool(complete and sector_complete and num(n,0)>0 and num(sec,0)>0 and num(ad,0)>1)
+    sell=bool(complete and sector_complete and num(n,0)<0 and num(sec,0)<0 and num(ad,2)<1)
     bias="🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
     st.markdown('<div class="title">📊 NSE Catalyst — Master Dashboard</div>',unsafe_allow_html=True)
     st.markdown(f'<div class="sub">NIFTY 500 • PAPER TRADING ONLY • Dhan • {now.strftime("%d %b %Y %H:%M:%S")} IST • auto refresh 15s</div>',unsafe_allow_html=True)
     st.markdown('<div class="sec">🎯 Master Market Alignment</div>',unsafe_allow_html=True)
-    cards=[("NIFTY 500",f"{num(n,'—')}%" if n not in {None,""} else "—"),("SECTORS",f"{num(sec,'—')}%" if sec not in {None,""} else "—"),("A/D RATIO",fmt(ad) if ad is not None else "WAITING"),("BREADTH",f"{evaln}/500"),("SECTOR DATA",f"{sp}/500"),("MASTER BIAS",bias)]
+    cards=[("NIFTY 500",pct(n) if complete else "WAITING"),("SECTORS",pct(sec) if sector_complete else "WAITING"),("A/D RATIO",fmt(ad) if complete and ad is not None else "WAITING"),("BREADTH",f"{evaln}/500"),("SECTOR DATA",f"{sp}/500"),("MASTER BIAS",bias)]
     st.markdown('<div class="grid6">'+''.join(card(l,v) for l,v in cards)+'</div>',unsafe_allow_html=True)
-    st.markdown(f'<div class="status"><b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • API: {"PASS" if api_status.get("ok") else "WAIT/ERROR"} • Quotes {api_status.get("received",0)}/{api_status.get("requested",0)} • Every value refreshes with this 15s cycle</div>',unsafe_allow_html=True)
+    reason=str(market.get("reason") or "").replace("<","&lt;").replace(">","&gt;")
+    status_text=f'<b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • API: {"PASS" if api_status.get("ok") else "WAIT/ERROR"} • Quotes {api_status.get("received",0)}/{api_status.get("requested",0)}'
+    if not complete: status_text += f' • NIFTY 500 breadth waiting: {reason or "market data incomplete"}'
+    status_text += ' • Every value refreshes with this 15s cycle'
+    st.markdown(f'<div class="status">{status_text}</div>',unsafe_allow_html=True)
 
     st.markdown('<div class="sec">⚡ S1–S5 — TODAY\'S ACTUAL TRADE STATE</div>',unsafe_allow_html=True)
     for strategy in ["S1","S2","S3","S4","S5"]:
