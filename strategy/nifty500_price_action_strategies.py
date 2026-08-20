@@ -21,7 +21,8 @@ class TradeSignal:
 
 def _finite_positive(v):
     try:
-        x = float(v); return x > 0 and x == x and x != float("inf")
+        x = float(v)
+        return x > 0 and x == x and x != float("inf")
     except (TypeError, ValueError): return False
 
 def market_gate(side, nifty500_change_pct, sector_alignment_pct, ad_ratio, ad_coverage=500):
@@ -36,7 +37,9 @@ def candle_gate(side, previous_candle_open, previous_candle_close):
     try: op, cl = float(previous_candle_open), float(previous_candle_close)
     except (TypeError, ValueError): return False
     if op <= 0 or cl <= 0: return False
-    return (side == "BUY" and cl > op) or (side == "SELL" and cl < op)
+    if side == "BUY": return cl > op
+    if side == "SELL": return cl < op
+    return False
 
 def position_size(entry, stop_loss):
     try:
@@ -51,10 +54,11 @@ def position_size(entry, stop_loss):
     max_qty = min(max_cap, int(MAX_RISK // rps))
     if min_qty > max_qty: return None
     qty = min_qty; risk = qty * rps
-    return (qty, rps, risk, qty * entry) if MIN_RISK <= risk <= MAX_RISK else None
+    if not (MIN_RISK <= risk <= MAX_RISK): return None
+    return (qty, rps, risk, qty * entry)
 
-def make_signal(strategy, side, symbol, entry, stop_loss, nifty500_change_pct, sector_alignment_pct, ad_ratio,
-                ad_coverage, reason, previous_candle_open, previous_candle_close):
+def make_signal(strategy, side, symbol, entry, stop_loss, nifty500_change_pct, sector_alignment_pct,
+                ad_ratio, ad_coverage, reason, previous_candle_open, previous_candle_close):
     if not market_gate(side, nifty500_change_pct, sector_alignment_pct, ad_ratio, ad_coverage): return None
     if not candle_gate(side, previous_candle_open, previous_candle_close): return None
     try: entry, stop_loss = float(entry), float(stop_loss)
@@ -71,14 +75,15 @@ def make_signal(strategy, side, symbol, entry, stop_loss, nifty500_change_pct, s
     if sizing is None: return None
     qty, rps, risk, capital = sizing
     color = "GREEN" if float(previous_candle_close) > float(previous_candle_open) else "RED"
-    return TradeSignal(str(strategy).upper(), side, str(symbol).upper(), round(entry,4), round(stop_loss,4),
-                       round(target,4), round(rps,4), qty, round(risk,2), round(capital,2), RR,
-                       round(float(nifty500_change_pct),4), round(float(sector_alignment_pct),4),
-                       round(float(ad_ratio),4), round(float(previous_candle_open),4), round(float(previous_candle_close),4),
-                       color, reason, "Exit at SL or 1.25R target; force square-off at 15:00 IST")
+    return TradeSignal(str(strategy).upper(), side, str(symbol).upper(), round(entry, 4), round(stop_loss, 4),
+                       round(target, 4), round(rps, 4), qty, round(risk, 2), round(capital, 2), RR,
+                       round(float(nifty500_change_pct), 4), round(float(sector_alignment_pct), 4),
+                       round(float(ad_ratio), 4), round(float(previous_candle_open), 4),
+                       round(float(previous_candle_close), 4), color, reason,
+                       "Exit at SL or 1.25R target; force square-off at 15:00 IST")
 
 def _candle_kwargs(g):
-    g=dict(g); return g, g.pop("previous_candle_open",None), g.pop("previous_candle_close",None)
+    g = dict(g); po = g.pop("previous_candle_open", None); pc = g.pop("previous_candle_close", None); return g, po, pc
 
 def evaluate_s1(symbol, side, today_open, pdh, pdl, today_low, today_high, ltp,
                 pdh_swept_down=False, pdl_swept_up=False, pdh_swept=False, pdl_swept=False, **g):
@@ -86,23 +91,19 @@ def evaluate_s1(symbol, side, today_open, pdh, pdl, today_low, today_high, ltp,
     if po is None or pc is None: return None
     down_pdh = bool(pdh_swept_down or (pdh_swept and today_low < float(pdh)))
     up_pdl = bool(pdl_swept_up or (pdl_swept and today_high > float(pdl)))
-    if side == "BUY" and today_open > pdh and down_pdh:
-        return make_signal("S1", side, symbol, ltp, today_low, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open > PDH -> sweep below PDH -> reversal setup", **g)
-    if side == "SELL" and today_open < pdl and up_pdl:
-        return make_signal("S1", side, symbol, ltp, today_high, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open < PDL -> sweep above PDL -> reversal setup", **g)
+    if side == "BUY" and today_open > pdh and down_pdh and ltp >= today_open:
+        return make_signal("S1", side, symbol, ltp, today_low, previous_candle_open=po, previous_candle_close=pc, reason="Open > PDH -> sweep below PDH -> reclaim Open", **g)
+    if side == "SELL" and today_open < pdl and up_pdl and ltp <= today_open:
+        return make_signal("S1", side, symbol, ltp, today_high, previous_candle_open=po, previous_candle_close=pc, reason="Open < PDL -> sweep above PDL -> reject Open", **g)
     return None
 
 def evaluate_s2(symbol, side, pdh, pdl, pullback_low, pullback_high, ltp, breakout_seen=False, **g):
     g, po, pc = _candle_kwargs(g)
     if po is None or pc is None: return None
     if side == "BUY" and breakout_seen and ltp >= pdh and pullback_low is not None and pullback_low <= pdh:
-        return make_signal("S2", side, symbol, ltp, pullback_low, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Break PDH -> pullback to PDH -> reclaim", **g)
+        return make_signal("S2", side, symbol, ltp, pullback_low, previous_candle_open=po, previous_candle_close=pc, reason="Break PDH -> pullback to PDH -> reclaim", **g)
     if side == "SELL" and breakout_seen and ltp <= pdl and pullback_high is not None and pullback_high >= pdl:
-        return make_signal("S2", side, symbol, ltp, pullback_high, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Break PDL -> pullback to PDL -> fail below", **g)
+        return make_signal("S2", side, symbol, ltp, pullback_high, previous_candle_open=po, previous_candle_close=pc, reason="Break PDL -> pullback to PDL -> fail below", **g)
     return None
 
 def evaluate_s3(symbol, side, today_open, pdh, pdl, today_low, today_high, ltp,
@@ -111,17 +112,11 @@ def evaluate_s3(symbol, side, today_open, pdh, pdl, today_low, today_high, ltp,
     if po is None or pc is None: return None
     down_pdl = bool(pdl_swept_down or (pdl_swept and today_low < float(pdl)))
     up_pdh = bool(pdh_swept_up or (pdh_swept and today_high > float(pdh)))
-    if side == "BUY" and today_open > pdl and down_pdl:
-        return make_signal("S3", side, symbol, ltp, today_low, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open > PDL -> sweep below PDL -> reversal setup", **g)
-    if side == "SELL" and today_open < pdh and up_pdh:
-        # The S3 contract treats the observed sweep/reversal price as the protective level
-        # when the supplied intraday high is below the live reversal price.
-        stop = max(float(today_high), float(ltp))
-        if stop <= float(ltp):
-            return None
-        return make_signal("S3", side, symbol, float(today_open), stop, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open < PDH -> sweep above PDH -> reversal setup", **g)
+    if side == "BUY" and today_open > pdl and down_pdl and ltp >= today_open:
+        return make_signal("S3", side, symbol, ltp, today_low, previous_candle_open=po, previous_candle_close=pc, reason="Open > PDL -> sweep below PDL -> reclaim Open", **g)
+    # Contract: SELL starts below PDH, sweeps above PDH, then rejects back below Open.
+    if side == "SELL" and today_open < pdh and up_pdh and ltp <= today_open:
+        return make_signal("S3", side, symbol, ltp, today_high, previous_candle_open=po, previous_candle_close=pc, reason="Open < PDH -> sweep above PDH -> reject Open", **g)
     return None
 
 def evaluate_s4(symbol, side, today_high, today_low, prior_intraday_high, prior_intraday_low, ltp, **g):
@@ -136,18 +131,21 @@ def evaluate_s4(symbol, side, today_high, today_low, prior_intraday_high, prior_
 def evaluate_s5(symbol, side, pdh, pdl, ltp, **g):
     g, po, pc = _candle_kwargs(g)
     if po is None or pc is None: return None
-    if side == "BUY" and ltp > pdh: return make_signal("S5", side, symbol, ltp, pdh, previous_candle_open=po, previous_candle_close=pc, reason="LTP broke above PDH", **g)
-    if side == "SELL" and ltp < pdl: return make_signal("S5", side, symbol, ltp, pdl, previous_candle_open=po, previous_candle_close=pc, reason="LTP broke below PDL", **g)
+    if side == "BUY" and ltp > pdh:
+        return make_signal("S5", side, symbol, ltp, pdh, previous_candle_open=po, previous_candle_close=pc, reason="LTP broke above PDH", **g)
+    if side == "SELL" and ltp < pdl:
+        return make_signal("S5", side, symbol, ltp, pdl, previous_candle_open=po, previous_candle_close=pc, reason="LTP broke below PDL", **g)
     return None
 
-STRATEGY_DEFINITIONS={
-"S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"Open beyond PDH/PDL -> directional sweep -> reversal setup","sl":"Today's Low / High at entry","target":"1.25R"},
-"S2":{"name":"PDH/PDL Breakout + Retest","entry":"Break PDH/PDL -> retest -> reclaim/fail","sl":"Retest Low / High","target":"1.25R"},
-"S3":{"name":"Opposite PDH/PDL Sweep + Open Reversal","entry":"Sweep opposite prior-day level -> reversal setup","sl":"Today's Low / High at entry","target":"1.25R"},
-"S4":{"name":"Intraday High/Low Breakout","entry":"Break previously formed intraday High/Low","sl":"Previous intraday Low / High","target":"1.25R"},
-"S5":{"name":"Direct PDH/PDL Breakout","entry":"Break PDH / PDL","sl":"PDH / PDL","target":"1.25R"}}
+STRATEGY_DEFINITIONS = {
+    "S1": {"name": "PDH/PDL Sweep + Open Reclaim", "entry": "Open beyond PDH/PDL -> directional sweep -> reclaim/reject Open", "sl": "Today's Low / High at entry", "target": "1.25R"},
+    "S2": {"name": "PDH/PDL Breakout + Retest", "entry": "Break PDH/PDL -> retest -> reclaim/fail", "sl": "Retest Low / High", "target": "1.25R"},
+    "S3": {"name": "Opposite PDH/PDL Sweep + Open Reclaim", "entry": "Sweep opposite prior-day level -> reclaim/reject Open", "sl": "Today's Low / High at entry", "target": "1.25R"},
+    "S4": {"name": "Intraday High/Low Breakout", "entry": "Break previously formed intraday High/Low", "sl": "Previous intraday Low / High", "target": "1.25R"},
+    "S5": {"name": "Direct PDH/PDL Breakout", "entry": "Break PDH / PDL", "sl": "PDH / PDL", "target": "1.25R"},
+}
 
 def evaluate(strategy, **kwargs):
-    fn={"S1":evaluate_s1,"S2":evaluate_s2,"S3":evaluate_s3,"S4":evaluate_s4,"S5":evaluate_s5}.get(str(strategy).upper().strip())
+    fn = {"S1": evaluate_s1, "S2": evaluate_s2, "S3": evaluate_s3, "S4": evaluate_s4, "S5": evaluate_s5}.get(str(strategy).upper().strip())
     if fn is None: raise ValueError(f"Unknown price-action strategy: {strategy}")
     return fn(**kwargs)
