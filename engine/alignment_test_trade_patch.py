@@ -11,7 +11,6 @@ IST = ZoneInfo("Asia/Kolkata")
 TEST_STRATEGY = "TEST"
 RR = 1.25
 MIN_RISK = 1400.0
-MAX_RISK = 1500.0
 CAPITAL = 250000.0
 
 
@@ -54,13 +53,12 @@ def install(MasterEngine):
             else:
                 continue
 
-            # Simple, deterministic paper-test risk: allocate exactly ₹1,400
-            # risk using the ₹2.5L test capital cap, then target 1.25R.
+            # Simple deterministic paper-test risk: ₹1,400 total risk using
+            # the ₹2.5L capital cap, with a 1.25R target.
             qty = int(CAPITAL // entry)
             if qty < 1:
                 continue
             risk_per_share = MIN_RISK / qty
-            risk = risk_per_share * qty
             if side == "BUY":
                 stop = entry - risk_per_share
                 target = entry + RR * risk_per_share
@@ -82,7 +80,7 @@ def install(MasterEngine):
                 "target": round(target, 4),
                 "risk_per_share": round(risk_per_share, 4),
                 "quantity": qty,
-                "actual_risk": round(risk, 2),
+                "actual_risk": round(MIN_RISK, 2),
                 "capital_used": round(entry * qty, 2),
                 "rr": RR,
                 "nifty500_change_pct": snap.get("nifty_change"),
@@ -103,13 +101,15 @@ def install(MasterEngine):
 
     def scan_with_test(self):
         result = original_scan(self)
-        if result or self.daily_counts.get(TEST_STRATEGY, 0) >= 1:
+        # TEST is independent of S1-S5 so it can validate execution even when
+        # the normal strategies have no setup. It remains alignment-gated.
+        if self.daily_counts.get(TEST_STRATEGY, 0) >= 1:
             return result
         test_signal = make_test_signal(self, self.last_snapshot or {})
         if test_signal:
-            result = [test_signal]
+            result.append(test_signal)
             self.last_signals = result
-            self.diagnostics["final_signals"] = 1
+            self.diagnostics["final_signals"] = len(result)
             self.diagnostics.setdefault("signals_by_strategy", {})[TEST_STRATEGY] = 1
             self.diagnostics["test_trade"] = "ELIGIBLE"
         else:
