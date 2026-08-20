@@ -1,6 +1,7 @@
 """NIFTY 500 sector mapping and integrity-checked sector alignment."""
 from pathlib import Path
 import pandas as pd
+from config.settings import MIN_DATA_COVERAGE_COUNT
 
 CACHE=Path("data/nifty500_sector_map.csv")
 REQUIRED=500
@@ -34,8 +35,7 @@ def calculate_sector_alignment(prices,sector_map,price_col="change_pct"):
     m=sector_map[["Symbol","Sector"]].copy(); m["Symbol"]=m["Symbol"].map(_norm); m=m.drop_duplicates("Symbol")
     merged=m.merge(p,on="Symbol",how="left").dropna(subset=["Sector",price_col])
     mapped=int(m["Symbol"].nunique()); priced=int(merged["Symbol"].nunique())
-    if priced<REQUIRED: return {**empty,"mapped":mapped,"priced":priced,"coverage":f"{priced}/500"}
-    # Equal-weighted mean return of every verified constituent in each sector.
+    if priced<MIN_DATA_COVERAGE_COUNT: return {**empty,"mapped":mapped,"priced":priced,"coverage":f"{priced}/500"}
     sector_returns=merged.groupby("Sector",sort=True)[price_col].mean()
     total=int(len(sector_returns)); pos=int((sector_returns>0).sum()); neg=int((sector_returns<0).sum()); unchanged=int((sector_returns==0).sum())
     if total==0 or pos+neg+unchanged!=total: return {**empty,"mapped":mapped,"priced":priced,"coverage":f"{priced}/500"}
