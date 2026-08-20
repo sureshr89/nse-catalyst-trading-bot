@@ -1,0 +1,19 @@
+name: File 26 Test - Strategy Boundary Conditions
+on:
+  workflow_dispatch:
+jobs:
+  test-file-26:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - run: python -m py_compile strategy/nifty500_price_action_strategies.py
+      - run: python -m pytest -q tests/test_strategy_boundaries.py
+        env:
+          PYTHONPATH: .
