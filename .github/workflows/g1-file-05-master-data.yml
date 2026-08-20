@@ -1,0 +1,33 @@
+name: G1 File 05 - Master Data
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'master_data.py'
+      - 'tests/test_master_data.py'
+      - '.github/workflows/g1-file-05-master-data.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Verify environment
+        run: |
+          git rev-parse HEAD
+          python -c "import pandas, requests, pytest; print('dependencies OK')"
+          python -c "import master_data as m; print(m.__file__)"
+      - name: Run File 05
+        run: python -m pytest -q tests/test_master_data.py
