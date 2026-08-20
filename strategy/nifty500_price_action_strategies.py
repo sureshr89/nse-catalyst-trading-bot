@@ -11,6 +11,7 @@ RR = 1.25
 MIN_RISK = 1400.0
 MAX_RISK = 1500.0
 CAPITAL_PER_TRADE = 250000.0
+MIN_MARKET_COVERAGE = 475
 
 @dataclass(frozen=True)
 class TradeSignal:
@@ -26,10 +27,10 @@ def _finite_positive(v):
     try:x=float(v); return math.isfinite(x) and x>0
     except (TypeError,ValueError):return False
 
-def market_gate(side,nifty500_change_pct,sector_alignment_pct,ad_ratio,ad_coverage=500,positive_sectors=0,negative_sectors=0):
+def market_gate(side,nifty500_change_pct,sector_alignment_pct,ad_ratio,ad_coverage=MIN_MARKET_COVERAGE,positive_sectors=0,negative_sectors=0):
     try: change,sector,ad=map(float,(nifty500_change_pct,sector_alignment_pct,ad_ratio)); coverage=int(ad_coverage); pos=int(positive_sectors); neg=int(negative_sectors)
     except (TypeError,ValueError):return False
-    if coverage!=500 or not all(math.isfinite(x) for x in (change,sector,ad)):return False
+    if coverage < MIN_MARKET_COVERAGE or not all(math.isfinite(x) for x in (change,sector,ad)):return False
     if side=="BUY":return change>0 and ad>1 and pos>neg
     if side=="SELL":return change<0 and ad<1 and neg>pos
     return False
