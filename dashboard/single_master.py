@@ -38,6 +38,37 @@ def first(row,*names,default=""):
 
 def card(label,value):return f'<div class="card"><div class="label">{label}</div><div class="value">{value}</div></div>'
 
+def build_sector_rows(quote_rows):
+    """Build live sector returns from verified constituent changes vs previous close."""
+    if not isinstance(quote_rows,pd.DataFrame) or quote_rows.empty:return pd.DataFrame()
+    try:
+        from data.sector_alignment import load_sector_map
+        universe=quote_rows[[c for c in ["Symbol","Sector"] if c in quote_rows.columns]].copy()
+        if "Symbol" not in universe.columns:return pd.DataFrame()
+        # Prefer the authoritative sector cache only when it matches the live universe.
+        sector_map=load_sector_map(universe,refresh=False)
+    except Exception:
+        return pd.DataFrame()
+    if "Symbol" not in quote_rows.columns:return pd.DataFrame()
+    q=quote_rows.copy(); q["Symbol"]=q["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False)
+    change_col=next((c for c in ["change_pct","ChangePct","change_percent","NetChangePct"] if c in q.columns),None)
+    if change_col is None:
+        if {"NetChange","PreviousClose"}.issubset(q.columns):
+            q["_change_pct"]=pd.to_numeric(q["NetChange"],errors="coerce")/pd.to_numeric(q["PreviousClose"],errors="coerce")*100
+            change_col="_change_pct"
+        elif {"LTP","PreviousClose"}.issubset(q.columns):
+            q["_change_pct"]=(pd.to_numeric(q["LTP"],errors="coerce")/pd.to_numeric(q["PreviousClose"],errors="coerce")-1)*100
+            change_col="_change_pct"
+        else:return pd.DataFrame()
+    q[change_col]=pd.to_numeric(q[change_col],errors="coerce")
+    sm=sector_map[["Symbol","Sector"]].copy(); sm["Symbol"]=sm["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False)
+    merged=sm.merge(q[["Symbol",change_col]],on="Symbol",how="left").dropna(subset=[change_col])
+    if merged.empty:return pd.DataFrame()
+    grouped=merged.groupby("Sector",sort=True)[change_col].agg(["mean","count"]).reset_index()
+    grouped=grouped.rename(columns={"mean":"Change %","count":"Stocks"})
+    grouped["Status"]=grouped["Change %"].map(lambda x:"POSITIVE" if x>0 else "NEGATIVE" if x<0 else "UNCHANGED")
+    return grouped.sort_values("Change %",ascending=False).reset_index(drop=True)
+
 st.markdown("""
 <style>
 .stApp{background:#000!important;color:#fff}.block-container{max-width:1450px;padding:.7rem .8rem 2rem}.title{font-size:clamp(1.5rem,4vw,2.4rem);font-weight:900;color:#fff}.sub{font-size:.75rem;color:#fff;margin-bottom:10px}.sec{font-size:1.1rem;font-weight:900;margin:15px 0 8px;color:#fff}.grid6{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}.card,.status{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:10px}.card{min-height:60px}.label{font-size:.56rem;font-weight:850;color:#fff;text-transform:uppercase}.value{font-size:.95rem;font-weight:850;margin-top:4px;color:#fff}.status{margin:7px 0;color:#fff;font-size:.76rem}.strategy{background:#0b1422;border:1px solid #294367;border-radius:12px;padding:10px;margin:7px 0}.strategy-title{font-weight:900;font-size:.88rem;margin-bottom:7px;color:#fff}.state{float:right;font-weight:900;font-size:.68rem;padding:4px 7px;border-radius:7px;background:#162943}.trade-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}.trade-cell{background:#101b2b;border-radius:7px;padding:6px}.trade-label{font-size:.5rem;color:#fff;text-transform:uppercase}.trade-value{font-size:.7rem;font-weight:800;margin-top:2px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tip{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700;color:#fff}.stCaption,.stCaption p{color:#fff!important}.stMarkdown,.stMarkdown p{color:#fff}@media(max-width:1000px){.grid6{grid-template-columns:repeat(3,1fr)}.trade-grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:600px){.grid6{grid-template-columns:repeat(2,1fr)}.trade-grid{grid-template-columns:repeat(2,1fr)}}
@@ -51,21 +82,14 @@ def live_dashboard():
         from market.nifty500_breadth import BREADTH
         from market.dhan_data import configured as dhan_configured,dhan_status,index_quote
         market=BREADTH.snapshot(force=False)
-        # IMPORTANT: do not trust a cached/index value from a different path.
-        # Read the exact NIFTY 500 index quote directly from Dhan on every dashboard cycle.
         raw_index=index_quote("NIFTY 500")
         if raw_index:
             ltp=float(raw_index.get("LTP") or 0); net=float(raw_index.get("NetChange") or 0); prev=float(raw_index.get("PreviousClose") or 0)
             if ltp>0 and prev>0:
-                market["nifty500_ltp"]=ltp
-                market["nifty500_net_change"]=net
-                market["nifty500_previous_close"]=prev
-                market["nifty500_change_pct"]=net/prev*100
-                market["nifty500_index_source"]="Dhan direct IDX_I"
+                market["nifty500_ltp"]=ltp; market["nifty500_net_change"]=net; market["nifty500_previous_close"]=prev; market["nifty500_change_pct"]=net/prev*100; market["nifty500_index_source"]="Dhan direct IDX_I"
     except Exception as exc:
         market={"complete":False,"sector_complete":False,"evaluated":0,"sector_priced":0,"nifty500_change_pct":None,"ad_ratio":None,"advances":0,"declines":0,"unchanged":0,"positive_sectors":0,"negative_sectors":0,"reason":str(exc),"quote_rows":pd.DataFrame()};dhan_ok=False;api_status={"ok":False,"message":str(exc)};raw_index=None
-    else:
-        dhan_ok=dhan_configured();api_status=dhan_status()
+    else:dhan_ok=dhan_configured();api_status=dhan_status()
     trades_all=read_csv("trades.csv");signals_all=read_csv("signals.csv");today=now.date();trades_today=trades_all.copy()
     if not trades_today.empty:
         dc=next((c for c in ["exit_time","entry_time","market_entry_time","trigger_entry_time"] if c in trades_today.columns),None)
@@ -84,6 +108,9 @@ def live_dashboard():
             signals_today=signals_today[d.dt.date==today]
     master_csv=trades_all.copy();complete=bool(market.get("complete"));sector_complete=bool(market.get("sector_complete"));n=market.get("nifty500_change_pct") if complete else None;ad=market.get("ad_ratio") if complete else None;evaln=int(market.get("evaluated",0) or 0) if complete else 0;sp=int(market.get("sector_priced",0) or 0) if sector_complete else 0;advances=int(market.get("advances",0) or 0) if complete else 0;declines=int(market.get("declines",0) or 0) if complete else 0;unchanged=int(market.get("unchanged",0) or 0) if complete else 0;positive_sectors=int(market.get("positive_sectors",0) or 0) if sector_complete else 0;negative_sectors=int(market.get("negative_sectors",0) or 0) if sector_complete else 0
     quote_rows=market.get("quote_rows");quote_count=len(quote_rows) if isinstance(quote_rows,pd.DataFrame) else 0
+    sector_rows=build_sector_rows(quote_rows) if sector_complete else pd.DataFrame()
+    if not sector_rows.empty:
+        positive_sectors=int((sector_rows["Change %"]>0).sum());negative_sectors=int((sector_rows["Change %"]<0).sum())
     buy=bool(complete and sector_complete and num(n,0)>0 and positive_sectors>negative_sectors and num(ad,0)>1);sell=bool(complete and sector_complete and num(n,0)<0 and negative_sectors>positive_sectors and num(ad,2)<1);bias="🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
     st.markdown('<div class="title">📊 NSE Catalyst — Master Dashboard</div>',unsafe_allow_html=True);st.markdown(f'<div class="sub">NIFTY 500 • PAPER TRADING ONLY • Dhan • {now.strftime("%d %b %Y %H:%M:%S")} IST • auto refresh 15s</div>',unsafe_allow_html=True);st.markdown('<div class="sec">🎯 Master Market Alignment</div>',unsafe_allow_html=True)
     index_display=pct(n)
@@ -97,6 +124,19 @@ def live_dashboard():
     if not complete:status_text+=f' • NIFTY 500 breadth waiting: {reason or "market data incomplete"}'
     elif not status_ok:status_text+=f' • Dhan status: {api_status.get("message") or "incomplete quote data"}'
     status_text+=' • Every value refreshes with this 15s cycle';st.markdown(f'<div class="status">{status_text}</div>',unsafe_allow_html=True)
+
+    # Live sector board: each sector is the equal-weighted average of its verified
+    # NIFTY 500 constituents' percentage change versus the previous-day close.
+    st.markdown('<div class="sec">🏭 SECTOR PERFORMANCE — VS PREVIOUS DAY CLOSE</div>',unsafe_allow_html=True)
+    if sector_complete and not sector_rows.empty:
+        sector_display=sector_rows[["Sector","Change %","Status","Stocks"]].copy()
+        sector_display["Change %"]=sector_display["Change %"].map(lambda x:f"{x:+.2f}%")
+        sector_display["Status"]=sector_display["Status"].map(lambda x:"🟢 POSITIVE" if x=="POSITIVE" else "🔴 NEGATIVE" if x=="NEGATIVE" else "⚪ UNCHANGED")
+        st.dataframe(sector_display,width="stretch",hide_index=True,column_config={"Sector":"Sector","Change %":"Change vs PDC","Status":"Direction","Stocks":st.column_config.NumberColumn("Stocks",format="%d")})
+        st.caption(f"{positive_sectors} positive • {negative_sectors} negative • {int((sector_rows['Change %'].astype(str).str.replace('%','').astype(float)==0).sum())} unchanged. Sector % = equal-weighted constituent change vs previous close; refreshed every 15 seconds.")
+    else:
+        st.info("Waiting for complete NIFTY 500 constituent data before showing sector performance.")
+
     st.markdown('<div class="sec">⚡ S1–S5 — TODAY\'S ACTUAL TRADE STATE</div>',unsafe_allow_html=True)
     for strategy in ["S1","S2","S3","S4","S5"]:
         tr=pd.DataFrame();sg=pd.DataFrame()
