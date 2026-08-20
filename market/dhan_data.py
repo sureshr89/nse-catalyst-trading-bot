@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import os, threading, time
+import math, os, threading, time
 import pandas as pd, requests
 
 BASE_URL="https://api.dhan.co/v2"; MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv"; MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
@@ -64,24 +64,35 @@ def map_nifty500(symbols,force=False):
     x=x[x["_symbol"].isin(wanted)].copy();x["Symbol"]=x["_symbol"];x["SecurityId"]=x[ic].astype(str).str.strip();x["ExchangeSegment"]="NSE_EQ";x["Instrument"]=x[ins].astype(str).str.upper() if ins else "EQUITY"
     return x[x["SecurityId"].ne("")&x["SecurityId"].ne("NAN")][["Symbol","SecurityId","ExchangeSegment","Instrument"]].drop_duplicates("Symbol")
 def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
-    ids=[int(x) for x in security_ids[:1000]];_set_status(stage=endpoint,requested=len(ids),received=0);return _post(endpoint,{exchange_segment:ids})
+    ids=[int(x) for x in security_ids[:1000] if str(x).isdigit()];_set_status(stage=endpoint,requested=len(ids),received=0);return _post(endpoint,{exchange_segment:ids})
+def _finite_positive(value):
+    try:return math.isfinite(float(value)) and float(value)>0
+    except (TypeError,ValueError):return False
+def _valid_ohlc(op,hi,lo,close,ltp):
+    vals=[op,hi,lo,close,ltp]
+    if not all(_finite_positive(v) for v in vals):return False
+    return hi>=max(op,lo,ltp) and lo<=min(op,hi,ltp)
 def market_quote(mapping,cache_seconds=10):
     global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
     if mapping is None or mapping.empty or not configured():return pd.DataFrame()
-    ids=pd.to_numeric(mapping["SecurityId"],errors="coerce").dropna().astype(int).astype(str).tolist();expected_ids=set(ids);expected_symbols=set(mapping["Symbol"].astype(str).str.upper().str.strip());cache_key=tuple(sorted(expected_ids));now=time.monotonic()
+    required={"SecurityId","Symbol"}
+    if not required.issubset(mapping.columns):return pd.DataFrame()
+    clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.dropna(subset=["SecurityId"]).drop_duplicates("SecurityId")
+    if len(clean)!=len(mapping) or clean["Symbol"].duplicated().any():return pd.DataFrame()
+    ids=clean["SecurityId"].astype(int).astype(str).tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
     with _LOCK:
         if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
             cached=pd.DataFrame(list(_QUOTE_CACHE.values()))
             if set(cached["SecurityId"].astype(str))==expected_ids and set(cached["Symbol"].astype(str).str.upper())==expected_symbols:return cached
-    response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(mapping["SecurityId"].astype(str),mapping["Symbol"].astype(str)));rows=[]
+    response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(clean["SecurityId"].astype(str),clean["Symbol"]));rows=[]
     for sid,item in data.items():
         if str(sid) not in expected_ids or not isinstance(item,dict):continue
         o=item.get("ohlc") or {}
         try:
             ltp=float(item.get("last_price") or 0);net=float(item.get("net_change"));prev=ltp-net;op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);close=float(o.get("close") or 0);vol=float(item.get("volume") or 0)
-            if ltp<=0 or prev<=0:continue
-            rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":close,"PreviousClose":prev,"NetChange":net,"Volume":vol,"UpdatedAt":datetime.now().isoformat(timespec="seconds")})
-        except (TypeError,ValueError):pass
+            if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,close,ltp) or not math.isfinite(net) or vol<0 or not math.isfinite(vol):continue
+            rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":close,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
+        except (TypeError,ValueError,OverflowError,KeyError):pass
     result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame()
     if result.empty:_set_status(received=0,requested=len(ids),ok=False,stage="/marketfeed/quote",message="No valid NSE_EQ quote data");return result
     returned_ids=set(result["SecurityId"].astype(str));returned_symbols=set(result["Symbol"].astype(str).str.upper());verified=len(result)==len(expected_ids) and returned_ids==expected_ids and returned_symbols==expected_symbols and result["LTP"].notna().all() and result["PreviousClose"].notna().all() and (result["LTP"]>0).all() and (result["PreviousClose"]>0).all()
@@ -103,10 +114,10 @@ def index_quote(index_name="NIFTY 500"):
     if not isinstance(item,dict):return None
     o=item.get("ohlc") or {}
     try:
-        ltp=float(item.get("last_price") or 0);net_change=float(item.get("net_change"));prev=ltp-net_change
-        if ltp<=0 or prev<=0:return None
-        return {"LTP":ltp,"Open":float(o.get("open") or 0),"High":float(o.get("high") or 0),"Low":float(o.get("low") or 0),"Close":float(o.get("close") or 0),"PreviousClose":prev,"NetChange":net_change,"SecurityId":sid}
-    except (TypeError,ValueError):return None
+        ltp=float(item.get("last_price") or 0);net_change=float(item.get("net_change"));prev=ltp-net_change;op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);close=float(o.get("close") or 0)
+        if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,close,ltp) or not math.isfinite(net_change):return None
+        return {"LTP":ltp,"Open":op,"High":hi,"Low":lo,"Close":close,"PreviousClose":prev,"NetChange":net_change,"SecurityId":sid}
+    except (TypeError,ValueError,OverflowError,KeyError):return None
 def daily_history(security_id,from_date,to_date):
     response=_post("/charts/historical",{"securityId":str(security_id),"exchangeSegment":"NSE_EQ","instrument":"EQUITY","expiryCode":0,"oi":False,"fromDate":from_date,"toDate":to_date},timeout=20)
     if not response:return pd.DataFrame()
@@ -123,12 +134,13 @@ def previous_day_references(mapping,force=False):
             try:
                 h=daily_history(str(item["SecurityId"]),fd,td)
                 if h.empty:
-                    if attempt<2: time.sleep(0.25*(attempt+1)); continue
+                    if attempt<2:time.sleep(0.25*(attempt+1));continue
                     return None
                 prior=h[h["Datetime"].dt.date<today]
                 if prior.empty:return None
-                r=prior.iloc[-1]
-                return {"Symbol":str(item["Symbol"]),"SecurityId":str(item["SecurityId"]),"PDH":float(r["High"]),"PDL":float(r["Low"]),"PreviousDayClose":float(r["Close"]),"PreviousDayOpen":float(r["Open"]),"PreviousDayVolume":float(r.get("Volume",0) or 0)}
+                r=prior.iloc[-1];pdh=float(r["High"]);pdl=float(r["Low"]);pdc=float(r["Close"])
+                if not all(_finite_positive(v) for v in (pdh,pdl,pdc)) or pdh<pdl:return None
+                return {"Symbol":str(item["Symbol"]),"SecurityId":str(item["SecurityId"]),"PDH":pdh,"PDL":pdl,"PreviousDayClose":pdc,"PreviousDayOpen":float(r["Open"]),"PreviousDayVolume":float(r.get("Volume",0) or 0)}
             except Exception:
                 if attempt<2:time.sleep(0.25*(attempt+1))
         return None
