@@ -10,9 +10,10 @@ import streamlit as st
 
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-ENTRY_START = dt.time(9, 20)
-ENTRY_END = dt.time(10, 30)
-FORCE_EXIT = dt.time(15, 0)
+# Exactly one test-entry time each trading day. With the dashboard's 15-second
+# refresh, the first cycle at/after 09:45:00 performs the entry check.
+TEST_ENTRY_TIME = dt.time(9, 45)
+FORCE_EXIT = dt.time(14, 45)
 MIN_HOLD = dt.timedelta(minutes=1)
 SL_PCT = 0.005
 TARGET_PCT = 0.010
@@ -44,9 +45,8 @@ def _eligible_stock(rows, index_change):
     if work.empty:
         return None
 
-    # Simple diagnostic rule requested by the user:
-    # positive NIFTY alignment -> stock above open = BUY;
-    # negative NIFTY alignment -> stock below open = SELL.
+    # Simple isolated diagnostic rule: positive NIFTY -> first verified stock
+    # above open is BUY; negative NIFTY -> first verified stock below open is SELL.
     if float(index_change) >= 0:
         candidates = work[work["LTP"] > work["TodayOpen"]].sort_values("Symbol")
         side = "BUY"
@@ -115,7 +115,7 @@ def _update_test_trade(live_rows, now):
         elif ltp <= state["target"]:
             reason = "TARGET"
     if reason is None and now.time() >= FORCE_EXIT:
-        reason = "3:00 PM TIME EXIT"
+        reason = "2:45 PM TIME EXIT"
     if reason is not None:
         state["status"] = "CLOSED"
         state["exit_time"] = now.isoformat()
@@ -126,18 +126,18 @@ def _update_test_trade(live_rows, now):
 
 
 def _render_test_trade(rows, snap, idx):
-    st.markdown("### 5. 🧪 One isolated morning test trade")
+    st.markdown("### 5. 🧪 One isolated test trade — 09:45 AM to 02:45 PM")
     st.caption(
-        "In-memory diagnostic only. Entry window 09:20–10:30 IST; minimum 1-minute hold; "
-        "SL/Target may close after 1 minute; otherwise forced exit at 15:00 IST. "
-        "Nothing is written to trading/journal storage."
+        "Exactly one test entry check at 09:45 IST on a complete aligned live-data cycle. "
+        "Minimum 1-minute hold. SL/Target may close after 1 minute; otherwise forced exit at 02:45 PM IST. "
+        "In-memory only; nothing is written to trading or journal storage."
     )
     now = _now_ist()
     state = _test_state()
+    today = now.date().isoformat()
 
-    # A completed test trade is kept visible for the day, but never persisted.
-    if state.get("date") != now.date().isoformat() and state.get("status") == "CLOSED":
-        state = {"date": now.date().isoformat(), "status": "WAITING"}
+    if state.get("date") != today:
+        state = {"date": today, "status": "WAITING", "entry_attempted": False}
         st.session_state["nse_test_trade"] = state
 
     complete = bool(snap.get("complete")) and len(rows) == 500
@@ -145,20 +145,22 @@ def _render_test_trade(rows, snap, idx):
     idx_change = float(idx.get("NetChange") or 0) if idx else 0.0
     aligned = complete and sector_ok and bool(idx) and snap.get("ad_ratio") is not None
 
-    if state.get("status") == "WAITING":
-        if aligned and ENTRY_START <= now.time() <= ENTRY_END:
-            candidate = _eligible_stock(rows, idx_change)
-            if candidate:
-                _open_test_trade(candidate, now)
-                state = st.session_state["nse_test_trade"]
+    if state.get("status") == "WAITING" and not state.get("entry_attempted"):
+        if now.time() >= TEST_ENTRY_TIME:
+            state["entry_attempted"] = True
+            if aligned:
+                candidate = _eligible_stock(rows, idx_change)
+                if candidate:
+                    _open_test_trade(candidate, now)
+                    state = st.session_state["nse_test_trade"]
+                else:
+                    state["status"] = "NO_ENTRY"
+                    state["no_entry_reason"] = "No verified NIFTY 500 stock matched the simple price-vs-open test side at/after 09:45."
             else:
-                st.warning("Waiting: no NIFTY 500 stock currently matches the simple price-vs-open test side.")
-        elif now.time() < ENTRY_START:
-            st.info("Waiting for the morning test-entry window (09:20–10:30 IST).")
-        elif now.time() > ENTRY_END:
-            st.info("Today's morning test-entry window has passed. The next trading morning will start a new isolated test.")
-        elif not aligned:
-            st.warning("Waiting for complete aligned live data before opening the test position.")
+                state["status"] = "NO_ENTRY"
+                state["no_entry_reason"] = "Aligned 500-stock/sector/index/A-D snapshot was not available at 09:45. No synthetic entry was created."
+        else:
+            st.info("Waiting for the exact 09:45 AM IST test-entry time. The test will use the first live refresh at/after 09:45.")
 
     if state.get("status") == "OPEN":
         state = _update_test_trade(rows, now)
@@ -179,14 +181,16 @@ def _render_test_trade(rows, snap, idx):
         cols[2].metric("Target", f"₹{_fmt(state.get('target'))}")
         cols[3].metric("Status", state.get("status", "—"))
         if state.get("status") == "CLOSED":
-            st.success(f"Test exit: {state.get('exit_reason', '—')} at ₹{_fmt(state.get('exit'))}. This result is temporary and is not added to P&L/W-L or journal storage.")
+            st.success(f"Test exit: {state.get('exit_reason', '—')} at ₹{_fmt(state.get('exit'))}. Temporary result only; not added to P&L/W-L or journal storage.")
         else:
-            st.info("Test position is live in-memory only. It will close on SL/Target after the 1-minute minimum hold, or automatically at 3:00 PM IST.")
+            st.info("Test position is live in-memory only. It will close on SL/Target after the 1-minute minimum hold, or automatically at 02:45 PM IST.")
+    elif state.get("status") == "NO_ENTRY":
+        st.warning(f"No test trade was created: {state.get('no_entry_reason', 'entry conditions not met')} This is intentional; no fake price is used.")
 
 
 def render_test_tab():
     st.markdown("## 🧪 TEST — Live Data / Entry Check")
-    st.caption("READ-ONLY diagnostic • isolated in-memory test position • no signals • no journal • S1–S5 unchanged")
+    st.caption("READ-ONLY diagnostic • one isolated in-memory test position • no signals • no journal • S1–S5 unchanged")
 
     try:
         from market.nifty500_breadth import BREADTH
