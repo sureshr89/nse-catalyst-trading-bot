@@ -11,19 +11,13 @@ if str(ROOT) not in sys.path:
 
 import main as _engine_main
 
-# Keep diagnostics optional so a diagnostic-module/import problem can NEVER stop
-# the master dashboard from loading.
 try:
     from dashboard.trade_path_diagnostics import capture as capture_trade_path, render as render_trade_path
-    _DIAGNOSTICS_IMPORT_ERROR = None
-except Exception as exc:
-    _DIAGNOSTICS_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-
+except Exception:
     def capture_trade_path(*args, **kwargs):
         return None
-
     def render_trade_path():
-        st.info("Trade-path diagnostics are temporarily unavailable; the master dashboard is still running.")
+        return None
 
 
 @st.cache_resource(show_spinner=False)
@@ -33,7 +27,6 @@ def _get_trading_engine():
 
 @st.fragment(run_every="15s")
 def _live_trade_worker():
-    """Run exactly one normal paper-trading engine cycle every 15 seconds."""
     try:
         engine = _get_trading_engine()
         result = engine.run_cycle()
@@ -50,15 +43,13 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
-# Keep the original master dashboard. Additional diagnostics/test content is
-# appended after it without changing S1-S5.
+# Main dashboard owns the market data, S1-S5, cumulative download and journal.
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
-# Render the live trade-path diagnostics after the master dashboard.
+# Diagnostics are supplementary and appear after the main dashboard.
 render_trade_path()
 
-# Separate isolated TEST trade. The TEST module owns its single heading and
-# caption so the page never shows duplicate TEST TRADE headings.
+# Isolated TEST trade only. It never changes S1-S5 or the journal.
 try:
     from dashboard.test_tab import render_test_tab
     st.divider()
@@ -66,20 +57,20 @@ try:
 except Exception as exc:
     st.error(f"TEST trade unavailable: {type(exc).__name__}: {exc}")
 
-# Master cumulative download/status must appear immediately before the single
-# daily trading tip. Keep the journal columns untouched.
-st.markdown("### MASTER DOWNLOAD — CUMULATIVE")
-st.markdown("Cumulative journal: 0 trade record(s). Original journal columns preserved.")
+# The main dashboard already renders MASTER DOWNLOAD — CUMULATIVE.
+# Do not render another copy here.
 
-# One and only one DAILY TRADING TIP, at the very end of the page.
+# The main dashboard's legacy tip is hidden; this is the single final tip.
 st.markdown("""
 <style>
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="stMainBlockContainer"],[data-testid="stHeader"],header,main,section{background:#000!important}
 .block-container{background:#000!important}
 .stMarkdown,.stMarkdown p,.stCaption,.stCaption p{color:#fff!important}
-/* Hide the legacy tip block and its preceding heading from single_master.py. */
-.tip{display:none!important}
+/* Remove the legacy tip, its heading, and its trailing refresh caption. */
+[data-testid="stElementContainer"]:has(.tip){display:none!important}
 [data-testid="stElementContainer"]:has(+ [data-testid="stElementContainer"] .tip){display:none!important}
+[data-testid="stElementContainer"]:has(.tip) + [data-testid="stElementContainer"]{display:none!important}
+.tip{display:none!important}
 .tip-final{background:#101b2b;border:1px solid #294367;border-radius:11px;padding:13px;font-weight:700;color:#fff}
 </style>
 """, unsafe_allow_html=True)
