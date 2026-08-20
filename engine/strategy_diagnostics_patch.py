@@ -13,8 +13,8 @@ def _blank():
 def _setup(strategy, side, today_open, pdh, pdl, ltp, today_low, today_high, prior_high, prior_low, pullback_low, pullback_high, breakout_seen, pdh_swept, pdl_swept):
     if strategy == "S1":
         if side == "BUY":
-            return today_open > pdh and (pdh_swept and today_low < pdh)
-        return today_open < pdl and (pdl_swept and today_high > pdl)
+            return today_open > pdh and pdh_swept and today_low < pdh
+        return today_open < pdl and pdl_swept and today_high > pdl
     if strategy == "S2":
         if side == "BUY":
             return breakout_seen and ltp >= pdh and pullback_low is not None and pullback_low <= pdh
@@ -22,8 +22,8 @@ def _setup(strategy, side, today_open, pdh, pdl, ltp, today_low, today_high, pri
     if strategy == "S3":
         inside_range = pdl < today_open < pdh
         if side == "BUY":
-            return inside_range and (pdl_swept and today_low < pdl)
-        return inside_range and (pdh_swept and today_high > pdh)
+            return inside_range and pdl_swept and today_low < pdl
+        return inside_range and pdh_swept and today_high > pdh
     if strategy == "S4":
         return (prior_high is not None and ltp > prior_high) if side == "BUY" else (prior_low is not None and ltp < prior_low)
     return ltp > pdh if side == "BUY" else ltp < pdl
@@ -57,34 +57,34 @@ def install(MasterEngine):
 
         prior = d.iloc[:-1] if len(d) >= 2 else d.iloc[0:0]
         if not prior.empty:
-            pdh_swept = bool((prior["Low"] < pdh).any() or (prior["High"] > pdh).any())
-            pdl_swept = bool((prior["Low"] < pdl).any() or (prior["High"] > pdl).any())
+            # Match master_engine: BUY uses PDL sweep, SELL uses PDH sweep.
+            pdh_swept = bool((prior["High"] > pdh).any())
+            pdl_swept = bool((prior["Low"] < pdl).any())
             breakout_buy = bool((prior["High"] > pdh).any())
             breakout_sell = bool((prior["Low"] < pdl).any())
             prior_high, prior_low = float(prior["High"].max()), float(prior["Low"].min())
-            pullback_low, pullback_high = prior_low, prior_high
+            pullback_low, pullback_high = float(prior["Low"].min()), float(prior["High"].max())
         else:
             pdh_swept = pdl_swept = breakout_buy = breakout_sell = False
             prior_high = prior_low = pullback_low = pullback_high = None
 
         for side in ("BUY", "SELL"):
-            candle_ok = ((side == "BUY" and float(prev["Close"]) > float(prev["Open"])) or
-                         (side == "SELL" and float(prev["Close"]) < float(prev["Open"])))
-            side_ok = bool((side == "BUY" and snap.get("buy_alignment") and candle_ok) or
-                           (side == "SELL" and snap.get("sell_alignment") and candle_ok))
+            # Candle colour is diagnostic only; master_engine no longer hard-blocks on it.
+            side_ok = bool((side == "BUY" and snap.get("buy_alignment")) or
+                           (side == "SELL" and snap.get("sell_alignment")))
             for strategy in STRATEGIES:
                 if not side_ok:
-                    stats[strategy]["last_rejection"] = "SIDE_OR_CANDLE_GATE_BLOCKED"
+                    stats[strategy]["last_rejection"] = "MASTER_ALIGNMENT_BLOCKED"
                     continue
                 stats[strategy]["side_gate"] += 1
                 setup = _setup(strategy, side, today_open, pdh, pdl, ltp, today_low, today_high,
-                                prior_high, prior_low, pullback_low, pullback_high,
-                                breakout_buy if side == "BUY" else breakout_sell,
-                                pdh_swept, pdl_swept)
+                               prior_high, prior_low, pullback_low, pullback_high,
+                               breakout_buy if side == "BUY" else breakout_sell,
+                               pdh_swept, pdl_swept)
                 if setup:
                     stats[strategy]["setup_pass"] += 1
                     stats[strategy]["last_rejection"] = None
-                elif stats[strategy]["last_rejection"] == "SIDE_OR_CANDLE_GATE_BLOCKED":
+                else:
                     stats[strategy]["last_rejection"] = "SETUP_BLOCKED"
 
         result = original_eval(self, symbol, ref, d, snap)
@@ -109,7 +109,7 @@ def install(MasterEngine):
             elif row["side_gate"] > 0:
                 reason = "NO_STOCK_PASSED_SETUP"
             else:
-                reason = "SIDE_OR_CANDLE_GATE_BLOCKED"
+                reason = "MASTER_ALIGNMENT_BLOCKED"
             self.diagnostics["strategy_stop_reason"][s] = reason
         try:
             DIAG.parent.mkdir(parents=True, exist_ok=True)
