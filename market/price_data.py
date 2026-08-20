@@ -7,7 +7,7 @@ import pandas as pd
 
 INDIA_TZ=ZoneInfo("Asia/Kolkata")
 class PriceData:
-    _cache_lock=threading.RLock(); _multi_1m_cache={}; _multi_1m_cache_at={}; _live_price_cache={}; _live_price_cache_at={}
+    _cache_lock=threading.RLock(); _multi_1m_cache={}; _multi_1m_cache_at={}; _multi_daily_cache={}; _multi_daily_cache_at={}; _live_price_cache={}; _live_price_cache_at={}
     def __init__(self):self.valid_intervals={"1m","5m","1d"};self.max_workers=4
     @staticmethod
     def _clean(df):
@@ -17,14 +17,14 @@ class PriceData:
         except Exception:return pd.DataFrame()
         for c in ["Open","High","Low","Close","Volume"]:
             if c in x.columns:x[c]=pd.to_numeric(x[c],errors="coerce")
-        required=["Datetime","Open","High","Low","Close"]
-        if any(c not in x.columns for c in required):return pd.DataFrame()
-        x=x.dropna(subset=required);x=x[(x["Open"]>0)&(x["High"]>=x[["Open","Low","Close"]].max(axis=1))&(x["Low"]<=x[["Open","High","Close"]].min(axis=1))]
+        req=["Datetime","Open","High","Low","Close"]
+        if any(c not in x.columns for c in req):return pd.DataFrame()
+        x=x.dropna(subset=req);x=x[(x["Open"]>0)&(x["High"]>=x[["Open","Low","Close"]].max(axis=1))&(x["Low"]<=x[["Open","High","Close"]].min(axis=1))]
         return x.sort_values("Datetime").drop_duplicates("Datetime").reset_index(drop=True)
     @staticmethod
     def _completed(df):
         if df.empty:return df
-        cutoff=datetime.now(INDIA_TZ).replace(second=0,microsecond=0);return df[df["Datetime"]<cutoff].copy().reset_index(drop=True)
+        return df[df["Datetime"]<datetime.now(INDIA_TZ).replace(second=0,microsecond=0)].copy().reset_index(drop=True)
     def _today(self,df):
         x=self._clean(df);return x[x["Datetime"].dt.date==datetime.now(INDIA_TZ).date()].reset_index(drop=True) if not x.empty else x
     def _map(self,symbols):
@@ -43,13 +43,27 @@ class PriceData:
     def get_1m(self,symbol):return self.get_candles(symbol,"1m","1d")
     def get_5m(self,symbol):return self.get_candles(symbol,"5m","1d")
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
+    def get_multi_daily(self,symbols,period="10d"):
+        symbols=tuple(dict.fromkeys(str(s).upper().replace(".NS","") for s in symbols if str(s).strip()));now=time.monotonic()
+        with self._cache_lock:
+            cached=self._multi_daily_cache.get((symbols,period))
+            if cached is not None and now-self._multi_daily_cache_at.get((symbols,period),0)<300:return {k:v.copy() for k,v in cached.items()}
+        mapping=self._map(symbols);result={s:pd.DataFrame() for s in symbols};from market.dhan_data import daily_history
+        def one(row):
+            try:return str(row["Symbol"]).upper(),daily_history(str(row["SecurityId"]),(datetime.now(INDIA_TZ).date()-timedelta(days=period if str(period).isdigit() else 15)).isoformat(),(datetime.now(INDIA_TZ).date()+timedelta(days=1)).isoformat())
+            except Exception:return str(row["Symbol"]).upper(),pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            for f in as_completed([pool.submit(one,row) for _,row in mapping.iterrows()]):
+                try:s,d=f.result();result[s]=d
+                except Exception:pass
+        with self._cache_lock:self._multi_daily_cache[(symbols,period)]=result;self._multi_daily_cache_at[(symbols,period)]=time.monotonic()
+        return {k:v.copy() for k,v in result.items()}
     def get_multi_1m(self,symbols):
         symbols=tuple(dict.fromkeys(str(s).upper().replace(".NS","") for s in symbols if str(s).strip()));now=time.monotonic()
         with self._cache_lock:
             cached=self._multi_1m_cache.get(symbols)
             if cached is not None and now-self._multi_1m_cache_at.get(symbols,0)<45:return {k:v.copy() for k,v in cached.items()}
-        mapping=self._map(symbols);result={s:pd.DataFrame() for s in symbols};today=datetime.now(INDIA_TZ).date();start=f"{today.isoformat()} 09:00:00";end=datetime.now(INDIA_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        from market.dhan_data import intraday_history
+        mapping=self._map(symbols);result={s:pd.DataFrame() for s in symbols};today=datetime.now(INDIA_TZ).date();start=f"{today.isoformat()} 09:00:00";end=datetime.now(INDIA_TZ).strftime("%Y-%m-%d %H:%M:%S");from market.dhan_data import intraday_history
         def one(row):
             try:return str(row["Symbol"]).upper(),self._completed(intraday_history(str(row["SecurityId"]),start,end,1))
             except Exception:return str(row["Symbol"]).upper(),pd.DataFrame()
@@ -68,8 +82,7 @@ class PriceData:
         m=map_nifty500([key]);q=market_quote(m,cache_seconds=1) if len(m)==1 else pd.DataFrame()
         if q.empty:return None
         r=q.iloc[0];out={"Close":float(r["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(r["TodayOpen"]),"High":float(r["TodayHigh"]),"Low":float(r["TodayLow"]),"PreviousClose":float(r["PreviousClose"]),"NetChange":float(r["NetChange"]),"price_source":"Dhan"}
-        with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic()
-        return out
+        with self._cache_lock:self._live_price_cache[key]=dict(out);self._live_price_cache_at[key]=time.monotonic();return out
     def get_latest_market_price(self,symbol):return self.get_latest_live_price(symbol,max_age_seconds=8)
     def get_index_1m(self,*args,**kwargs):return pd.DataFrame()
     def get_index_change_pct(self,ticker="NIFTY 500",intraday=None,max_age_seconds=10):
