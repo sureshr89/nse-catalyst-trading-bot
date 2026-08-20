@@ -1,0 +1,13 @@
+name: File 20 Test - Data Integrity
+on: {workflow_dispatch:}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt pytest
+      - run: python -m py_compile market/closed_session.py market/dhan_data.py market/live_price.py market/nifty500_breadth.py market/price_data.py
+      - run: python -m pytest -q tests/test_closed_session.py tests/test_nifty500_breadth.py tests/test_price_data.py
+        env: {PYTHONPATH: .}
