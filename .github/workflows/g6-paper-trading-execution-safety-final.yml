@@ -25,7 +25,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          python -m pip install pytest pandas requests
+
+      - name: Verify pytest is available
+        run: python -m pytest --version
 
       - name: Run G6 paper execution safety tests
         run: python -m pytest -q tests/test_g6_paper_execution_safety_final.py
