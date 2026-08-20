@@ -6,13 +6,12 @@ import pandas as pd
 from data.stock_universe import StockUniverse
 from data.sector_alignment import load_sector_map,calculate_sector_alignment
 from market.dhan_data import configured as dhan_configured,dhan_status,map_nifty500,market_quote,index_quote
-INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30);REQUIRED=500;QUOTE_RETRIES=4;QUOTE_RETRY_DELAY=0.75
+INDIA_TZ=ZoneInfo("Asia/Kolkata");CACHE_SECONDS=15;MARKET_OPEN=dt_time(9,15);MARKET_CLOSE=dt_time(15,30);REQUIRED=500;QUOTE_RETRIES=5;QUOTE_RETRY_DELAY=0.75
 class Nifty500Breadth:
  def __init__(self):self.universe_engine=StockUniverse();self._lock=threading.RLock();self._cached_at=0.0;self._cached=None;self._mapping=pd.DataFrame();self._mapping_at=0.0;self._universe=pd.DataFrame()
  def _get_universe(self):
   if self._universe is not None and len(self._universe)==REQUIRED and self._universe["Symbol"].nunique()==REQUIRED and "Sector" in self._universe.columns and self._universe["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).sum()==0:return self._universe
-  u=self.universe_engine.get_dataframe(refresh=False)
-  valid=u is not None and not u.empty and "Symbol" in u.columns and "Sector" in u.columns and len(u)==REQUIRED and u["Symbol"].nunique()==REQUIRED and u["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).sum()==0
+  u=self.universe_engine.get_dataframe(refresh=False);valid=u is not None and not u.empty and "Symbol" in u.columns and "Sector" in u.columns and len(u)==REQUIRED and u["Symbol"].nunique()==REQUIRED and u["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).sum()==0
   if not valid:u=self.universe_engine.get_dataframe(refresh=True)
   if u is None or u.empty or "Symbol" not in u.columns:return pd.DataFrame()
   u=u.copy();u["Symbol"]=u["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS","",regex=False);u=u.drop_duplicates("Symbol").reset_index(drop=True)
@@ -39,14 +38,12 @@ class Nifty500Breadth:
   symbols=u.Symbol.astype(str).str.upper().str.replace(".NS","",regex=False).drop_duplicates().tolist()
   if len(symbols)!=REQUIRED:return self._fail(f"NIFTY_500_UNIVERSE_ONLY_{len(symbols)}/500",mode,now,len(symbols))
   if not dhan_configured():return self._fail("DHAN_NOT_CONFIGURED",mode,now)
-  mapping=self._get_mapping(symbols)
-  mapping_symbols=set(mapping.Symbol.astype(str).str.upper()) if not mapping.empty else set()
+  mapping=self._get_mapping(symbols);mapping_symbols=set(mapping.Symbol.astype(str).str.upper()) if not mapping.empty else set()
   if len(mapping)!=REQUIRED or len(mapping_symbols)!=REQUIRED or mapping.SecurityId.astype(str).nunique()!=REQUIRED:return self._fail(f"DHAN_SECURITY_MAPPING_INVALID_{len(mapping)}/500",mode,now,len(mapping),stage="MAPPING")
   if mapping_symbols!=set(symbols):return self._fail("DHAN_SECURITY_MAPPING_SYMBOL_MISMATCH",mode,now,len(mapping),stage="MAPPING")
   quotes=pd.DataFrame();last_quote_error=""
   for attempt in range(1,QUOTE_RETRIES+1):
-   quotes=market_quote(mapping,cache_seconds=0)
-   quote_symbols=set(quotes.Symbol.astype(str).str.upper()) if not quotes.empty else set()
+   quotes=market_quote(mapping,cache_seconds=0);quote_symbols=set(quotes.Symbol.astype(str).str.upper()) if not quotes.empty else set()
    if len(quotes)==REQUIRED and len(quote_symbols)==REQUIRED and quote_symbols==set(symbols):break
    status=dhan_status();last_quote_error=status.get("message") or f"Dhan returned {len(quotes)}/500 verified quotes"
    if attempt<QUOTE_RETRIES:time.sleep(QUOTE_RETRY_DELAY)
@@ -59,7 +56,8 @@ class Nifty500Breadth:
   quotes=quotes.dropna(subset=["SessionClose","PreviousClose"]);quotes=quotes[(quotes.SessionClose>0)&(quotes.PreviousClose>0)]
   if len(quotes)!=REQUIRED:return self._fail(f"DHAN_VALID_PRICE_DATA_{len(quotes)}/500",mode,now,len(quotes),stage="PRICE")
   quotes["change_pct"]=(quotes.SessionClose-quotes.PreviousClose)/quotes.PreviousClose*100
-  advances=int((quotes.change_pct>0).sum());declines=int((quotes.change_pct<0).sum());unchanged=int((quotes.change_pct==0).sum());ad_ratio=(advances/declines if declines else None)
+  delta=quotes.SessionClose-quotes.PreviousClose;tolerance=quotes.PreviousClose.abs()*1e-10
+  advances=int((delta>tolerance).sum());declines=int((delta<-tolerance).sum());unchanged=int(REQUIRED-advances-declines);ad_ratio=(advances/declines if declines else None)
   try:
    sm=load_sector_map(u,refresh=True);sector=calculate_sector_alignment(quotes[["Symbol","change_pct"]],sm,"change_pct")
   except Exception as exc:sector={"available":False,"alignment_pct":None,"mapped":0,"priced":0,"sectors":0,"positive_sectors":0,"negative_sectors":0,"coverage":"0/500","error":str(exc)}
@@ -67,10 +65,12 @@ class Nifty500Breadth:
   nifty=None
   try:nifty=index_quote("NIFTY 500")
   except Exception:nifty=None
-  prev_close=float(nifty.get("PreviousClose") or 0) if nifty else 0.0;live_ltp=float(nifty.get("LTP") or 0) if nifty else 0.0;day_close=float(nifty.get("Close") or 0) if nifty else 0.0
-  if mode=="closed":session_close=day_close if day_close>0 else live_ltp;nifty_change=((session_close-prev_close)/prev_close*100) if prev_close>0 else None;display_close=session_close;label="Latest completed NSE session"
-  else:nifty_change=((live_ltp-prev_close)/prev_close*100) if prev_close>0 else None;display_close=prev_close;label="Previous completed NSE session"
-  result={"universe":"NIFTY 500","total":REQUIRED,"evaluated":REQUIRED,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad_ratio,"direction":"BULLISH" if advances>declines else "BEARISH" if declines>advances else "NEUTRAL","complete":True,"reason":"OK" if nifty else "DHAN_500_QUOTES_OK_INDEX_QUOTE_UNAVAILABLE","updated_at":f"{label} • market close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":nifty_change,"nifty500_ltp":live_ltp,"nifty500_previous_close":display_close if display_close>0 else None,"nifty500_reference_close":prev_close if prev_close>0 else None,"closed_session_label":label,"closed_session_basis":"Dhan completed-session close" if mode=="closed" else "Dhan live LTP","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":True,"sector_coverage":sector.get("coverage","500/500"),"sector_mapped":REQUIRED,"sector_priced":REQUIRED,"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":quotes[[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","TodayClose","PreviousClose","NetChange","Volume","change_pct"] if c in quotes.columns]].copy(),"_cache_date":now.date(),"_cache_mode":mode}
+  if not nifty:return self._fail("DHAN_NIFTY_500_INDEX_QUOTE_UNAVAILABLE",mode,now,len(quotes),sector=sector,stage="INDEX")
+  prev_close=float(nifty.get("PreviousClose") or 0);live_ltp=float(nifty.get("LTP") or 0);day_close=float(nifty.get("Close") or 0)
+  if prev_close<=0 or live_ltp<=0:return self._fail("DHAN_NIFTY_500_INDEX_INVALID_PRICE",mode,now,len(quotes),sector=sector,stage="INDEX")
+  if mode=="closed":session_close=day_close if day_close>0 else live_ltp;nifty_change=((session_close-prev_close)/prev_close*100);display_close=session_close;label="Latest completed NSE session"
+  else:nifty_change=((live_ltp-prev_close)/prev_close*100);display_close=prev_close;label="Previous completed NSE session"
+  result={"universe":"NIFTY 500","total":REQUIRED,"evaluated":REQUIRED,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad_ratio,"direction":"BULLISH" if advances>declines else "BEARISH" if declines>advances else "NEUTRAL","complete":True,"reason":"OK","updated_at":f"{label} • market close 15:30 IST • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":nifty_change,"nifty500_ltp":live_ltp,"nifty500_previous_close":display_close if display_close>0 else None,"nifty500_reference_close":prev_close if prev_close>0 else None,"closed_session_label":label,"closed_session_basis":"Dhan completed-session close" if mode=="closed" else "Dhan live LTP","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":True,"sector_coverage":sector.get("coverage","500/500"),"sector_mapped":REQUIRED,"sector_priced":REQUIRED,"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":quotes[[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","TodayClose","PreviousClose","NetChange","Volume","change_pct"] if c in quotes.columns]].copy(),"_cache_date":now.date(),"_cache_mode":mode}
   return self._store(result)
  def _store(self,result):
   with self._lock:self._cached=result;self._cached_at=time.monotonic()
