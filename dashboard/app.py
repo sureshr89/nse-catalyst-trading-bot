@@ -83,8 +83,38 @@ finally:
     st.download_button = _original_download_button
     st.caption = _original_caption
 
+# Real, recognized price-action strategy playbook. This is presentation-only:
+# the engine continues to evaluate the canonical S1-S5 rules already implemented
+# in strategy/nifty500_price_action_strategies.py.
+st.markdown("""
+<style>
+.strategy-playbook{background:#0b1422;border:1px solid #294367;border-radius:12px;padding:12px;margin:14px 0}
+.strategy-playbook-title{font-size:1.05rem;font-weight:900;color:#fff;margin-bottom:4px}
+.strategy-playbook-sub{font-size:.72rem;color:#c8d2e1;margin-bottom:10px}
+.strategy-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}
+.strategy-box{background:#101b2b;border:1px solid #294367;border-radius:10px;padding:9px;min-height:132px}
+.strategy-code{font-size:.68rem;font-weight:900;color:#7fa2d5}
+.strategy-name{font-size:.78rem;font-weight:900;color:#fff;margin:3px 0 7px}
+.strategy-line{font-size:.61rem;color:#dbe4ef;line-height:1.35;margin-top:4px}
+.strategy-tag{display:inline-block;font-size:.55rem;font-weight:900;color:#9ed9b5;background:#10271d;border:1px solid #3e664e;border-radius:5px;padding:2px 5px;margin-top:6px}
+@media(max-width:1000px){.strategy-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:650px){.strategy-grid{grid-template-columns:repeat(1,1fr)}}
+</style>
+<div class="strategy-playbook">
+  <div class="strategy-playbook-title">📚 REAL PRICE-ACTION STRATEGIES — S1–S5</div>
+  <div class="strategy-playbook-sub">Recognized market setups mapped to the bot's existing canonical S1–S5 rules. No new signal logic is added here.</div>
+  <div class="strategy-grid">
+    <div class="strategy-box"><div class="strategy-code">S1 • LIQUIDITY SWEEP / RECLAIM</div><div class="strategy-name">PDH/PDL Sweep + Open Reclaim</div><div class="strategy-line"><b>Buy:</b> Open &gt; PDH → PDH touch/sweep → LTP reclaims open.</div><div class="strategy-line"><b>Sell:</b> Open &lt; PDL → PDL touch/sweep → LTP loses open.</div><div class="strategy-tag">SL: PDH / PDL • 1.25R</div></div>
+    <div class="strategy-box"><div class="strategy-code">S2 • BREAKOUT + RETEST</div><div class="strategy-name">PDH/PDL Breakout Retest</div><div class="strategy-line"><b>Buy:</b> PDH breakout → retest PDH → reclaim.</div><div class="strategy-line"><b>Sell:</b> PDL breakdown → retest PDL → failure.</div><div class="strategy-tag">SL: Retest Low / High • 1.25R</div></div>
+    <div class="strategy-box"><div class="strategy-code">S3 • FALSE BREAKOUT / REVERSAL</div><div class="strategy-name">Opposite PDH/PDL Sweep</div><div class="strategy-line"><b>Buy:</b> Open inside range → sweep PDL → reversal above open.</div><div class="strategy-line"><b>Sell:</b> Open inside range → sweep PDH → reversal below open.</div><div class="strategy-tag">SL: Today's Low / High • 1.25R</div></div>
+    <div class="strategy-box"><div class="strategy-code">S4 • INTRADAY BREAKOUT</div><div class="strategy-name">Previous Intraday High/Low Break</div><div class="strategy-line"><b>Buy:</b> LTP breaks the previously formed intraday high.</div><div class="strategy-line"><b>Sell:</b> LTP breaks the previously formed intraday low.</div><div class="strategy-tag">SL: Prior Low / High • 1.25R</div></div>
+    <div class="strategy-box"><div class="strategy-code">S5 • PDH/PDL BREAKOUT</div><div class="strategy-name">Direct Previous-Day Break</div><div class="strategy-line"><b>Buy:</b> Live LTP &gt; PDH.</div><div class="strategy-line"><b>Sell:</b> Live LTP &lt; PDL.</div><div class="strategy-tag">SL: PDH / PDL • 1.25R</div></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
 # Exact page order from here: Journal (inside the original dashboard) ->
-# Trade Path -> Test Trade -> Master Download -> Daily Trading Tip.
+# Strategy Playbook -> Trade Path -> Test Trade -> Master Download -> Daily Trading Tip.
 render_trade_path()
 
 # Isolated TEST trade only. It never changes S1-S5 or the journal.
