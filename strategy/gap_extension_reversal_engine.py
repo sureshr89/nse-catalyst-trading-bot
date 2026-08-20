@@ -58,16 +58,15 @@ class GapExtensionReversalEngine:
         trigger_high = max(highs)
         trigger_low = min(lows)
 
-        # Sell: opening gap must be above PDH, followed by an extension above the
-        # open, then live LTP must reverse below the open. PDC is the target.
+        # GAP-UP extension reversal: open above PDH, extend above the open,
+        # then live LTP reverses below the open. PDC is the target.
         if open_price > pdh and pdc < open_price and trigger_high > open_price:
             if entry < open_price and nifty <= 0.25 and pdc < entry < trigger_high:
                 return self._result(symbol, "SELL", entry, pdc, trigger_high)
 
-        # Buy mirror: opening gap must be inside the PDH/PDL gap (above PDH but
-        # below PDL), followed by an extension below the open, then live LTP
-        # reclaims above the open. PDC is the target.
-        if pdl is not None and open_price > pdh and open_price < pdl and pdc > open_price and trigger_low < open_price:
+        # GAP-DOWN extension reversal: open below PDL, extend below the open,
+        # then live LTP reclaims above the open. PDC is the target.
+        if pdl is not None and open_price < pdl and pdc > open_price and trigger_low < open_price:
             if entry > open_price and nifty >= -0.25 and trigger_low < entry < pdc:
                 return self._result(symbol, "BUY", entry, pdc, trigger_low)
         return None
@@ -76,6 +75,6 @@ class GapExtensionReversalEngine:
         try:
             o, pdh, pdl = args[:3]
             if float(o) > float(pdh): return "SELL"
-            if float(o) < float(pdl): return "BUY"
+            if float(o) < float(pdl): return "BUY'
         except Exception: pass
         return None
