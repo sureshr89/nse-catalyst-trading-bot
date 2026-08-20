@@ -30,6 +30,7 @@ def _write(path, frame):
 
 
 def _restore_if_missing(path, repo_path):
+    # Restore only the authoritative master file, never legacy datasets.
     if path.exists() and path.stat().st_size > 0:
         return
     try:
