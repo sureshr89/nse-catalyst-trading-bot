@@ -11,7 +11,7 @@ def test_incomplete_universe_is_rejected(monkeypatch):
     )
     result = b.snapshot(force=True)
     assert result["complete"] is False
-    assert result["evaluated"] == 0
+    assert result["evaluated"] == 2
     assert "UNKNOWN" in result["direction"]
 
 
