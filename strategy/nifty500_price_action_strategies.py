@@ -111,17 +111,15 @@ def evaluate_s3(symbol, side, today_open, pdh, pdl, today_low, today_high, ltp,
     if po is None or pc is None: return None
     down_pdl = bool(pdl_swept_down or (pdl_swept and today_low < float(pdl)))
     up_pdh = bool(pdh_swept_up or (pdh_swept and today_high > float(pdh)))
-    if side == "BUY" and today_open > pdl and down_pdl:
+    # S3 is the opposite-level sweep while the opening price is inside the
+    # previous day's PDH/PDL range, followed by an open-price reversal.
+    inside_range = float(pdl) < float(today_open) < float(pdh)
+    if side == "BUY" and inside_range and down_pdl:
         return make_signal("S3", side, symbol, ltp, today_low, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open > PDL -> sweep below PDL -> reversal setup", **g)
-    if side == "SELL" and today_open < pdh and up_pdh:
-        # The S3 contract treats the observed sweep/reversal price as the protective level
-        # when the supplied intraday high is below the live reversal price.
-        stop = max(float(today_high), float(ltp))
-        if stop <= float(ltp):
-            return None
-        return make_signal("S3", side, symbol, float(today_open), stop, previous_candle_open=po, previous_candle_close=pc,
-                           reason="Open < PDH -> sweep above PDH -> reversal setup", **g)
+                           reason="Open inside PDH/PDL -> sweep below PDL -> reclaim", **g)
+    if side == "SELL" and inside_range and up_pdh:
+        return make_signal("S3", side, symbol, ltp, today_high, previous_candle_open=po, previous_candle_close=pc,
+                           reason="Open inside PDH/PDL -> sweep above PDH -> reject", **g)
     return None
 
 def evaluate_s4(symbol, side, today_high, today_low, prior_intraday_high, prior_intraday_low, ltp, **g):
@@ -143,7 +141,7 @@ def evaluate_s5(symbol, side, pdh, pdl, ltp, **g):
 STRATEGY_DEFINITIONS={
 "S1":{"name":"PDH/PDL Sweep + Open Reclaim","entry":"Open beyond PDH/PDL -> directional sweep -> reversal setup","sl":"Today's Low / High at entry","target":"1.25R"},
 "S2":{"name":"PDH/PDL Breakout + Retest","entry":"Break PDH/PDL -> retest -> reclaim/fail","sl":"Retest Low / High","target":"1.25R"},
-"S3":{"name":"Opposite PDH/PDL Sweep + Open Reversal","entry":"Sweep opposite prior-day level -> reversal setup","sl":"Today's Low / High at entry","target":"1.25R"},
+"S3":{"name":"Opposite PDH/PDL Sweep + Open Reversal","entry":"Open inside PDH/PDL -> sweep opposite prior-day level -> reversal","sl":"Today's Low / High at entry","target":"1.25R"},
 "S4":{"name":"Intraday High/Low Breakout","entry":"Break previously formed intraday High/Low","sl":"Previous intraday Low / High","target":"1.25R"},
 "S5":{"name":"Direct PDH/PDL Breakout","entry":"Break PDH / PDL","sl":"PDH / PDL","target":"1.25R"}}
 
