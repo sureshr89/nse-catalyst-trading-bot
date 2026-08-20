@@ -101,7 +101,7 @@ def _card(label, value, status=None):
 
 
 def _render_test_trade(rows, snap, idx):
-    st.markdown("#### 🧪 One isolated aligned BUY test trade")
+    st.markdown("#### 5. 🧪 One isolated aligned BUY test trade")
     st.caption("First available 15-second cycle at/after 09:15 IST: NIFTY positive + A/D > 1 + positive sectors > negative sectors + stock above open. Exactly one test trade. Minimum 1-minute hold. SL 0.5% / Target 1%. Otherwise exit 2:45 PM IST. Memory-only.")
     now = _now_ist()
     state = _test_state()
@@ -154,8 +154,6 @@ def _render_test_trade(rows, snap, idx):
 
 
 def render_test_tab():
-    st.markdown("### 🧪 TEST — Live Data / Entry Check")
-    st.caption("READ-ONLY diagnostic • one isolated in-memory BUY test • no signals • no journal • S1–S5 unchanged")
     try:
         from market.nifty500_breadth import BREADTH
         from market.dhan_data import configured, index_quote
