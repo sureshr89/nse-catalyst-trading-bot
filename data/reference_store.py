@@ -91,10 +91,14 @@ class ReferenceStore:
             if refs.empty: return refs
             quotes = market_quote(mapping, cache_seconds=10)
             if not quotes.empty:
-                quotes = quotes[["Symbol","TodayOpen","TodayHigh","TodayLow","LTP","PreviousClose"]].copy()
-                refs = refs.merge(quotes, on="Symbol", how="left")
-                refs["TodayOpen"] = pd.to_numeric(refs["TodayOpen"], errors="coerce")
-            refs["PreviousDayTurnover"] = refs["PreviousDayClose"] * refs["PreviousDayVolume"]
+                keep=[c for c in ["Symbol","TodayOpen","TodayHigh","TodayLow","LTP","PreviousClose"] if c in quotes.columns]
+                quotes = quotes[keep].copy()
+                refs = refs.merge(quotes, on="Symbol", how="left", suffixes=("", "_quote"))
+                if "TodayOpen_quote" in refs.columns:
+                    refs["TodayOpen"] = refs.get("TodayOpen_quote").combine_first(refs.get("TodayOpen"))
+                    refs.drop(columns=[c for c in ["TodayOpen_quote"] if c in refs.columns], inplace=True)
+                refs["TodayOpen"] = pd.to_numeric(refs.get("TodayOpen"), errors="coerce")
+            refs["PreviousDayTurnover"] = pd.to_numeric(refs["PreviousDayClose"], errors="coerce") * pd.to_numeric(refs.get("PreviousDayVolume",0), errors="coerce").fillna(0)
             return refs
         except Exception as error:
             print(f"Dhan reference preparation failed: {type(error).__name__}: {error}")
@@ -147,13 +151,21 @@ class ReferenceStore:
         except Exception: return False
 
     def _save_result(self, result):
-        result=result.merge(self.universe[["Symbol","Industry"]],on="Symbol",how="left"); result["PreparedAtIST"]=datetime.now(INDIA_TZ).isoformat(timespec="seconds"); result["ReferenceCoverage"]=round(self._coverage(result)*100,1); result.to_csv(self.path,index=False)
-        board=result.dropna(subset=["TodayOpen"]).copy()
-        if not board.empty:
+        result=result.copy(); result["Symbol"]=result["Symbol"].map(self._clean_symbol)
+        # Industry/Sector are metadata only.  Never let an optional metadata
+        # column failure turn a valid 500-reference set into zero references.
+        metadata_cols=[c for c in ["Symbol","Industry","Sector"] if c in self.universe.columns]
+        if len(metadata_cols)>=2:
+            result=result.merge(self.universe[metadata_cols].drop_duplicates("Symbol"),on="Symbol",how="left",suffixes=("","_universe"))
+            for col in ["Industry","Sector"]:
+                alt=f"{col}_universe"
+                if col not in result.columns and alt in result.columns: result.rename(columns={alt:col},inplace=True)
+        result["PreparedAtIST"]=datetime.now(INDIA_TZ).isoformat(timespec="seconds"); result["ReferenceCoverage"]=round(self._coverage(result)*100,1); result.to_csv(self.path,index=False)
+        board=result.dropna(subset=[c for c in ["TodayOpen"] if c in result.columns]).copy()
+        if not board.empty and {"TodayOpen","PreviousDayClose","PDH","PDL"}.issubset(board.columns):
             board["Gap"]=board["TodayOpen"]-board["PreviousDayClose"]; board["GapPercent"]=board["Gap"]/board["PreviousDayClose"]*100
             board["GapType"]=board.apply(lambda r:"GAP_UP" if r["TodayOpen"]>r["PDH"] else "GAP_DOWN" if r["TodayOpen"]<r["PDL"] else "INSIDE_PDH_PDL",axis=1)
-            board["GapFromPDH_PDL"]=board.apply(lambda r:r["TodayOpen"]-r["PDH"] if r["GapType"]=="GAP_UP" else r["TodayOpen"]-r["PDL"] if r["GapType"]=="GAP_DOWN" else 0.0,axis=1)
-            board["GapPercentFromPDH_PDL"]=board["GapFromPDH_PDL"]/board["PDH"].where(board["GapType"]=="GAP_UP",board["PDL"])*100; board.to_csv(Path("outputs")/"gap_analysis.csv",index=False)
+            board["GapFromPDH_PDL"]=board.apply(lambda r:r["TodayOpen"]-r["PDH"] if r["GapType"]=="GAP_UP" else r["TodayOpen"]-r["PDL"] if r["GapType"]=="GAP_DOWN" else 0.0,axis=1); board["GapPercentFromPDH_PDL"]=board["GapFromPDH_PDL"]/board["PDH"].where(board["GapType"]=="GAP_UP",board["PDL"])*100; board.to_csv(Path("outputs")/"gap_analysis.csv",index=False)
         return result
 
     def prepare(self):
