@@ -1,15 +1,25 @@
 """Primary NSE Catalyst Streamlit entrypoint."""
 from pathlib import Path
 import runpy
+import sys
+
 import streamlit as st
+
+# Streamlit Cloud executes dashboard/app.py with the dashboard directory as the
+# script directory. The trading engine (main.py) lives at the repository root,
+# so make the repository root importable before importing the engine.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import main as _engine_main
 from dashboard.trade_path_diagnostics import capture as capture_trade_path, render as render_trade_path
 
-ROOT = Path(__file__).resolve().parents[1]
 
 @st.cache_resource(show_spinner=False)
 def _get_trading_engine():
     return _engine_main.MasterEngine()
+
 
 @st.fragment(run_every="15s")
 def _live_trade_worker():
@@ -26,6 +36,7 @@ def _live_trade_worker():
         except Exception:
             pass
         st.session_state["trade_worker_error"] = f"{type(exc).__name__}: {exc}"
+
 
 _live_trade_worker()
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
