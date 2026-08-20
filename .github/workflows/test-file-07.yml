@@ -1,0 +1,26 @@
+name: File 07 Test - NIFTY 500 Breadth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-file-07:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Compile File 07
+        run: python -m py_compile market/nifty500_breadth.py
+      - name: Run File 07 tests only
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_nifty500_breadth.py
