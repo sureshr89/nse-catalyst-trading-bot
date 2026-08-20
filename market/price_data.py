@@ -47,18 +47,17 @@ class PriceData:
     def get_daily(self,symbol,period="10d"):return self.get_candles(symbol,"1d",period)
     def get_latest_live_price(self,symbol,max_age_seconds=8):
         key=str(symbol).upper().replace(".NS","")
-        from market.dhan_data import configured,market_quote
-        # Dhan configuration is an authoritative gate and is checked before cache access.
-        if not configured():return None
+        from market import dhan_data
+        if not dhan_data.configured():return None
         now=time.monotonic()
         with self._cache_lock:
             cached=self._live_price_cache.get(key)
             if cached is not None and now-self._live_price_cache_at.get(key,0)<=max_age_seconds:return dict(cached)
         m=self._map([key])
-        q=market_quote(m,cache_seconds=1) if m is not None and len(m)==1 else pd.DataFrame()
+        if m is None or len(m)!=1:return None
+        q=dhan_data.market_quote(m,cache_seconds=1)
         if q is None or q.empty:return None
-        if "Symbol" in q.columns:
-            q=q[q["Symbol"].astype(str).str.upper().eq(key)]
+        if "Symbol" in q.columns:q=q[q["Symbol"].astype(str).str.upper().eq(key)]
         if q.empty:return None
         r=q.iloc[0]
         try:out={"Close":float(r["LTP"]),"Datetime":datetime.now(INDIA_TZ),"Open":float(r["TodayOpen"]),"High":float(r["TodayHigh"]),"Low":float(r["TodayLow"]),"PreviousClose":float(r["PreviousClose"]),"NetChange":float(r["NetChange"]),"price_source":"DHAN_OHLC"}
