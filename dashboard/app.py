@@ -41,14 +41,13 @@ def _live_trade_worker():
 _live_trade_worker()
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
-# This reports the result of the SAME engine cycle; it never executes a second trade.
-render_trade_path()
-
+# Render the NIFTY 500 sample and one aligned Trade Path panel only.
+# execution_status.py previously rendered a second duplicate table with stale
+# field names, which made the dashboard look broken and showed misleading zeros.
 from dashboard.nifty500_sample import render_nifty500_sample
 render_nifty500_sample()
 
-from dashboard.execution_status import render_execution_status
-render_execution_status()
+render_trade_path()
 
 st.markdown("""
 <style>
