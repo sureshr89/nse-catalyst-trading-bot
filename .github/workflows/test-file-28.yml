@@ -1,4 +1,4 @@
-name: File 28 Test - Paper Trade State Safety
+name: File 28 Test - Clean Paper Trade Safety
 on:
   workflow_dispatch:
 jobs:
@@ -13,6 +13,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - run: python -m pytest -q tests/test_paper_trade_state_safety.py
+      - run: python -m pytest -q tests/test_paper_trade_safety_clean.py
         env:
           PYTHONPATH: .
