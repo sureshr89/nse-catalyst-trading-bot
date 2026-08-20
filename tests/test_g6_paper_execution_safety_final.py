@@ -1,5 +1,5 @@
 """G6 regression checks for paper-only execution and trade lifecycle safety."""
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from papertrade.paper_trade_engine import PaperTradeEngine
@@ -18,7 +18,6 @@ def _engine(tmp_path):
 
 
 def _valid_trade():
-    # Match production risk controls: Rs 1,400 risk and 1.25+ R:R.
     return {
         "approved": True,
         "symbol": "ABC",
@@ -28,7 +27,7 @@ def _valid_trade():
         "target": 101.75,
         "quantity": 1000,
         "actual_risk": 1400.0,
-        "entry_time": datetime.now().replace(hour=10, minute=0, second=0, microsecond=0),
+        "entry_time": datetime(2026, 8, 21, 10, 0, 0),
     }
 
 
@@ -62,7 +61,7 @@ def test_stop_closes_buy_position_and_releases_capital(tmp_path):
     e = _engine(tmp_path)
     opened = e.open_trade(_valid_trade())
     assert opened["opened"] is True
-    closed = e.close_position("ABC", 98.6, datetime.now(), "STOP_LOSS")
+    closed = e.close_position("ABC", 98.6, datetime(2026, 8, 21, 10, 31), "STOP_LOSS")
     assert closed is not None
     assert closed["status"] == "CLOSED"
     assert closed["pnl"] == -1400.0
@@ -74,20 +73,18 @@ def test_ambiguous_bar_uses_stop_first(tmp_path):
     e = _engine(tmp_path)
     assert e.open_trade(_valid_trade())["opened"] is True
 
-    # process_live_price enforces the live market session. Patch the module's
-    # datetime reference with a small subclass instead of mutating the
-    # immutable datetime.datetime type itself.
     import papertrade.paper_trade_engine as engine_module
 
-    class _SessionDateTime(datetime):
+    real_datetime = datetime
+
+    class FixedSessionDateTime(real_datetime):
         @classmethod
         def now(cls, tz=None):
-            base = datetime(2026, 8, 21, 10, 30, 0)
-            if tz is not None:
-                return tz.localize(base) if hasattr(tz, "localize") else base.replace(tzinfo=tz)
-            return base
+            # 10:30 IST is safely inside the engine's 09:15–15:30 gate.
+            utc_value = real_datetime(2026, 8, 21, 5, 0, 0, tzinfo=timezone.utc)
+            return utc_value.astimezone(tz) if tz is not None else utc_value.replace(tzinfo=None)
 
-    with patch.object(engine_module, "datetime", _SessionDateTime):
+    with patch.object(engine_module, "datetime", FixedSessionDateTime):
         result = e.process_live_price("ABC", 101.0, high=102.0, low=98.0)
 
     assert result is not None
