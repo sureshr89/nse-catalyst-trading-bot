@@ -1,0 +1,26 @@
+name: File 03 Test - Dhan Market Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-file-03:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Compile File 03
+        run: python -m py_compile market/dhan_data.py
+      - name: Run File 03 tests only
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_dhan_data.py
