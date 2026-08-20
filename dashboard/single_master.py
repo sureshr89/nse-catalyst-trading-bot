@@ -78,7 +78,7 @@ def live_dashboard():
     if not signals_today.empty:
         dc=next((c for c in ["timestamp","entry_time","logged_at"] if c in signals_today.columns),None)
         if dc:
-            d=pd.to_datetime(signals_today[dc],errors="coerce',utc=True)
+            d=pd.to_datetime(signals_today[dc],errors="coerce",utc=True)
             try: d=d.dt.tz_convert(IST)
             except Exception: pass
             signals_today=signals_today[d.dt.date==today]
