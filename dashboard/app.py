@@ -54,16 +54,14 @@ _live_trade_worker()
 # appended after it without changing S1-S5.
 runpy.run_path(str(ROOT / "dashboard" / "single_master.py"), run_name="__main__")
 
-# Do not render the old five-stock sample here. It duplicated live data after
-# the dashboard's trading tip.
+# Render the live trade-path diagnostics after the master dashboard.
 render_trade_path()
 
-# Separate isolated TEST trade. It does not alter normal S1-S5 state.
-st.divider()
-st.markdown("### 🧪 TEST TRADE")
-st.caption("One isolated paper test trade • no journal • no win/loss • S1–S5 unchanged")
+# Separate isolated TEST trade. The TEST module owns its single heading and
+# caption so the page never shows duplicate TEST TRADE headings.
 try:
     from dashboard.test_tab import render_test_tab
+    st.divider()
     render_test_tab()
 except Exception as exc:
     st.error(f"TEST trade unavailable: {type(exc).__name__}: {exc}")
