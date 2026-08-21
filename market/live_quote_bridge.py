@@ -80,8 +80,9 @@ def market_quote_partial(mapping):
 
     # No cache hit: every 15-second cycle must make a new market-feed request.
     started = time.monotonic()
-    response = dhan_data._marketfeed(
-        "NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc",
+    response = dhan_data._post(
+        "/marketfeed/ohlc",
+        {"NSE_EQ": clean["SecurityId"].tolist()},
         timeout=max(0.1, COLLECTION_WINDOW_SECONDS),
     )
     elapsed = time.monotonic() - started
