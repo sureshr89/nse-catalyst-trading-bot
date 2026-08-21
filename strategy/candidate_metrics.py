@@ -1,26 +1,29 @@
-"""Candidate ranking helpers retained for compatibility with the test suite.
+"""Small, deterministic candidate-ranking helpers retained for compatibility.
 
-Gap magnitude is the primary priority metric. ATR is intentionally not used as
-an independent priority signal here; callers may use it only as a secondary
-tie-breaker after the gap magnitude.
-
-This module is intentionally kept in the strategy package so clean checkouts
-used by CI and Streamlit resolve the same import path.
+The clean S1-S5 strategy does not use ATR/indicators as entry signals. Gap
+magnitude can be used only to prioritize inspection; it must never override
+the canonical market gate or strategy setup.
 """
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 from zoneinfo import ZoneInfo
 
 
 def sort_key(candidate: dict) -> float:
-    """Return the primary candidate priority: absolute gap percentage."""
+    """Return absolute gap percentage for deterministic candidate ordering."""
     try:
-        return abs(float(candidate.get("gap_percent", 0.0) or 0.0))
+        value = float(candidate.get("gap_percent", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+    return abs(value) if isfinite(value) else 0.0
 
 
 def metrics() -> dict:
-    """Return the compatibility metadata expected by diagnostics/tests."""
-    return {"metrics_calculated_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")}
+    """Return diagnostics metadata; no trading signal is derived here."""
+    return {
+        "metrics_calculated_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds"),
+        "priority_metric": "absolute_gap_percent",
+        "used_as_entry_signal": False,
+    }
