@@ -44,9 +44,7 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
-# The dashboard must display the same market snapshot used by the production
-# MasterEngine.  This bridge deliberately changes no visual component: it only
-# replaces the legacy breadth snapshot source with the canonical engine snapshot.
+
 def _canonical_breadth_snapshot(force=False):
     try:
         engine = _get_trading_engine()
@@ -88,9 +86,6 @@ try:
 except Exception:
     pass
 
-# Render the original dashboard first. Its market alignment, S1-S5 and journal
-# remain visually unchanged. Its old download/tip blocks are intercepted only
-# so this entrypoint can place them exactly where requested below.
 _original_markdown = st.markdown
 _original_download_button = st.download_button
 _original_caption = st.caption
@@ -98,16 +93,12 @@ _original_caption = st.caption
 
 def _master_markdown_filter(body, *args, **kwargs):
     text = body if isinstance(body, str) else str(body)
-    # Defer the old cumulative-download heading and legacy daily-tip elements.
     if "MASTER DOWNLOAD — CUMULATIVE" in text:
         return None
     if '<div class="sec">💡 DAILY TRADING TIP</div>' in text:
         return None
     if '<div class="tip">' in text:
         return None
-    # The original presentation layer used an obsolete 500/500 display gate.
-    # Keep the design/text but show PASS whenever the canonical engine has the
-    # approved >=95% (475/500) coverage.
     if "NIFTY 500 quotes" in text:
         match = re.search(r"NIFTY 500 quotes (\d+)/500", text)
         if match and int(match.group(1)) >= 475:
@@ -120,8 +111,6 @@ def _master_download_filter(*args, **kwargs):
 
 
 def _master_caption_filter(*args, **kwargs):
-    # The only captions in single_master are attached to the deferred download
-    # and the trailing legacy footer, so both are intentionally deferred.
     return None
 
 
@@ -135,9 +124,6 @@ finally:
     st.download_button = _original_download_button
     st.caption = _original_caption
 
-# Real, recognized price-action strategy playbook. This is presentation-only:
-# the engine continues to evaluate the canonical S1-S5 rules already implemented
-# in strategy/nifty500_price_action_strategies.py.
 st.markdown("""
 <style>
 .strategy-playbook{background:#0b1422;border:1px solid #294367;border-radius:12px;padding:12px;margin:14px 0}
@@ -165,19 +151,27 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Exact page order from here: Journal (inside the original dashboard) ->
-# Strategy Playbook -> Trade Path -> Test Trade -> Master Download -> Daily Trading Tip.
 render_trade_path()
 
-# Isolated TEST trade only. It never changes S1-S5 or the journal.
-try:
-    from dashboard.test_tab import render_test_tab
-    st.divider()
-    render_test_tab()
-except Exception as exc:
-    st.error(f"TEST trade unavailable: {type(exc).__name__}: {exc}")
+# The test feature is a real Streamlit tab so it is visible as a tab in the app.
+# It is isolated from S1-S5 and the journal.
+_test_tab, _test_info_tab = st.tabs(["🧪 TESTING", "ℹ️ TEST INFO"])
+with _test_tab:
+    st.subheader("🧪 Dashboard Testing")
+    st.caption("Isolated paper-test panel. It does not modify S1-S5 or the production journal.")
+    try:
+        from dashboard.test_tab import render_test_tab
+        render_test_tab()
+    except Exception as exc:
+        st.error(f"TEST tab unavailable: {type(exc).__name__}: {exc}")
+with _test_info_tab:
+    st.markdown("### What this test checks")
+    st.write("• NIFTY 500 coverage and data completeness")
+    st.write("• Dhan live quote availability")
+    st.write("• Market alignment and eligible stock selection")
+    st.write("• Live quote refresh and paper P&L")
+    st.write("• The test panel is isolated from production S1-S5 trades")
 
-# Single cumulative download, immediately after TEST TRADE.
 st.markdown('<div class="sec">📥 MASTER DOWNLOAD — CUMULATIVE</div>', unsafe_allow_html=True)
 try:
     master_csv = _engine_main.MasterEngine().read_trades() if hasattr(_engine_main.MasterEngine, "read_trades") else None
@@ -201,7 +195,6 @@ st.download_button(
 )
 st.caption(f"Cumulative journal: {len(_master_df)} trade record(s). Original journal columns preserved.")
 
-# One and only one DAILY TRADING TIP, at the absolute end of the page.
 st.markdown("""
 <style>
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="stMainBlockContainer"],[data-testid="stHeader"],header,main,section{background:#000!important}
