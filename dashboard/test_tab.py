@@ -1,95 +1,50 @@
 """Shared live NIFTY 500 diagnostic tab. No trades are created here."""
 import pandas as pd
 import streamlit as st
+from config.settings import MIN_DATA_COVERAGE_COUNT,LIVE_COLLECTION_WINDOW_SECONDS
 
 
 def _fmt(v, digits=2):
-    try:
-        return f"{float(v):,.{digits}f}"
-    except Exception:
-        return "—"
+    try:return f"{float(v):,.{digits}f}"
+    except Exception:return "—"
 
-
-def _card(label, value):
-    return f'<div class="diag-card"><div class="diag-label">{label}</div><div class="diag-value">{value}</div></div>'
-
+def _card(label, value):return f'<div class="diag-card"><div class="diag-label">{label}</div><div class="diag-value">{value}</div></div>'
 
 @st.fragment(run_every="15s")
 def _live_diagnostic():
     try:
         from market.nifty500_breadth import BREADTH
-        from market.dhan_data import configured, dhan_status, index_quote
+        from market.dhan_data import configured,dhan_status,index_quote
         from market.live_quote_bridge import market_quote_partial
-
-        universe = BREADTH._get_universe()
-        symbols = universe["Symbol"].astype(str).str.upper().str.strip().tolist() if not universe.empty else []
-        mapping = BREADTH._get_mapping(symbols) if symbols else pd.DataFrame()
-        configured_ok = bool(configured())
-
-        # IMPORTANT: use the same shared 500-stock snapshot as the production
-        # engine. This tab must never make a second LTP/OHLC request of its own.
-        rows = market_quote_partial(mapping) if configured_ok and not mapping.empty else pd.DataFrame()
-        returned = len(rows)
-        valid = len(rows)
-        status = dhan_status()
-        idx = index_quote("NIFTY 500") if configured_ok else None
-
-        html = "<div class='diag-grid'>"
-        html += _card("DHAN", "CONNECTED" if configured_ok else "NOT CONFIGURED")
-        html += _card("UNIVERSE", f"{len(symbols)}/500")
-        html += _card("SECURITY MAPPING", f"{len(mapping)}/500")
-        html += _card("SHARED LTP/OHLC", f"{len(mapping)}/500")
-        html += _card("DHAN RETURNED", str(returned))
-        html += _card("VALID LIVE PRICES", f"{valid}/500")
-        html += _card("95% GATE", "PASS" if valid >= 475 else "BLOCK")
-        html += _card("NIFTY 500 LTP", f"₹{_fmt(idx.get('LTP'))}" if idx else "NO LIVE INDEX")
-        html += "</div>"
-        st.markdown(html, unsafe_allow_html=True)
-
-        if valid:
-            st.success(f"LIVE Dhan stock data received: {valid}/500. Shared snapshot; no extra quote request from this tab.")
-        else:
-            st.error(f"NO LIVE STOCK PRICES RECEIVED. Stage: {status.get('stage', '—')} • {status.get('message', 'No Dhan response')}")
-
-        st.write(
-            f"**Dhan diagnostic:** {status.get('updated_at', '—')} • "
-            f"HTTP {status.get('http_status', '—')} • error {status.get('error_code', '—')}"
-        )
-
-        if idx:
-            st.write(
-                f"**NIFTY 500:** LTP ₹{_fmt(idx.get('LTP'))} • "
-                f"Previous close ₹{_fmt(idx.get('PreviousClose'))} • "
-                f"Change {float(idx.get('change_pct') or 0):+.2f}%"
-            )
-
+        universe=BREADTH._get_universe();symbols=universe["Symbol"].astype(str).str.upper().str.strip().tolist() if not universe.empty else []
+        mapping=BREADTH._get_mapping(symbols) if symbols else pd.DataFrame();configured_ok=bool(configured())
+        rows=market_quote_partial(mapping) if configured_ok and not mapping.empty else pd.DataFrame();returned=len(rows);valid=len(rows);status=dhan_status();idx=index_quote("NIFTY 500") if configured_ok else None
+        html="<div class='diag-grid'>"
+        html+=_card("DHAN","CONNECTED" if configured_ok else "NOT CONFIGURED")
+        html+=_card("UNIVERSE",f"{len(symbols)}/500")
+        html+=_card("SECURITY MAPPING",f"{len(mapping)}/500")
+        html+=_card("SNAPSHOT PRICES",f"{len(rows)}/500")
+        html+=_card("DHAN RETURNED",str(returned))
+        html+=_card("VALID LIVE PRICES",f"{valid}/500")
+        html+=_card("98% GATE", "PASS" if valid>=MIN_DATA_COVERAGE_COUNT else f"BLOCK ({valid}/{MIN_DATA_COVERAGE_COUNT})")
+        html+=_card("NIFTY 500 LTP",f"₹{_fmt(idx.get('LTP'))}" if idx else "NO LIVE INDEX")
+        html+="</div>";st.markdown(html,unsafe_allow_html=True)
+        if valid>=MIN_DATA_COVERAGE_COUNT:st.success(f"LIVE Dhan stock data: {valid}/500. 15-second merged snapshot is trade-ready for coverage.")
+        elif valid:st.warning(f"LIVE Dhan stock data: {valid}/500. Data is visible, but market/trade approval remains BLOCKED until {MIN_DATA_COVERAGE_COUNT}/500 (98%) is reached.")
+        else:st.error(f"NO LIVE STOCK PRICES RECEIVED. Stage: {status.get('stage','—')} • {status.get('message','No Dhan response')}")
+        st.write(f"**Dhan diagnostic:** {status.get('updated_at','—')} • HTTP {status.get('http_status','—')} • error {status.get('error_code','—')} • collection window {LIVE_COLLECTION_WINDOW_SECONDS}s")
+        if idx:st.write(f"**NIFTY 500:** LTP ₹{_fmt(idx.get('LTP'))} • Previous close ₹{_fmt(idx.get('PreviousClose'))} • Change {float(idx.get('change_pct') or 0):+.2f}%")
         if not mapping.empty:
-            st.markdown("#### Security mapping sample")
-            cols = [c for c in ["Symbol", "SecurityId", "ExchangeSegment", "Instrument"] if c in mapping.columns]
-            st.dataframe(mapping[cols].head(20), use_container_width=True, hide_index=True)
-
+            st.markdown("#### Security mapping sample");cols=[c for c in ["Symbol","SecurityId","ExchangeSegment","Instrument"] if c in mapping.columns];st.dataframe(mapping[cols].head(20),use_container_width=True,hide_index=True)
         if not rows.empty:
-            st.markdown("#### LIVE Dhan stock values")
-            show = [c for c in ["Symbol", "SecurityId", "LTP", "TodayOpen", "TodayHigh", "TodayLow", "PreviousClose", "NetChange", "change_pct", "UpdatedAt", "price_source"] if c in rows.columns]
-            st.dataframe(rows[show].sort_values("Symbol").head(100), use_container_width=True, hide_index=True)
-            missing = sorted(set(mapping.Symbol.astype(str).str.upper()) - set(rows.Symbol.astype(str).str.upper()))
-            if missing:
-                st.markdown(f"#### Missing from shared Dhan snapshot: {len(missing)}")
-                st.dataframe(pd.DataFrame({"MissingSymbol": missing[:100]}), use_container_width=True, hide_index=True)
-    except Exception as exc:
-        st.error(f"LIVE TESTING ERROR: {type(exc).__name__}: {exc}")
-
+            st.markdown("#### LIVE Dhan stock values");show=[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","PreviousClose","NetChange","change_pct","UpdatedAt","price_source"] if c in rows.columns];st.dataframe(rows[show].sort_values("Symbol").head(100),use_container_width=True,hide_index=True)
+            missing=sorted(set(mapping.Symbol.astype(str).str.upper())-set(rows.Symbol.astype(str).str.upper()))
+            if missing:st.markdown(f"#### Missing from 15-second snapshot: {len(missing)}");st.dataframe(pd.DataFrame({"MissingSymbol":missing[:100]}),use_container_width=True,hide_index=True)
+    except Exception as exc:st.error(f"LIVE TESTING ERROR: {type(exc).__name__}: {exc}")
 
 def render_test_tab():
-    st.subheader("🧪 LIVE NIFTY 500 DATA TEST")
-    st.caption("Shared Dhan LTP/OHLC snapshot • refreshes every 15 seconds • no trade is created and no journal is modified.")
-    _live_diagnostic()
-    st.markdown("""
+    st.subheader("🧪 LIVE NIFTY 500 DATA TEST");st.caption("One shared Dhan snapshot • 15-second collection/merge window • no trade is created and no journal is modified.");_live_diagnostic();st.markdown("""
     <style>
-    .diag-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:8px 0 12px}
-    .diag-card{background:#101b2b;border:1px solid #294367;border-radius:9px;padding:9px 10px;min-height:58px}
-    .diag-label{font-size:.55rem;color:#fff;margin-bottom:5px;font-weight:850;text-transform:uppercase}
-    .diag-value{font-size:.9rem;color:#fff;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    @media(max-width:1000px){.diag-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    .diag-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:8px 0 12px}.diag-card{background:#101b2b;border:1px solid #294367;border-radius:9px;padding:9px 10px;min-height:58px}.diag-label{font-size:.55rem;color:#fff;margin-bottom:5px;font-weight:850;text-transform:uppercase}.diag-value{font-size:.9rem;color:#fff;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media(max-width:1000px){.diag-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     </style>
-    """, unsafe_allow_html=True)
+    """,unsafe_allow_html=True)
