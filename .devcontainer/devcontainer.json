@@ -1,6 +1,6 @@
 {
-  "name": "NSE Catalyst Python 3.14",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.14-bookworm",
+  "name": "NSE Catalyst Python 3.12",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
   "customizations": {
     "codespaces": {
       "openFiles": [
