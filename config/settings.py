@@ -8,8 +8,8 @@ if hasattr(time, "tzset"):
 STOCK_UNIVERSE = "NIFTY_500"
 MAX_STOCKS = 500
 # Live constituent-data safety gate: 98% = 490 of 500 verified stocks.
-# Collection itself is allowed to be partial during the 15-second window;
-# this threshold controls market/trade readiness only.
+# Each market cycle starts a fresh full-universe request. The collection phase
+# has a hard 15-second window; no old quote is counted as fresh coverage.
 MIN_DATA_COVERAGE_PCT = 98.0
 MIN_DATA_COVERAGE_COUNT = int(MAX_STOCKS * MIN_DATA_COVERAGE_PCT / 100)
 MARKET_OPEN = "09:15"
@@ -20,13 +20,21 @@ LAST_ENTRY_TIME = "14:00"
 SQUARE_OFF_TIME = "15:00"
 MARKET_CLOSE = "15:30"
 
-# One common 15-second collection/decision cycle for all five strategies.
-# Valid Dhan prices are merged during the window; the finalized snapshot is
-# shared by AD, sectors, dashboard, stock selection and S1-S5.
-SCAN_INTERVAL_SECONDS = 15
-MARKET_DATA_REFRESH_SECONDS = 15
-LIVE_COLLECTION_WINDOW_SECONDS = 15
+# Master cycle: 15 seconds maximum for a fresh NIFTY-500 snapshot, followed by
+# a 10-second decision budget. The next cycle starts from all 500 again.
+COLLECTION_WINDOW_SECONDS = 15
+DECISION_WINDOW_SECONDS = 10
+SCAN_INTERVAL_SECONDS = COLLECTION_WINDOW_SECONDS + DECISION_WINDOW_SECONDS
+MARKET_DATA_REFRESH_SECONDS = SCAN_INTERVAL_SECONDS
+LIVE_COLLECTION_WINDOW_SECONDS = COLLECTION_WINDOW_SECONDS
 LIVE_PRICE_MONITOR_SECONDS = 2
+
+# News is cached/refreshed independently so the 10-second decision phase is
+# never blocked by external news requests. News strength is used to prioritize
+# stocks after the live sector filter.
+NEWS_CACHE_SECONDS = 180
+NEWS_MAX_BATCH_SYMBOLS = 10
+NEWS_MAX_BATCHES_PER_REFRESH = 8
 
 # Master market alignment — applies to every strategy.
 REQUIRE_MARKET_ALIGNMENT = True
