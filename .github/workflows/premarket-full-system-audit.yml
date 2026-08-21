@@ -11,10 +11,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
@@ -36,6 +38,7 @@ jobs:
               'engine.master_engine',
               'engine.cycle_runner',
               'market.dhan_data',
+              'market.live_quote_bridge',
               'market.price_data',
               'market.nifty500_breadth',
               'data.reference_store',
@@ -50,31 +53,40 @@ jobs:
               print('IMPORT OK:', name)
           PY
 
-      - name: Approved 95 percent gate audit
+      - name: Approved 98 percent live-coverage gate audit
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           root = Path('.')
-          failures = []
           suspicious = []
           for p in root.rglob('*.py'):
               if any(part in {'.git', '.venv', '__pycache__'} for part in p.parts):
                   continue
               text = p.read_text(encoding='utf-8', errors='replace')
-              # Exact 500 is valid for defining the NIFTY 500 universe itself.
-              # It is not valid as a live-data coverage gate after the approved
-              # >=95% rule was adopted.
               for lineno, line in enumerate(text.splitlines(), 1):
                   if re.search(r'(coverage|complete|available|priced|quotes|mapping|data).*(?:==|>=|>)\s*500|500\s*(?:==|<=|>)\s*(coverage|complete|available|priced|quotes|mapping|data)', line, re.I):
                       if 'NIFTY500_UNIVERSE_INCOMPLETE' in line or 'len(u)!=500' in line or 'len(u) != 500' in line:
                           continue
                       suspicious.append(f'{p}:{lineno}: {line.strip()}')
           if suspicious:
-              print('Suspicious 500 live-coverage gates:')
+              print('Suspicious exact-500 live-data gates:')
               print('\n'.join(suspicious))
               raise SystemExit(1)
-          print('95% coverage gate audit: PASS')
+          print('98% live-coverage gate audit: PASS')
+          PY
+
+      - name: Verify 15-second collection plus 10-second decision budget
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          from config import settings
+          assert settings.COLLECTION_WINDOW_SECONDS == 15
+          assert settings.DECISION_WINDOW_SECONDS == 10
+          assert settings.SCAN_INTERVAL_SECONDS == 25
+          assert settings.MIN_DATA_COVERAGE_COUNT == 490
+          print('15+10 timing and 490/500 gate contract: PASS')
           PY
 
       - name: Engine to dashboard snapshot contract audit
@@ -90,14 +102,14 @@ jobs:
           e.last_snapshot = {
               'verified': True,
               'prices': pd.DataFrame({
-                  'Symbol': [f'S{i}' for i in range(475)],
-                  'LTP': [100.0] * 475,
-                  'PreviousClose': [99.0] * 475,
-                  'change_pct': [1.01] * 475,
+                  'Symbol': [f'S{i}' for i in range(490)],
+                  'LTP': [100.0] * 490,
+                  'PreviousClose': [99.0] * 490,
+                  'change_pct': [1.01] * 490,
               }),
               'sector': {
                   'available': True,
-                  'priced': 475,
+                  'priced': 490,
                   'positive_sectors': 8,
                   'negative_sectors': 4,
               },
@@ -108,12 +120,12 @@ jobs:
           e._publish_dashboard_snapshot()
           snap = BREADTH.snapshot()
           assert snap['complete'] is True
-          assert len(snap['quote_rows']) == 475
+          assert len(snap['quote_rows']) == 490
           assert snap['sector_complete'] is True
           assert snap['ad_ratio'] == 1.5
           assert snap['positive_sectors'] == 8
           assert snap['negative_sectors'] == 4
-          print('Engine -> dashboard snapshot contract: PASS (475/500)')
+          print('Engine -> dashboard snapshot contract: PASS (490/500)')
           PY
 
       - name: Full pytest regression
