@@ -1,2 +1,3 @@
-row_type,date,strategy,symbol,side,entry_time,exit_time,entry,exit,stop_loss,target,quantity,actual_risk,pnl,exit_reason,nifty500_pct,sector_pct,ad_ratio,ad_coverage,previous_candle,pdh,pdl,today_open,today_high,today_low,notes
-DAILY_QUOTE,2026-08-19,ALL,,,,,,,,,,,,,,,,,,,,,,Process first. Profit follows disciplined execution.
+# COMPATIBILITY ARTIFACT — active runtime source of truth is outputs/signals.csv and outputs/trades.csv.
+# Strategy: NIFTY_500_OHLC_PDH_PDL_S1_S5 | Versioned S1-S5 paper-trading journal.
+# Retained intentionally for backward compatibility; do not use this file to create trading signals.
