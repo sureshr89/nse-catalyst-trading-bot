@@ -6,6 +6,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor,as_completed
 import math,os,threading,time
 import pandas as pd,requests
+from config.settings import MIN_DATA_COVERAGE_COUNT
 BASE_URL="https://api.dhan.co/v2";MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv";MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv";CACHE_DIR=Path("data");MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv";IST="Asia/Kolkata";_LOCK=threading.RLock();_QUOTE_CACHE={};_QUOTE_CACHE_AT=0.0;_QUOTE_CACHE_KEY=None;_LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
 def _secret(name):
  value=os.getenv(name,"")
@@ -69,8 +70,8 @@ def market_quote(mapping,cache_seconds=10):
  ids=clean["SecurityId"].astype(int).astype(str).tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
  with _LOCK:
   if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
-   cached=pd.DataFrame(list(_QUOTE_CACHE.values()))
-   if set(cached["SecurityId"].astype(str))==expected_ids and set(cached["Symbol"].astype(str).str.upper())==expected_symbols:return cached
+   cached=pd.DataFrame(list(_QUOTE_CACHE.values()));cached_ids=set(cached.get("SecurityId",pd.Series(dtype=str)).astype(str));cached_symbols=set(cached.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper())
+   if len(cached)>=MIN_DATA_COVERAGE_COUNT and cached_ids.issubset(expected_ids) and cached_symbols.issubset(expected_symbols):return cached
  response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(clean["SecurityId"].astype(str),clean["Symbol"]));rows=[]
  for sid,item in data.items():
   if str(sid) not in expected_ids or not isinstance(item,dict):continue
@@ -80,8 +81,8 @@ def market_quote(mapping,cache_seconds=10):
    if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,close,ltp) or not math.isfinite(net) or vol<0:continue
    rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":close,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
   except (TypeError,ValueError,OverflowError,KeyError):pass
- result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame();verified=not result.empty and len(result)==len(expected_ids) and set(result["SecurityId"].astype(str))==expected_ids and set(result["Symbol"].astype(str).str.upper())==expected_symbols
- _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/quote",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes")
+ result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame();result_ids=set(result.get("SecurityId",pd.Series(dtype=str)).astype(str));result_symbols=set(result.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper());verified=len(result)>=MIN_DATA_COVERAGE_COUNT and result_ids.issubset(expected_ids) and result_symbols.issubset(expected_symbols)
+ _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/quote",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes; minimum {MIN_DATA_COVERAGE_COUNT}/500")
  if not verified:return pd.DataFrame()
  with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
  return result
@@ -98,8 +99,7 @@ def index_quote(index_name="NIFTY 500"):
  if x.empty:return None
  sid=str(x.iloc[0][ic]).strip()
  if not sid.isdigit():return None
- response=_post("/marketfeed/quote",{"IDX_I":[sid]})
- item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
+ response=_post("/marketfeed/quote",{"IDX_I":[sid]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
  if not isinstance(item,dict):return None
  o=item.get("ohlc") or {}
  try:
