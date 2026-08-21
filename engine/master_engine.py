@@ -33,18 +33,25 @@ class MasterEngine:
         intraday=snap.get("intraday",{}).get(symbol,pd.DataFrame());intraday=pd.DataFrame() if intraday is None else intraday
         po=pc=None;prior_high=prior_low=None;pullback_low=pullback_high=None;breakout_seen=False
         if isinstance(intraday,pd.DataFrame) and not intraday.empty:
-            cols={str(c).lower():c for c in intraday.columns};row=intraday.iloc[-1];po=row[cols["open"]] if "open" in cols else None;pc=row[cols["close"]] if "close" in cols else None
-            if len(intraday)>1:
-                prior=intraday.iloc[:-1];h=cols.get("high");l=cols.get("low")
+            cols={str(c).lower():c for c in intraday.columns}
+            row=intraday.iloc[-1];po=row[cols["open"]] if "open" in cols else None;pc=row[cols["close"]] if "close" in cols else None
+            completed=intraday.copy()
+            if "datetime" in cols:
+                try:
+                    ts=pd.to_datetime(completed[cols["datetime"]],errors="coerce")
+                    cutoff=self.now().replace(second=0,microsecond=0)
+                    if getattr(ts.dt,"tz",None) is None:ts=ts.dt.tz_localize(IST)
+                    else:ts=ts.dt.tz_convert(IST)
+                    completed=completed.loc[ts < cutoff].copy()
+                except Exception:pass
+            if len(completed)>1:
+                prior=completed.iloc[:-1];h=cols.get("high");l=cols.get("low")
                 if h:
                     hs=pd.to_numeric(prior[h],errors="coerce");prior_high=hs.max()
                     if pd.notna(ref.get("PDH")):breakout_seen=breakout_seen or bool((hs>float(ref.get("PDH"))).any())
                 if l:
                     ls=pd.to_numeric(prior[l],errors="coerce");prior_low=ls.min();pullback_low=prior_low;pullback_high=prior_high
                     if pd.notna(ref.get("PDL")):breakout_seen=breakout_seen or bool((ls<float(ref.get("PDL"))).any())
-        # Previous candle is diagnostic for S1/S3/S5. Do not block those setups
-        # when the optional intraday history is unavailable. S2/S4 enforce their
-        # own completed-candle requirement inside the strategy functions.
         side="BUY" if snap.get("buy_alignment") else "SELL" if snap.get("sell_alignment") else None
         if side is None:return []
         common={"nifty500_change_pct":snap.get("nifty_change"),"sector_alignment_pct":(snap.get("sector") or {}).get("alignment_pct",0),"ad_ratio":snap.get("ad_ratio"),"ad_coverage":int(str(snap.get("ad_coverage",MIN_DATA_COVERAGE_COUNT)).split("/")[0]) if snap.get("ad_coverage") else MIN_DATA_COVERAGE_COUNT,"positive_sectors":(snap.get("sector") or {}).get("positive_sectors",0),"negative_sectors":(snap.get("sector") or {}).get("negative_sectors",0),"previous_candle_open":po,"previous_candle_close":pc}
@@ -92,7 +99,7 @@ class MasterEngine:
         if quotes.empty:
             self.diagnostics["rejections"]["market_data"]="DHAN_QUOTES_UNAVAILABLE";self.diagnostics["dhan_status"]=dhan_status();self.last_snapshot=blocked;self._write_diagnostics();return blocked
         prices=quotes[["Symbol","LTP","PreviousClose","change_pct"]].copy();prices["change_pct"]=pd.to_numeric(prices["change_pct"],errors="coerce");prices["PreviousClose"]=pd.to_numeric(prices["PreviousClose"],errors="coerce");prices=prices.dropna(subset=["change_pct","PreviousClose"]);prices=prices[prices["PreviousClose"]>0].drop_duplicates("Symbol")
-        coverage=len(prices);adv=int((prices["change_pct"]>0).sum());dec=int((prices["change_pct"]<0).sum());ad=adv/dec if dec else float("inf")
+        coverage=len(prices);adv=int((prices["change_pct"]>0).sum());dec=int((prices["change_pct"]<0).sum());ad=adv/dec if dec else (float("inf") if adv else 0.0)
         sector={"available":False,"priced":0,"positive_sectors":0,"negative_sectors":0,"alignment_pct":0.0,"sectors":0}
         if len(self.sector_map)>=MIN_DATA_COVERAGE_COUNT:
             try:
