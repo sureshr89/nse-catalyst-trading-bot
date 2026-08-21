@@ -106,6 +106,38 @@ def _invalidate_cycle(engine, reason, collected_count=0, elapsed=None):
     return []
 
 
+def _force_square_off(engine, snap, now):
+    """Close every remaining paper position at/after 15:00, regardless of entry gates."""
+    if now.time() < time.fromisoformat(SQUARE_OFF_TIME):
+        return False
+    quotes = snap.get("dhan_quotes", {}) if isinstance(snap, dict) else {}
+    used_fallback = False
+    for symbol in list(engine.paper_engine.open_positions):
+        quote = quotes.get(symbol, {}) or {}
+        ltp = quote.get("LTP")
+        reason = "FORCE_SQUARE_OFF_15:00"
+        if ltp:
+            engine.paper_engine.process_live_price(
+                symbol, ltp, timestamp=now,
+                high=quote.get("TodayHigh"), low=quote.get("TodayLow"),
+            )
+        if not engine.paper_engine.has_open_position(symbol):
+            continue
+        if not ltp:
+            position = engine.paper_engine.open_positions.get(symbol, {})
+            ltp = position.get("last_live_price") or position.get("entry")
+            reason = "FORCE_SQUARE_OFF_15:00_LAST_KNOWN_PRICE"
+            used_fallback = True
+        if ltp:
+            engine.paper_engine.close_position(symbol, ltp, now, reason)
+    engine.diagnostics["trade_path_status"] = "BLOCKED"
+    engine.diagnostics["no_trade_reason"] = "MANDATORY_SQUARE_OFF_15:00"
+    engine.diagnostics["square_off_completed"] = not bool(engine.paper_engine.open_positions)
+    engine.diagnostics["square_off_used_fallback_price"] = used_fallback
+    engine._write_diagnostics()
+    return True
+
+
 def run_cycle(engine):
     """Run one fresh collection + bounded decision cycle."""
     now = engine.now()
@@ -117,6 +149,12 @@ def run_cycle(engine):
     collection_elapsed = monotonic_time.monotonic() - collection_started
     quotes = snap.get("dhan_quotes", {}) if isinstance(snap, dict) else {}
     collected_count = len(quotes)
+
+    # Exit safety must run before the 98% entry collection gate. Otherwise a
+    # partial/failed quote cycle at 15:00 could strand an open paper position.
+    if _force_square_off(engine, snap, now):
+        return []
+
     coverage_ok = collected_count >= MIN_DATA_COVERAGE_COUNT
     if collection_elapsed > COLLECTION_WINDOW_SECONDS:
         return _invalidate_cycle(engine, f"COLLECTION_TIMEOUT_{collection_elapsed:.3f}s>{COLLECTION_WINDOW_SECONDS}s", collected_count, collection_elapsed)
@@ -137,23 +175,7 @@ def run_cycle(engine):
     for symbol in list(engine.paper_engine.open_positions):
         quote = snap.get("dhan_quotes", {}).get(symbol, {})
         if quote:
-            engine.paper_engine.process_live_price(
-                symbol,
-                quote.get("LTP"),
-                timestamp=now,
-                high=quote.get("TodayHigh"),
-                low=quote.get("TodayLow"),
-            )
-
-    if now.time() >= time.fromisoformat(SQUARE_OFF_TIME):
-        for symbol in list(engine.paper_engine.open_positions):
-            ltp = snap.get("dhan_quotes", {}).get(symbol, {}).get("LTP")
-            if ltp:
-                engine.paper_engine.close_position(symbol, ltp, now, "FORCE_SQUARE_OFF_15:00")
-        engine.diagnostics["decision_elapsed_seconds"] = round(monotonic_time.monotonic() - decision_started, 3)
-        engine.diagnostics["decision_deadline_met"] = monotonic_time.monotonic() <= decision_deadline
-        engine._write_diagnostics()
-        return []
+            engine.paper_engine.process_live_price(symbol, quote.get("LTP"), timestamp=now, high=quote.get("TodayHigh"), low=quote.get("TodayLow"))
 
     if not _within(now, TRADING_START, LAST_ENTRY_TIME):
         engine.diagnostics["trade_path_status"] = "BLOCKED"
@@ -187,14 +209,10 @@ def run_cycle(engine):
         news_meta_by_symbol[symbol] = {
             "news_available": bool(headlines),
             "news_sentiment": "POSITIVE" if score > 0 else "NEGATIVE" if score < 0 else "NEUTRAL",
-            "news_strength_score": round(abs(score), 2),
-            "news_signed_score": round(score, 2),
-            "news_priority_rank": rank_position,
-            "news_headline": str(latest.get("title", "")),
-            "news_published": published,
-            "news_source": str(latest.get("source", "")),
-            "news_headline_count": len(headlines),
-            "news_selected_at": now.isoformat(timespec="seconds"),
+            "news_strength_score": round(abs(score), 2), "news_signed_score": round(score, 2),
+            "news_priority_rank": rank_position, "news_headline": str(latest.get("title", "")),
+            "news_published": published, "news_source": str(latest.get("source", "")),
+            "news_headline_count": len(headlines), "news_selected_at": now.isoformat(timespec="seconds"),
         }
 
     engine.diagnostics["sector_candidate_stocks"] = len(sector_symbols)
@@ -207,10 +225,7 @@ def run_cycle(engine):
     if hasattr(engine, "prepare_intraday_for_symbols"):
         snap["intraday"] = engine.prepare_intraday_for_symbols(ranked_symbols, decision_deadline)
 
-    ref_by_symbol = {
-        str(r.get("Symbol", "")).upper().strip(): r
-        for _, r in engine.references.iterrows()
-    }
+    ref_by_symbol = {str(r.get("Symbol", "")).upper().strip(): r for _, r in engine.references.iterrows()}
     signals = []
     for symbol in ranked_symbols:
         if monotonic_time.monotonic() > decision_deadline:
@@ -228,10 +243,7 @@ def run_cycle(engine):
 
     engine.last_signals = signals
     engine.diagnostics["final_signals"] = len(signals)
-    engine.diagnostics["signals_by_strategy"] = {
-        s: sum(1 for x in signals if str(x.get("strategy", "")).upper() == s)
-        for s in engine.daily_counts
-    }
+    engine.diagnostics["signals_by_strategy"] = {s: sum(1 for x in signals if str(x.get("strategy", "")).upper() == s) for s in engine.daily_counts}
     engine.diagnostics["trade_path_status"] = "READY" if signals else "BLOCKED"
     if not signals:
         engine.diagnostics["no_trade_reason"] = "NO_ELIGIBLE_S1_S5_SETUP"
