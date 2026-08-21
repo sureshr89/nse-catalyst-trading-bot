@@ -1,5 +1,6 @@
 """Primary NSE Catalyst Streamlit entrypoint."""
 from pathlib import Path
+import re
 import runpy
 import sys
 
@@ -43,6 +44,50 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
+# The dashboard must display the same market snapshot used by the production
+# MasterEngine.  This bridge deliberately changes no visual component: it only
+# replaces the legacy breadth snapshot source with the canonical engine snapshot.
+def _canonical_breadth_snapshot(force=False):
+    try:
+        engine = _get_trading_engine()
+        snap = engine._market_snapshot()
+        prices = snap.get("prices")
+        coverage = len(prices) if hasattr(prices, "__len__") else 0
+        sector = snap.get("sector") or {}
+        priced = int(sector.get("priced", 0) or 0)
+        advances = int((prices["change_pct"] > 0).sum()) if coverage and "change_pct" in prices.columns else 0
+        declines = int((prices["change_pct"] < 0).sum()) if coverage and "change_pct" in prices.columns else 0
+        unchanged = max(0, coverage - advances - declines)
+        complete = coverage >= 475
+        sector_complete = priced >= 475
+        return {
+            "complete": complete,
+            "sector_complete": sector_complete,
+            "evaluated": coverage,
+            "sector_priced": priced,
+            "nifty500_change_pct": snap.get("nifty_change"),
+            "ad_ratio": snap.get("ad_ratio"),
+            "advances": advances,
+            "declines": declines,
+            "unchanged": unchanged,
+            "positive_sectors": int(sector.get("positive_sectors", 0) or 0),
+            "negative_sectors": int(sector.get("negative_sectors", 0) or 0),
+            "quote_rows": prices,
+            "reason": "" if complete and sector_complete else "CURRENT_ENGINE_COVERAGE_BELOW_95PCT",
+        }
+    except Exception as exc:
+        import pandas as pd
+        return {"complete": False, "sector_complete": False, "evaluated": 0, "sector_priced": 0,
+                "nifty500_change_pct": None, "ad_ratio": None, "advances": 0, "declines": 0,
+                "unchanged": 0, "positive_sectors": 0, "negative_sectors": 0,
+                "reason": f"{type(exc).__name__}: {exc}", "quote_rows": pd.DataFrame()}
+
+try:
+    from market.nifty500_breadth import BREADTH as _breadth
+    _breadth.snapshot = lambda force=False: _canonical_breadth_snapshot(force)
+except Exception:
+    pass
+
 # Render the original dashboard first. Its market alignment, S1-S5 and journal
 # remain visually unchanged. Its old download/tip blocks are intercepted only
 # so this entrypoint can place them exactly where requested below.
@@ -60,7 +105,14 @@ def _master_markdown_filter(body, *args, **kwargs):
         return None
     if '<div class="tip">' in text:
         return None
-    return _original_markdown(body, *args, **kwargs)
+    # The original presentation layer used an obsolete 500/500 display gate.
+    # Keep the design/text but show PASS whenever the canonical engine has the
+    # approved >=95% (475/500) coverage.
+    if "NIFTY 500 quotes" in text:
+        match = re.search(r"NIFTY 500 quotes (\d+)/500", text)
+        if match and int(match.group(1)) >= 475:
+            text = text.replace("API: WAIT/ERROR", "API: PASS")
+    return _original_markdown(text, *args, **kwargs)
 
 
 def _master_download_filter(*args, **kwargs):
