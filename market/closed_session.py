@@ -51,7 +51,10 @@ def build_closed_snapshot(force=False):
   try:return pd.DataFrame(),json.loads(p.read_text())
   except Exception:pass
  s=BREADTH.snapshot(force=False)
- if s.get("complete") and s.get("ad_ratio") is not None and s.get("nifty500_previous_close"):
+ # Only use the live breadth shortcut after the NSE session has actually closed.
+ # Before 15:30, a complete live snapshot is still an in-progress session and
+ # must never be persisted/labeled as a completed-session result.
+ if now.time()>=dt_time(15,30) and s.get("complete") and s.get("ad_ratio") is not None and s.get("nifty500_previous_close"):
   summary={"complete":True,"session_date":d.isoformat(),"market_close":"15:30 IST","nifty500_close":s.get("nifty500_previous_close"),"nifty500_previous_close":s.get("nifty500_reference_close"),"nifty500_change_pct":s.get("nifty500_change_pct"),"advances":s.get("advances",0),"declines":s.get("declines",0),"unchanged":s.get("unchanged",0),"ad_ratio":s.get("ad_ratio"),"sector_alignment_pct":s.get("sector_alignment_pct"),"positive_sectors":s.get("positive_sectors",0),"negative_sectors":s.get("negative_sectors",0),"coverage":"500/500","closed_session_label":"Latest completed NSE session","source":"Dhan completed-session quote","saved_at":now.isoformat(),"dhan_status":"PASS"};p.write_text(json.dumps(summary,indent=2,default=str));return pd.DataFrame(),summary
  u=StockUniverse().get_dataframe(refresh=False)
  if u is None or u.empty or "Symbol" not in u.columns:u=StockUniverse().get_dataframe(refresh=True)
