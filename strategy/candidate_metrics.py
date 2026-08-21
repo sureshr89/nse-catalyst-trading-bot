@@ -3,6 +3,9 @@
 Gap magnitude is the primary priority metric. ATR is intentionally not used as
 an independent priority signal here; callers may use it only as a secondary
 tie-breaker after the gap magnitude.
+
+This module is intentionally kept in the strategy package so clean checkouts
+used by CI and Streamlit resolve the same import path.
 """
 from __future__ import annotations
 
