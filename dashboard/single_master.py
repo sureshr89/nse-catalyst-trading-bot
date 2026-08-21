@@ -5,6 +5,7 @@ Presentation-only dashboard for the NIFTY 500 paper-trading engine.
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from html import escape
 import pandas as pd
 import streamlit as st
 from config.settings import MIN_DATA_COVERAGE_COUNT
@@ -173,6 +174,98 @@ def cumulative_chart_frames(trades_all):
     return daily, pd.DataFrame(strategy_data).set_index("Strategy")
 
 
+def news_table(row, symbol, side):
+    """Render the exact news rationale stored with a selected signal/trade."""
+    values = {}
+    if row is not None:
+        for key in ["news_sentiment", "news_strength_score", "news_priority_rank", "news_headline", "news_published", "news_source", "news_headline_count", "sector"]:
+            values[key] = first(row, key, default="")
+    try:
+        from market.news_ranker import snapshot as news_snapshot
+        cached = news_snapshot().get(str(symbol).upper().strip(), {}) if symbol else {}
+        if not values.get("news_headline") and cached:
+            score = num(cached.get("score"))
+            headlines = cached.get("headlines") or []
+            latest = max(headlines, key=lambda h: str(h.get("published", ""))) if headlines else {}
+            values.update({
+                "news_sentiment": "POSITIVE" if score > 0 else "NEGATIVE" if score < 0 else "NEUTRAL",
+                "news_strength_score": abs(score),
+                "news_headline": latest.get("title", ""),
+                "news_published": latest.get("published", ""),
+                "news_source": latest.get("source", ""),
+                "news_headline_count": len(headlines),
+            })
+    except Exception:
+        pass
+    if not values.get("news_headline"):
+        return '<div style="margin:0 0 12px;padding:10px 12px;background:#0b1320;border:1px dashed #294367;border-radius:10px;color:#8ea2bc;font-size:12px;">📰 News rationale: no cached matching headline available yet for this selection.</div>'
+    sentiment = str(values.get("news_sentiment") or "NEUTRAL").upper()
+    sentiment_color = "#22c55e" if sentiment == "POSITIVE" else "#fb7185" if sentiment == "NEGATIVE" else "#f59e0b"
+    cells = [
+        ("Sentiment", sentiment, sentiment_color),
+        ("Strength", fmt(values.get("news_strength_score")), "#f8fafc"),
+        ("Priority", f'#{values.get("news_priority_rank")}' if values.get("news_priority_rank") not in {"", None} else "—", "#38bdf8"),
+        ("Headlines", values.get("news_headline_count") or "1", "#f8fafc"),
+        ("Sector", values.get("sector") or "—", "#f8fafc"),
+        ("Side", side or "—", "#22c55e" if str(side).upper() == "BUY" else "#fb7185"),
+    ]
+    header = "".join(f'<th style="padding:7px 8px;text-align:left;color:#8ea2bc;font-size:9px;text-transform:uppercase;">{escape(str(k))}</th>' for k, _, _ in cells)
+    body = "".join(f'<td style="padding:7px 8px;color:{c};font-size:12px;font-weight:850;">{escape(str(v))}</td>' for _, v, c in cells)
+    headline = escape(str(values.get("news_headline") or "—"))
+    source = escape(str(values.get("news_source") or "—"))
+    published = escape(str(values.get("news_published") or "—"))
+    return (
+        '<div style="margin:0 0 12px;padding:10px 12px;background:#0b1320;border:1px solid #294367;border-radius:10px;">'
+        '<div style="font-size:12px;font-weight:900;color:#f8fafc;margin-bottom:7px;">📰 WHY SELECTED — NEWS</div>'
+        f'<div style="font-size:13px;font-weight:800;color:#e2e8f0;line-height:1.35;margin-bottom:7px;">{headline}</div>'
+        f'<div style="font-size:10px;color:#8ea2bc;margin-bottom:8px;">Source: {source} • Published: {published}</div>'
+        f'<table style="width:100%;border-collapse:collapse;"><thead><tr>{header}</tr></thead><tbody><tr>{body}</tr></tbody></table>'
+        '</div>'
+    )
+
+
+def build_master_download(trades_all, signals_all):
+    """Create one research-ready cumulative CSV with trade, news, gap and daily context."""
+    trades = trades_all.copy() if not trades_all.empty else pd.DataFrame()
+    signals = signals_all.copy() if not signals_all.empty else pd.DataFrame()
+    if not trades.empty:
+        trades["RecordType"] = "TRADE"
+    if not signals.empty:
+        signals["RecordType"] = "SIGNAL"
+        if "trade_id" in signals.columns and "trade_id" in trades.columns:
+            traded_ids = set(trades["trade_id"].astype(str).str.strip())
+            signals = signals[~signals["trade_id"].astype(str).str.strip().isin(traded_ids)].copy()
+    parts = [x for x in [trades, signals] if not x.empty]
+    base = pd.concat(parts, ignore_index=True, sort=False) if parts else pd.DataFrame()
+    if base.empty:
+        return base
+    date_col = next((c for c in ["TradeDate", "entry_time", "timestamp", "exit_time"] if c in base.columns), None)
+    if date_col:
+        base["TradeDate"] = pd.to_datetime(base[date_col], errors="coerce", utc=True).dt.tz_convert(IST).dt.strftime("%Y-%m-%d")
+    gap = read_csv("MASTER_DAILY_STOCK_DATA.csv")
+    if gap.empty:
+        gap = read_csv("gap_analysis.csv")
+    if not gap.empty and "Symbol" in gap.columns:
+        gap = gap.copy()
+        if "TradeDate" not in gap.columns:
+            gap["TradeDate"] = ""
+        keep = [c for c in gap.columns if c not in base.columns or c in {"Symbol", "TradeDate"}]
+        gap = gap[keep].copy()
+        if "Symbol" in base.columns:
+            base["_SymbolKey"] = base["Symbol"].astype(str).str.upper().str.strip()
+            gap["_SymbolKey"] = gap["Symbol"].astype(str).str.upper().str.strip()
+            if "TradeDate" in gap.columns:
+                base = base.merge(gap.drop_duplicates(["_SymbolKey", "TradeDate"]), on=["_SymbolKey", "TradeDate"], how="left", suffixes=("", "_gap"))
+            else:
+                base = base.merge(gap.drop_duplicates(["_SymbolKey"]), on="_SymbolKey", how="left", suffixes=("", "_gap"))
+            base.drop(columns=["_SymbolKey"], inplace=True, errors="ignore")
+    daily = read_csv("MASTER_DAILY_SUMMARY.csv")
+    if not daily.empty and "TradeDate" in daily.columns and "TradeDate" in base.columns:
+        keep = [c for c in daily.columns if c not in base.columns or c == "TradeDate"]
+        base = base.merge(daily[keep].drop_duplicates("TradeDate"), on="TradeDate", how="left", suffixes=("", "_daily"))
+    return base
+
+
 st.markdown(
     """<style>
     .stApp{background:#05080d!important;color:#f8fafc!important}
@@ -275,14 +368,20 @@ def live_dashboard():
             status_text = str(first(row, "status", default="OPEN")).upper()
             state = "CLOSED" if status_text == "CLOSED" or first(row, "exit_time") not in {"", None} else "TRADE OPEN"
             cells = [("Stock", first(row, "symbol", "stock")), ("BUY / SELL", first(row, "buy_sell", "side", "signal")), ("Signal Time", first(row, "trigger_entry_time", "entry_time", "market_entry_time")), ("Entry", fmt(first(row, "entry", "entry_price"))), ("Stop Loss", fmt(first(row, "stop_loss"))), ("Target", fmt(first(row, "target"))), ("Exit", fmt(first(row, "exit_price", "exit"))), ("P&L", fmt(first(row, "pnl"))), ("Risk / Reward", fmt(first(row, "rr", "reward", "risk_reward"))), ("Quantity", fmt(first(row, "quantity"))), ("Exit Reason", first(row, "exit_reason") or "—")]
+            news_row = row
         elif signal_row is not None:
             state = "SIGNAL"
             cells = [("Stock", first(signal_row, "symbol", "stock")), ("BUY / SELL", first(signal_row, "buy_sell", "side", "signal")), ("Signal Time", first(signal_row, "timestamp", "entry_time", "logged_at")), ("Entry", fmt(first(signal_row, "entry", "entry_price"))), ("Stop Loss", fmt(first(signal_row, "stop_loss"))), ("Target", fmt(first(signal_row, "target"))), ("Exit", "—"), ("P&L", "—"), ("Risk / Reward", fmt(first(signal_row, "risk_reward", "rr", "reward"))), ("Quantity", fmt(first(signal_row, "quantity"))), ("Exit Reason", "—")]
+            news_row = signal_row
         else:
             state = "WAITING"
             cells = [("Stock", "—"), ("BUY / SELL", "—"), ("Signal Time", "—"), ("Entry", "—"), ("Stop Loss", "—"), ("Target", "—"), ("Exit", "—"), ("P&L", "—"), ("Risk / Reward", "—"), ("Quantity", "—"), ("Exit Reason", "—")]
+            news_row = None
         state_color = "#22c55e" if state == "CLOSED" else "#38bdf8" if state == "SIGNAL" else "#f59e0b" if state == "TRADE OPEN" else "#94a3b8"
         st.markdown(strategy_card(strategy, state, state_color, cells), unsafe_allow_html=True)
+        selected_symbol = first(news_row, "symbol", "stock") if news_row is not None else ""
+        selected_side = first(news_row, "buy_sell", "side", "signal") if news_row is not None else ""
+        st.markdown(news_table(news_row, selected_symbol, selected_side), unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">📈 CUMULATIVE — ALL DAYS</div>', unsafe_allow_html=True)
     st.markdown('<div class="chart-note">Historical performance shown as charts — no strategy performance tables.</div>', unsafe_allow_html=True)
@@ -299,7 +398,9 @@ def live_dashboard():
         st.info("No historical trade P&L data is available yet.")
 
     st.markdown('<div class="section-title">📥 DOWNLOAD</div>', unsafe_allow_html=True)
-    st.download_button("⬇️ Download Master CSV", trades_all.to_csv(index=False).encode("utf-8"), "nse_catalyst_master.csv", "text/csv", use_container_width=True, key="master_csv")
+    master_download = build_master_download(trades_all, signals_all)
+    st.download_button("⬇️ Download Master Research CSV", master_download.to_csv(index=False).encode("utf-8"), "nse_catalyst_master_dataset.csv", "text/csv", use_container_width=True, key="master_csv")
+    st.markdown('<div style="font-size:11px;color:#8ea2bc;margin-top:5px;">Includes trades/signals plus news rationale, gap-analysis fields and daily market context when available.</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-title">💡 DAILY TRADING TIP</div>', unsafe_allow_html=True)
     tips = ["Follow the setup, not the emotion.", "Protect capital first; profits come second.", "Wait for confirmation before entering.", "One disciplined trade is better than many emotional trades.", "Never chase a missed entry."]
     st.markdown(f'<div style="background:#0d1726;border:1px solid #243752;border-radius:12px;padding:14px;font-size:16px;font-weight:850;color:#f8fafc;">💡 {tips[now.date().toordinal() % len(tips)]}</div>', unsafe_allow_html=True)
