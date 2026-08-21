@@ -1,98 +1,74 @@
-"""Dashboard-only TEST trade panel: one daily paper trade, live every 15s."""
-import datetime as dt
-import json
-from pathlib import Path
+"""Live NIFTY 500 Dhan diagnostic tab. No trades are created here."""
 import pandas as pd
 import streamlit as st
 
-IST=dt.timezone(dt.timedelta(hours=5,minutes=30)); ENTRY_START=dt.time(9,15); FORCE_EXIT=dt.time(14,45)
-STATE_FILE=Path(__file__).resolve().parents[1]/"outputs"/"test_trade_state.json"
-
-
-def _fmt(v,digits=2):
+def _fmt(v, digits=2):
     try:return f"{float(v):,.{digits}f}"
     except Exception:return "—"
-def _now_ist():return dt.datetime.now(IST)
-def _load(today):
-    try:
-        if STATE_FILE.exists():
-            s=json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            if s.get("date")==today:return s
-    except Exception:pass
-    return {"date":today,"status":"WAITING"}
-def _save(s):
-    try:
-        STATE_FILE.parent.mkdir(parents=True,exist_ok=True);tmp=STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(s,ensure_ascii=False,indent=2),encoding="utf-8");tmp.replace(STATE_FILE)
-    except Exception:pass
-def _state(today):
-    s=st.session_state.get("nse_test_trade")
-    if not s or s.get("date")!=today:s=_load(today);st.session_state["nse_test_trade"]=s
-    return s
 
-def _alignment(snap,idx):
-    if not idx or snap.get("ad_ratio") is None:return None
-    try:
-        net=float(idx.get("NetChange") or 0);ad=float(snap.get("ad_ratio") or 0);pos=int(snap.get("positive_sectors",0) or 0);neg=int(snap.get("negative_sectors",0) or 0)
-        if net>0 and ad>1 and pos>neg:return "BUY"
-        if net<0 and ad<1 and neg>pos:return "SELL"
-    except Exception:pass
-    return None
-
-def _candidate(rows,side):
-    if rows is None or rows.empty:return None
-    w=rows.copy()
-    for c in ["LTP","TodayOpen"]:
-        if c in w.columns:w[c]=pd.to_numeric(w[c],errors="coerce")
-    w=w.dropna(subset=["Symbol","LTP","TodayOpen"]);w=w[w["LTP"]>w["TodayOpen"]] if side=="BUY" else w[w["LTP"]<w["TodayOpen"]]
-    if w.empty:return None
-    r=w.sort_values("Symbol").iloc[0];return {"symbol":str(r["Symbol"]),"entry":float(r["LTP"]),"open":float(r["TodayOpen"])}
-
-def _open(c,side,now):
-    s={"date":now.date().isoformat(),"status":"OPEN","symbol":c["symbol"],"side":side,"entry_time":now.isoformat(),"entry":c["entry"],"open":c["open"],"last_ltp":c["entry"],"last_update_time":now.isoformat(),"exit_time":None,"exit":None,"pnl_live":0.0,"pnl":None,"exit_reason":None}
-    st.session_state["nse_test_trade"]=s;_save(s);return s
-
-def _update(rows,now,s):
-    if s.get("status")!="OPEN":return s
-    try:
-        sym=str(s.get("symbol"));r=rows[rows["Symbol"].astype(str)==sym] if rows is not None and not rows.empty else pd.DataFrame()
-        if not r.empty:
-            ltp=float(r.iloc[0]["LTP"]);s["last_ltp"]=ltp;s["last_update_time"]=now.isoformat();s["pnl_live"]=ltp-float(s["entry"]) if s.get("side")=="BUY" else float(s["entry"])-ltp
-    except Exception:pass
-    if now.time()>=FORCE_EXIT:
-        s.update({"status":"CLOSED","exit_time":now.isoformat(),"exit":s.get("last_ltp",s.get("entry")),"exit_reason":"2:45 PM TIME EXIT","pnl":s.get("pnl_live",0.0),"last_update_time":now.isoformat()})
-    st.session_state["nse_test_trade"]=s;_save(s);return s
-
-def _card(label,value):return f'<div class="test-card"><div class="test-label">{label}</div><div class="test-value">{value}</div></div>'
+def _card(label,value):
+    return f'<div class="diag-card"><div class="diag-label">{label}</div><div class="diag-value">{value}</div></div>'
 
 @st.fragment(run_every="15s")
-def _live_test():
-    st.markdown("#### 🧪 Test trade")
-    st.caption("One isolated paper trade • first aligned entry at/after 09:15 IST • live Dhan P&L every 15 seconds • forced exit 14:45 IST")
-    now=_now_ist();today=now.date().isoformat();s=_state(today)
+def _live_diagnostic():
     from market.nifty500_breadth import BREADTH
-    from market.dhan_data import index_quote
-    snap=BREADTH.snapshot(force=True);q=snap.get("quote_rows");rows=q.copy() if isinstance(q,pd.DataFrame) else pd.DataFrame();idx=index_quote("NIFTY 500")
-    if s.get("status")=="WAITING" and ENTRY_START<=now.time()<FORCE_EXIT:
-        # Approved system rule: 95% of NIFTY 500 is sufficient (475/500).
-        complete=bool(snap.get("complete")) and len(rows)>=475
-        sector_ok=bool(snap.get("sector_complete")) and int(snap.get("sector_priced",0) or 0)>=475
-        alignment=_alignment(snap,idx) if complete and sector_ok else None
-        if alignment:
-            c=_candidate(rows,alignment)
-            if c:s=_open(c,alignment,now)
-            else:st.info(f"{alignment} alignment present; waiting for an eligible NIFTY 500 stock.")
-        else:st.info("Waiting for >=475/500 data and BUY/SELL alignment.")
-    elif s.get("status")=="WAITING":st.info("Waiting for 09:15 AM IST." if now.time()<ENTRY_START else "Today's entry window is closed; no late entry will be created.")
-    if s.get("status")=="OPEN":s=_update(rows,now,s)
-    if s.get("status") in {"OPEN","CLOSED"}:
-        closed=s.get("status")=="CLOSED";price=s.get("exit") if closed else s.get("last_ltp",s.get("entry"));pnl=s.get("pnl") if closed else s.get("pnl_live",0);et=s.get("entry_time");ut=s.get("last_update_time");xt=s.get("exit_time")
-        html="<div class='test-grid'>"+_card("STATUS","CLOSED" if closed else "OPEN • LIVE")+_card("STOCK / SIDE",f"{s.get('symbol','—')} / {s.get('side','—')}")+_card("ENTRY",f"₹{_fmt(s.get('entry'))}")+_card("LIVE / EXIT",f"₹{_fmt(price)}")+_card("LIVE P&L",f"₹{_fmt(pnl)}")+_card("ENTRY TIME",et[11:19] if et else "—")+_card("LAST UPDATE",ut[11:19] if ut else "—")+_card("EXIT TIME",xt[11:19] if xt else "—")+"</div>";st.markdown(html,unsafe_allow_html=True)
-        if closed:st.success(f"Exited at 2:45 PM IST • ₹{_fmt(s.get('exit'))} • P&L ₹{_fmt(s.get('pnl'))}")
-        else:st.info(f"LIVE: last Dhan quote update {ut[11:19] if ut else '—'} • next refresh in 15 seconds")
+    from market.dhan_data import configured, dhan_status, diagnostic_nifty500_live, index_quote
+    try:
+        universe=BREADTH._get_universe()
+        symbols=universe["Symbol"].astype(str).str.upper().str.strip().tolist() if not universe.empty else []
+        mapping=BREADTH._get_mapping(symbols) if symbols else pd.DataFrame()
+        diag=diagnostic_nifty500_live(mapping)
+        idx=index_quote("NIFTY 500")
+        rows=diag.get("rows") if isinstance(diag.get("rows"),pd.DataFrame) else pd.DataFrame()
+        status=diag.get("status") or dhan_status()
+        configured_ok=bool(diag.get("configured") and configured())
+        requested=int(diag.get("requested",0) or 0);returned=int(diag.get("returned",0) or 0);valid=int(diag.get("valid",0) or 0)
+        mapping_count=len(mapping)
+        html="<div class='diag-grid'>"
+        html+=_card("DHAN", "CONNECTED" if configured_ok else "NOT CONFIGURED")
+        html+=_card("UNIVERSE", f"{len(symbols)}/500")
+        html+=_card("SECURITY MAPPING", f"{mapping_count}/500")
+        html+=_card("QUOTE REQUEST", f"{requested}/500")
+        html+=_card("Dhan RETURNED", str(returned))
+        html+=_card("VALID LIVE QUOTES", f"{valid}/500")
+        html+=_card("95% GATE", "PASS" if valid>=475 else "BLOCK")
+        html+=_card("NIFTY 500 LTP", f"₹{_fmt(idx.get('LTP'))}" if idx else "NO LIVE INDEX")
+        html+="</div>"
+        st.markdown(html,unsafe_allow_html=True)
+        if valid:
+            st.success(f"LIVE Dhan stock data received: {valid}/500. This tab shows raw live availability; it does not create trades.")
+        else:
+            st.error(f"NO LIVE STOCK QUOTES RECEIVED. Stage: {status.get('stage','—')} • {status.get('message','No Dhan quote response')}")
+        st.write(f"**Last diagnostic:** {status.get('updated_at','—')} • HTTP {status.get('http_status','—')} • error {status.get('error_code','—')}")
+        if idx:
+            st.write(f"**NIFTY 500:** LTP ₹{_fmt(idx.get('LTP'))} • Previous close ₹{_fmt(idx.get('PreviousClose'))} • Change {float(idx.get('change_pct') or 0):+.2f}%")
+        else:
+            st.warning("NIFTY 500 index quote is also unavailable. This points to the Dhan/index mapping path, not S1-S5 strategy logic.")
+        if not mapping.empty:
+            st.markdown("#### Security mapping sample")
+            st.dataframe(mapping[[c for c in ["Symbol","SecurityId","ExchangeSegment","Instrument"] if c in mapping.columns]].head(20),use_container_width=True,hide_index=True)
+        if not rows.empty:
+            st.markdown("#### Live Dhan stock values")
+            show=[c for c in ["Symbol","SecurityId","LTP","TodayOpen","TodayHigh","TodayLow","PreviousClose","NetChange","change_pct","UpdatedAt"] if c in rows.columns]
+            st.dataframe(rows[show].sort_values("Symbol").head(50),use_container_width=True,hide_index=True)
+            missing=sorted(set(mapping.Symbol.astype(str).str.upper())-set(rows.Symbol.astype(str).str.upper())) if not mapping.empty else []
+            if missing:
+                st.markdown(f"#### Missing from Dhan response: {len(missing)}")
+                st.dataframe(pd.DataFrame({"MissingSymbol":missing[:100]}),use_container_width=True,hide_index=True)
+    except Exception as exc:
+        st.error(f"LIVE TESTING ERROR: {type(exc).__name__}: {exc}")
+
 
 def render_test_tab():
-    try:
-        _live_test()
-        st.markdown("""<style>.test-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:5px 0 12px}.test-card{background:#101b2b;border:1px solid #294367;border-radius:9px;padding:8px 10px;min-height:54px}.test-label{font-size:.54rem;color:#fff;margin-bottom:5px;font-weight:850;text-transform:uppercase}.test-value{font-size:.88rem;color:#fff;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media(max-width:1000px){.test-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}</style>""",unsafe_allow_html=True)
-    except Exception as exc:st.error(f"TEST unavailable: {type(exc).__name__}: {exc}")
+    st.subheader("🧪 LIVE NIFTY 500 DATA TEST")
+    st.caption("Dhan live-data diagnostic only • refreshes every 15 seconds • no trade is created and no journal is modified.")
+    _live_diagnostic()
+    st.markdown("""
+    <style>
+    .diag-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:8px 0 12px}
+    .diag-card{background:#101b2b;border:1px solid #294367;border-radius:9px;padding:9px 10px;min-height:58px}
+    .diag-label{font-size:.55rem;color:#fff;margin-bottom:5px;font-weight:850;text-transform:uppercase}
+    .diag-value{font-size:.9rem;color:#fff;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    @media(max-width:1000px){.diag-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    </style>
+    """,unsafe_allow_html=True)
