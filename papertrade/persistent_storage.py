@@ -9,7 +9,7 @@ import base64,json,os,time,urllib.error,urllib.request
 from pathlib import Path
 REPO=os.getenv("GITHUB_REPOSITORY","sureshr89/nse-catalyst-trading-bot");BRANCH=os.getenv("GITHUB_DATA_BRANCH","data");TOKEN=os.getenv("GITHUB_TOKEN","").strip();ALLOW_PUBLIC_DATA=os.getenv("GITHUB_ALLOW_PUBLIC_DATA","false").strip().lower()=="true";API_ROOT=f"https://api.github.com/repos/{REPO}/contents";_REPO_PRIVATE=None;_LAST_SIGNAL_SYNC=0.0;_MAX_SYNC_RETRIES=3
 # Keep this aligned with papertrade.paper_trade_engine.STATE_VERSION.
-CURRENT_PAPER_STATE_VERSION=8
+CURRENT_PAPER_STATE_VERSION=9
 
 def _repo_is_private():
  global _REPO_PRIVATE
@@ -56,8 +56,6 @@ def _migrate_paper_state_file(path):
   print(f"Migrated paper state v{version} to v{CURRENT_PAPER_STATE_VERSION} without discarding trades.")
   return "migrated"
  except json.JSONDecodeError:
-  # Never keep a corrupt/partially-written file in place. If persistence is enabled,
-  # restore() can then recover the last known good copy from the data branch.
   quarantine=path.with_name(path.name+f".corrupt-{time.time_ns()}")
   try:path.replace(quarantine)
   except Exception:pass
