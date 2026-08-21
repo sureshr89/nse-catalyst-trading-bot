@@ -80,18 +80,31 @@ def card_grid(items):
 
 
 def strategy_card(strategy, state, state_color, cells):
+    """Responsive, colorful strategy card; presentation only, no trading logic."""
+    palette = {
+        "S1": ("#22c55e", "#064e3b", "↩️", "PDH/PDL SWEEP REVERSAL"),
+        "S2": ("#38bdf8", "#0c4a6e", "🔁", "BREAKOUT + RETEST"),
+        "S3": ("#f59e0b", "#78350f", "🎯", "INSIDE RANGE REVERSAL"),
+        "S4": ("#a78bfa", "#4c1d95", "⚡", "INTRADAY BREAKOUT"),
+        "S5": ("#f43f5e", "#881337", "🚀", "PDH/PDL BREAKOUT"),
+    }
+    accent, accent_dark, icon, subtitle = palette.get(strategy, ("#64748b", "#1e293b", "📊", "STRATEGY"))
+    state_bg = "#064e3b" if state in {"CLOSED", "TRADE OPEN"} else "#0c4a6e" if state == "SIGNAL" else "#713f12" if state == "WAITING" else "#1e293b"
     html = "".join(
-        f'<div style="background:#101b2b;border-radius:9px;padding:9px;min-width:0;">'
-        f'<div style="font-size:11px;color:#bfcbd9;text-transform:uppercase;font-weight:800;">{label}</div>'
-        f'<div style="font-size:14px;font-weight:900;color:#fff;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{value or "—"}</div></div>'
+        f'<div class="strategy-cell">'
+        f'<div class="strategy-label">{label}</div>'
+        f'<div class="strategy-value">{value or "—"}</div></div>'
         for label, value in cells
     )
     return (
-        '<div style="background:#0b1422;border:1px solid #294367;border-radius:13px;padding:13px;margin:9px 0;">'
-        f'<div style="font-size:18px;font-weight:950;color:#fff;margin-bottom:10px;">{strategy}'
-        f'<span style="float:right;font-size:12px;color:{state_color};padding:5px 9px;background:#162943;border-radius:8px;">{state}</span></div>'
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px;">'
-        + html + '</div></div>'
+        f'<div class="strategy-card" style="--strategy-accent:{accent};--strategy-dark:{accent_dark};">'
+        f'<div class="strategy-header">'
+        f'<div class="strategy-title"><span class="strategy-icon">{icon}</span>'
+        f'<div><div class="strategy-code">{strategy}</div><div class="strategy-subtitle">{subtitle}</div></div></div>'
+        f'<span class="strategy-state" style="color:{state_color};background:{state_bg};">{state}</span>'
+        f'</div>'
+        f'<div class="strategy-grid">{html}</div>'
+        f'</div>'
     )
 
 
@@ -100,6 +113,49 @@ st.markdown("""
 .stApp{background:#000!important;color:#fff!important}
 .block-container{max-width:1450px;padding:.7rem .8rem 2rem}
 .stCaption,.stCaption p{color:#cbd5e1!important}
+
+/* Responsive S1-S5 cards: presentation only. */
+.strategy-card{
+  width:100%;box-sizing:border-box;overflow:hidden;
+  background:linear-gradient(145deg,#0b1422 0%,#101b2b 62%,var(--strategy-dark) 180%);
+  border:1px solid #294367;border-left:5px solid var(--strategy-accent);
+  border-radius:16px;padding:14px;margin:10px 0;
+  box-shadow:0 8px 24px rgba(0,0,0,.24);
+}
+.strategy-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;}
+.strategy-title{display:flex;align-items:center;gap:10px;min-width:0;}
+.strategy-icon{font-size:25px;line-height:1;filter:drop-shadow(0 2px 6px rgba(255,255,255,.15));}
+.strategy-code{font-size:21px;font-weight:950;line-height:1;color:#fff;}
+.strategy-subtitle{font-size:10px;font-weight:850;letter-spacing:.08em;color:#b9c7d9;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.strategy-state{font-size:11px;font-weight:950;letter-spacing:.03em;padding:7px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);white-space:nowrap;}
+.strategy-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}
+.strategy-cell{background:rgba(16,27,43,.92);border:1px solid rgba(80,110,145,.35);border-radius:10px;padding:9px;min-width:0;box-sizing:border-box;}
+.strategy-label{font-size:9px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;color:#91a4ba;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.strategy-value{font-size:14px;font-weight:900;color:#f8fafc;margin-top:5px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.strategy-cell:hover{border-color:var(--strategy-accent);transform:translateY(-1px);transition:.15s ease;}
+
+@media (min-width:1200px){.strategy-grid{grid-template-columns:repeat(6,minmax(0,1fr));}}
+@media (min-width:850px) and (max-width:1199px){.strategy-grid{grid-template-columns:repeat(4,minmax(0,1fr));}}
+@media (max-width:849px){
+  .block-container{padding:.55rem .55rem 1.5rem;}
+  .strategy-card{padding:11px;border-radius:14px;margin:8px 0;}
+  .strategy-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
+  .strategy-code{font-size:19px;}
+  .strategy-icon{font-size:22px;}
+  .strategy-subtitle{font-size:9px;}
+  .strategy-state{font-size:10px;padding:6px 8px;}
+  .strategy-cell{padding:8px;}
+  .strategy-value{font-size:13px;}
+}
+@media (max-width:430px){
+  .strategy-header{align-items:flex-start;}
+  .strategy-title{gap:7px;}
+  .strategy-grid{grid-template-columns:1fr 1fr;}
+  .strategy-subtitle{max-width:190px;}
+  .strategy-state{font-size:9px;padding:5px 7px;}
+  .strategy-label{font-size:8px;}
+  .strategy-value{font-size:12px;}
+}
 </style>
 """, unsafe_allow_html=True)
 
