@@ -44,6 +44,11 @@ class MasterEngine:
     def now():
         return datetime.now(IST)
 
+    def run_cycle(self):
+        """Run the single canonical S1-S5 production cycle."""
+        from engine.cycle_runner import run_cycle
+        return run_cycle(self)
+
     @property
     def daily_pnl(self):
         return round(sum(self.daily_pnl_by_strategy.values()), 2)
@@ -85,9 +90,6 @@ class MasterEngine:
 
         if isinstance(intraday, pd.DataFrame) and not intraday.empty:
             cols = {str(c).lower(): c for c in intraday.columns}
-            row = intraday.iloc[-1]
-            po = row[cols["open"]] if "open" in cols else None
-            pc = row[cols["close"]] if "close" in cols else None
             completed = intraday.copy()
             if "datetime" in cols:
                 try:
@@ -100,30 +102,56 @@ class MasterEngine:
                     completed = completed.loc[ts < cutoff].copy()
                 except Exception:
                     pass
+
+            if not completed.empty:
+                latest = completed.iloc[-1]
+                po = latest[cols["open"]] if "open" in cols else None
+                pc = latest[cols["close"]] if "close" in cols else None
+
             if len(completed) > 1:
-                prior = completed.iloc[:-1]
                 h = cols.get("high")
                 l = cols.get("low")
                 if h:
-                    hs = pd.to_numeric(prior[h], errors="coerce").dropna()
-                    if not hs.empty:
-                        prior_high = float(hs.max())
-                        try:
-                            pdh = float(ref.get("PDH"))
-                            breakout_seen = bool((hs > pdh).any())
-                        except (TypeError, ValueError):
-                            pass
+                    hs = pd.to_numeric(completed[h], errors="coerce")
+                    valid_h = hs.dropna()
+                    if not valid_h.empty:
+                        prior_high = float(valid_h.max())
                 if l:
-                    ls = pd.to_numeric(prior[l], errors="coerce").dropna()
-                    if not ls.empty:
-                        prior_low = float(ls.min())
-                        pullback_low = prior_low
-                        pullback_high = prior_high
-                        try:
-                            pdl = float(ref.get("PDL"))
-                            breakout_seen = breakout_seen or bool((ls < pdl).any())
-                        except (TypeError, ValueError):
-                            pass
+                    ls = pd.to_numeric(completed[l], errors="coerce")
+                    valid_l = ls.dropna()
+                    if not valid_l.empty:
+                        prior_low = float(valid_l.min())
+
+                # S2 must prove a real sequence: breakout first, then a later
+                # completed candle retesting the broken PDH/PDL. Using the
+                # minimum/maximum of the entire session could incorrectly use
+                # prices from before the breakout as the "pullback".
+                try:
+                    pdh = float(ref.get("PDH"))
+                    pdl = float(ref.get("PDL"))
+                    if h and l:
+                        high_series = pd.to_numeric(completed[h], errors="coerce")
+                        low_series = pd.to_numeric(completed[l], errors="coerce")
+                        buy_breakouts = [i for i, value in high_series.items() if pd.notna(value) and float(value) > pdh]
+                        sell_breakouts = [i for i, value in low_series.items() if pd.notna(value) and float(value) < pdl]
+
+                        if buy_breakouts:
+                            breakout_pos = completed.index.get_loc(buy_breakouts[-1])
+                            after = completed.iloc[breakout_pos + 1:]
+                            after_lows = pd.to_numeric(after[l], errors="coerce").dropna()
+                            if not after_lows.empty:
+                                pullback_low = float(after_lows.min())
+                                breakout_seen = True
+
+                        if sell_breakouts:
+                            breakout_pos = completed.index.get_loc(sell_breakouts[-1])
+                            after = completed.iloc[breakout_pos + 1:]
+                            after_highs = pd.to_numeric(after[h], errors="coerce").dropna()
+                            if not after_highs.empty:
+                                pullback_high = float(after_highs.max())
+                                breakout_seen = True
+                except (TypeError, ValueError, KeyError, IndexError):
+                    breakout_seen = False
 
         side = "BUY" if snap.get("buy_alignment") else "SELL" if snap.get("sell_alignment") else None
         if side is None:
