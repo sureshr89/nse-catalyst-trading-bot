@@ -107,7 +107,11 @@ class PriceData:
 
     @staticmethod
     def _quote_row(quote, symbol, security_id=None):
-        if quote is None or not isinstance(quote, pd.DataFrame) or quote.empty:
+        if quote is None:
+            return None
+        if isinstance(quote, pd.Series):
+            quote = quote.to_frame().T
+        if not isinstance(quote, pd.DataFrame) or quote.empty:
             return None
         required = {"LTP", "TodayOpen", "TodayHigh", "TodayLow", "PreviousClose"}
         if not required.issubset(quote.columns):
