@@ -9,3 +9,13 @@ backgroundColor = "#05070B"
 secondaryBackgroundColor = "#0B111A"
 textColor = "#F5F7FB"
 font = "sans serif"
+
+[server]
+headless = true
+port = 8501
+address = "0.0.0.0"
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
