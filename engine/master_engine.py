@@ -24,7 +24,7 @@ class MasterEngine:
     def now():return datetime.now(IST)
     @property
     def daily_pnl(self):return round(sum(self.daily_pnl_by_strategy.values()),2)
-    def _blank_diag(self):return {"timestamp":None,"strategy":"S1-S5","strategy_version":"clean-dhan-v1","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","positive_sectors":0,"negative_sectors":0,"sector_count":0,"ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{},"strategy_rejections":{s:{} for s in STRATEGY_DEFINITIONS},"market_data_source":"DHAN_ONLY","dhan_status":{},"trade_data_verified":False,"trade_ready":False,"trade_path_status":"BLOCKED"}
+    def _blank_diag(self):return {"timestamp":None,"strategy":"S1-S5","strategy_version":"clean-dhan-v2","stocks_scanned":0,"reference_data_count":0,"market_data_coverage":"0/500","nifty500_change_pct":None,"sector_change_pct":None,"sector_available":False,"sector_mapping":"0/500","sector_priced":"0/500","positive_sectors":0,"negative_sectors":0,"sector_count":0,"ad_ratio":None,"ad_advances":0,"ad_declines":0,"ad_coverage":"0/500","buy_alignment":False,"sell_alignment":False,"final_signals":0,"signals_by_strategy":{s:0 for s in STRATEGY_DEFINITIONS},"rejections":{},"strategy_rejections":{s:{} for s in STRATEGY_DEFINITIONS},"market_data_source":"DHAN_ONLY","dhan_status":{},"trade_data_verified":False,"trade_ready":False,"trade_path_status":"BLOCKED"}
     def _write_diagnostics(self):
         OUTPUT.mkdir(parents=True,exist_ok=True);(OUTPUT/"master_diagnostics.json").write_text(json.dumps(self.diagnostics,indent=2,default=str),encoding="utf-8")
     def _evaluate_stock(self,symbol,ref,snap):
@@ -42,7 +42,9 @@ class MasterEngine:
                 if l:
                     ls=pd.to_numeric(prior[l],errors="coerce");prior_low=ls.min();pullback_low=prior_low;pullback_high=prior_high
                     if pd.notna(ref.get("PDL")):breakout_seen=breakout_seen or bool((ls<float(ref.get("PDL"))).any())
-        if po is None or pc is None:return []
+        # Previous candle is diagnostic for S1/S3/S5. Do not block those setups
+        # when the optional intraday history is unavailable. S2/S4 enforce their
+        # own completed-candle requirement inside the strategy functions.
         side="BUY" if snap.get("buy_alignment") else "SELL" if snap.get("sell_alignment") else None
         if side is None:return []
         common={"nifty500_change_pct":snap.get("nifty_change"),"sector_alignment_pct":(snap.get("sector") or {}).get("alignment_pct",0),"ad_ratio":snap.get("ad_ratio"),"ad_coverage":int(str(snap.get("ad_coverage",MIN_DATA_COVERAGE_COUNT)).split("/")[0]) if snap.get("ad_coverage") else MIN_DATA_COVERAGE_COUNT,"positive_sectors":(snap.get("sector") or {}).get("positive_sectors",0),"negative_sectors":(snap.get("sector") or {}).get("negative_sectors",0),"previous_candle_open":po,"previous_candle_close":pc}
@@ -65,8 +67,8 @@ class MasterEngine:
         try:r=ReferenceStore(u).prepare()
         except Exception:r=pd.DataFrame()
         self.references=r if r is not None else pd.DataFrame();self.sector_map=load_sector_map(u,refresh=force) if not u.empty else pd.DataFrame();self._session_date=today
-        if len(self.references)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["reference"]=f"REFERENCE_BELOW_95PCT_{len(self.references)}/500"
-        if len(self.sector_map)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["sector_mapping"]=f"SECTOR_MAPPING_BELOW_95PCT_{len(self.sector_map)}/500"
+        if len(self.references)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["reference"]=f"REFERENCE_BELOW_98PCT_{len(self.references)}/500"
+        if len(self.sector_map)<MIN_DATA_COVERAGE_COUNT:self.diagnostics["rejections"]["sector_mapping"]=f"SECTOR_MAPPING_BELOW_98PCT_{len(self.sector_map)}/500"
     def prepare_reference_data(self,force=False):self._refresh_reference_data(force);return self.references
     def prepare_opening_candidates(self,force=False):self._refresh_reference_data(force);return self.references[[c for c in ["Symbol","TodayOpen","PDH","PDL","PreviousDayClose"] if c in self.references.columns]].copy()
     def _restore_daily_limits(self):
@@ -82,13 +84,10 @@ class MasterEngine:
         self._refresh_reference_data()
         blocked={"intraday":{},"prices":pd.DataFrame(),"sector":{},"nifty_change":None,"ad_ratio":None,"ad_complete":False,"buy_alignment":False,"sell_alignment":False,"dhan_quotes":{},"verified":False,"trade_ready":False}
         if len(self.references)<MIN_DATA_COVERAGE_COUNT or not configured():
-            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_BELOW_95PCT";self.last_snapshot=blocked;self._write_diagnostics();return blocked
+            self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_BELOW_98PCT";self.last_snapshot=blocked;self._write_diagnostics();return blocked
         symbols=self.references["Symbol"].astype(str).str.upper().tolist();mapping=map_nifty500(symbols)
         if mapping is None or mapping.empty:
             self.diagnostics["rejections"]["mapping"]="DHAN_MAPPING_UNAVAILABLE";self.last_snapshot=blocked;self._write_diagnostics();return blocked
-        # Keep every valid Dhan quote for dashboard visibility. Mapping or quote
-        # coverage below 475/500 never becomes trade approval; it only prevents
-        # the market-level gate from opening.
         quotes=market_quote_partial(mapping)
         if quotes.empty:
             self.diagnostics["rejections"]["market_data"]="DHAN_QUOTES_UNAVAILABLE";self.diagnostics["dhan_status"]=dhan_status();self.last_snapshot=blocked;self._write_diagnostics();return blocked
@@ -115,24 +114,8 @@ class MasterEngine:
             self.diagnostics["rejections"]["trade_gate"]="; ".join(reasons)
         self._write_diagnostics();return snap
     def _publish_dashboard_snapshot(self):
-        """Publish the engine snapshot to the shared breadth/dashboard cache.
-
-        This is a presentation bridge only. Partial live quotes remain visible,
-        while the approved 475/500 threshold is still enforced for trade
-        readiness. No visual layout or strategy rule is changed.
-        """
+        """Publish the engine snapshot to the shared breadth/dashboard cache."""
         from market.nifty500_breadth import BREADTH
-        snap=getattr(self,"last_snapshot",{}) or {}
-        prices=snap.get("prices")
-        prices=prices.copy() if isinstance(prices,pd.DataFrame) else pd.DataFrame()
-        sector=snap.get("sector") or {}
-        coverage=len(prices)
-        adv=int((pd.to_numeric(prices["change_pct"],errors="coerce")>0).sum()) if "change_pct" in prices.columns else 0
-        dec=int((pd.to_numeric(prices["change_pct"],errors="coerce")<0).sum()) if "change_pct" in prices.columns else 0
-        unchanged=max(0,coverage-adv-dec)
-        priced=int(sector.get("priced",0) or 0)
-        complete=coverage>=MIN_DATA_COVERAGE_COUNT
-        sector_complete=bool(sector.get("available")) and priced>=MIN_DATA_COVERAGE_COUNT
-        result={"universe":"NIFTY 500","total":500,"evaluated":coverage,"advances":adv,"declines":dec,"unchanged":unchanged,"ad_ratio":snap.get("ad_ratio"),"direction":"BULLISH" if adv>dec else "BEARISH" if dec>adv else "NEUTRAL","complete":complete,"reason":"OK" if complete else f"CURRENT_ENGINE_COVERAGE_BELOW_95PCT_{coverage}/500","updated_at":self.now().isoformat(timespec="seconds"),"nifty500_change_pct":snap.get("nifty_change"),"nifty500_ltp":None,"nifty500_previous_close":None,"nifty500_reference_close":None,"sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":sector_complete,"sector_coverage":f"{priced}/500","sector_mapped":int(sector.get("mapped",0) or 0),"sector_priced":priced,"sector_count":int(sector.get("sectors",0) or 0),"positive_sectors":int(sector.get("positive_sectors",0) or 0),"negative_sectors":int(sector.get("negative_sectors",0) or 0),"unchanged_sectors":int(sector.get("unchanged_sectors",0) or 0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":prices}
-        BREADTH._store(result)
-        return result
+        snap=getattr(self,"last_snapshot",{}) or {};prices=snap.get("prices");prices=prices.copy() if isinstance(prices,pd.DataFrame) else pd.DataFrame();sector=snap.get("sector") or {}
+        coverage=len(prices);adv=int((pd.to_numeric(prices["change_pct"],errors="coerce")>0).sum()) if "change_pct" in prices.columns else 0;dec=int((pd.to_numeric(prices["change_pct"],errors="coerce")<0).sum()) if "change_pct" in prices.columns else 0;unchanged=max(0,coverage-adv-dec);priced=int(sector.get("priced",0) or 0);complete=coverage>=MIN_DATA_COVERAGE_COUNT;sector_complete=bool(sector.get("available")) and priced>=MIN_DATA_COVERAGE_COUNT
+        result={"universe":"NIFTY 500","total":500,"evaluated":coverage,"advances":adv,"declines":dec,"unchanged":unchanged,"ad_ratio":snap.get("ad_ratio"),"direction":"BULLISH" if adv>dec else "BEARISH" if dec>adv else "NEUTRAL","complete":complete,"reason":"OK" if complete else f"CURRENT_ENGINE_COVERAGE_BELOW_98PCT_{coverage}/500","updated_at":self.now().isoformat(timespec="seconds"),"nifty500_change_pct":snap.get("nifty_change"),"nifty500_ltp":None,"nifty500_previous_close":None,"nifty500_reference_close":None,"sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":sector_complete,"sector_coverage":f"{priced}/500","sector_mapped":int(sector.get("mapped",0) or 0),"sector_priced":priced,"sector_count":int(sector.get("sectors",0) or 0),"positive_sectors":int(sector.get("positive_sectors",0) or 0),"negative_sectors":int(sector.get("negative_sectors",0) or 0),"unchanged_sectors":int(sector.get("unchanged_sectors",0) or 0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":prices};BREADTH._store(result);return result
