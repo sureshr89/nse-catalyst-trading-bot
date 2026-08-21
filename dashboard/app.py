@@ -1,9 +1,4 @@
-"""Primary NSE Catalyst Streamlit entrypoint.
-
-The dashboard is intentionally presentation-only.  One live engine cycle owns
-Dhan collection; the dashboard reads the shared 15-second snapshot through the
-canonical breadth layer.  Diagnostic/testing UI is kept out of production UI.
-"""
+"""Primary NSE Catalyst Streamlit entrypoint."""
 from pathlib import Path
 import sys
 
@@ -12,6 +7,13 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+st.set_page_config(
+    page_title="NSE Catalyst",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 import main as _engine_main
 
@@ -34,8 +36,8 @@ def _live_trade_worker():
 
 _live_trade_worker()
 
-# Production dashboard only.  The separate TESTING panel is intentionally not
-# rendered here; its files remain in the repository for CI/regression coverage.
+# Production UI only. Diagnostic/testing files remain available to CI but are
+# intentionally not rendered in the live trading dashboard.
 from dashboard.single_master import render_dashboard
 
 render_dashboard()
