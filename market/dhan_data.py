@@ -6,7 +6,7 @@ from pathlib import Path
 import math,os,threading,time
 import pandas as pd,requests
 from config.settings import MIN_DATA_COVERAGE_COUNT
-BASE_URL="https://api.dhan.co/v2";MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv";MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv";CACHE_DIR=Path("data");MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv";IST="Asia/Kolkata";_LOCK=threading.RLock();_QUOTE_CACHE={};_QUOTE_CACHE_AT=0.0;_QUOTE_CACHE_KEY=None;_LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
+BASE_URL="https://api.dhan.co/v2";MASTER_URL="https://images.dhan.co/api-data/api-scrip-master.csv";MASTER_DETAILED_URL="https://images.dhan.co/api-data/api-scrip-master-detailed.csv";CACHE_DIR=Path("data");MASTER_CACHE=CACHE_DIR/"dhan_scrip_master.csv";IST="Asia/Kolkata";_LOCK=threading.RLock();_QUOTE_API_LOCK=threading.Lock();_LAST_QUOTE_API_AT=0.0;_QUOTE_CACHE={};_QUOTE_CACHE_AT=0.0;_QUOTE_CACHE_KEY=None;_LAST_DHAN_STATUS={"ok":False,"stage":"NOT_TESTED","http_status":None,"error_code":None,"message":"Not tested","received":0,"requested":0,"updated_at":None}
 def _secret(name):
  value=os.getenv(name,"")
  if value:return str(value).strip()
@@ -19,13 +19,38 @@ def _set_status(**kwargs):
  global _LAST_DHAN_STATUS;_LAST_DHAN_STATUS={**_LAST_DHAN_STATUS,**kwargs,"updated_at":datetime.now().isoformat(timespec="seconds")}
 def _headers():return {"Accept":"application/json","Content-Type":"application/json","access-token":_secret("DHAN_ACCESS_TOKEN"),"client-id":_secret("DHAN_CLIENT_ID")}
 def _post(path,payload,timeout=15):
+ """POST to Dhan with a process-wide quote throttle.
+
+ DhanHQ v2 quote APIs are limited to one request/second per user. Streamlit
+ fragments and the trading engine can execute in the same process, so the
+ throttle must live at this shared API boundary rather than in one tab.
+ """
+ global _LAST_QUOTE_API_AT
  if not configured():_set_status(ok=False,stage="CONFIG",message="DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN missing");return {}
- try:
-  r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout);body=r.json() if r.content else {}
-  if r.status_code!=200:
-   code=(body.get("errorCode") or body.get("error_code") or body.get("code")) if isinstance(body,dict) else None;msg=(body.get("errorMessage") or body.get("error_message") or body.get("message")) if isinstance(body,dict) else r.text[:300];_set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
-  _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
- except Exception as exc:_set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
+ is_quote=path.startswith("/marketfeed/")
+ attempts=3 if is_quote else 1
+ for attempt in range(attempts):
+  try:
+   if is_quote:
+    with _QUOTE_API_LOCK:
+     wait=max(0.0,1.10-(time.monotonic()-_LAST_QUOTE_API_AT))
+     if wait:time.sleep(wait)
+     r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
+     _LAST_QUOTE_API_AT=time.monotonic()
+   else:
+    r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
+   body=r.json() if r.content else {}
+   if r.status_code!=200:
+    code=(body.get("errorCode") or body.get("error_code") or body.get("code")) if isinstance(body,dict) else None;msg=(body.get("errorMessage") or body.get("error_message") or body.get("message")) if isinstance(body,dict) else r.text[:300]
+    if is_quote and (r.status_code==429 or str(code)=="805") and attempt<attempts-1:
+     time.sleep(1.5*(attempt+1));continue
+    _set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
+   _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
+  except Exception as exc:
+   if is_quote and attempt<attempts-1:
+    time.sleep(1.2*(attempt+1));continue
+   _set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
+ return {}
 def _valid_master(x):
  if x is None or x.empty:return False
  cols={str(c).strip().upper() for c in x.columns};return bool({"SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"}&cols) and bool({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols)
@@ -81,7 +106,6 @@ def _parse_quote_response(response,mapping):
   except (TypeError,ValueError,OverflowError,KeyError):pass
  return pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame()
 def diagnostic_nifty500_live(mapping):
- """Return raw Dhan quote diagnostics without applying the 475/500 trade gate."""
  if mapping is None or mapping.empty:return {"configured":configured(),"requested":0,"returned":0,"valid":0,"rows":pd.DataFrame(),"status":dhan_status(),"error":"EMPTY_MAPPING"}
  clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean=clean.dropna(subset=["SecurityId"]);clean["SecurityId"]=clean["SecurityId"].astype("int64").astype(str);clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.drop_duplicates("Symbol")
  response=_marketfeed("NSE_EQ",clean["SecurityId"].tolist(),"/marketfeed/quote") if configured() else {}
@@ -94,7 +118,7 @@ def market_quote(mapping,cache_seconds=10):
  if clean.empty or clean["Symbol"].duplicated().any():return pd.DataFrame()
  ids=clean["SecurityId"].tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
  with _LOCK:
-  if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
+  if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=max(cache_seconds,10):
    cached=pd.DataFrame(list(_QUOTE_CACHE.values()));cached_ids=set(cached.get("SecurityId",pd.Series(dtype=str)).astype(str));cached_symbols=set(cached.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper())
    if len(cached)>=MIN_DATA_COVERAGE_COUNT and cached_ids.issubset(expected_ids) and cached_symbols.issubset(expected_symbols):return cached
  response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");result=_parse_quote_response(response,clean);result_ids=set(result.get("SecurityId",pd.Series(dtype=str)).astype(str));result_symbols=set(result.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper());verified=len(result)>=MIN_DATA_COVERAGE_COUNT and result_ids.issubset(expected_ids) and result_symbols.issubset(expected_symbols)
