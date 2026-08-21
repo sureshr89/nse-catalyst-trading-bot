@@ -92,8 +92,6 @@ class PriceData:
         start = (today - timedelta(days=max(1, days) + 5)).isoformat()
         end = (today + timedelta(days=1)).isoformat()
         result = {}
-        # Keep the sequential pacing here because this path is reference/setup
-        # preparation, not the protected 15-second live collection cycle.
         for symbol in symbols:
             sid = by_symbol.get(symbol)
             if not sid:
@@ -106,6 +104,21 @@ class PriceData:
                 continue
             time.sleep(0.21)
         return result
+
+    @staticmethod
+    def _quote_row(quote, symbol):
+        if quote is None or not isinstance(quote, pd.DataFrame) or quote.empty:
+            return None
+        required = {"LTP", "TodayOpen", "TodayHigh", "TodayLow", "PreviousClose"}
+        if not required.issubset(quote.columns):
+            return None
+        clean = quote.copy()
+        if "Symbol" in clean.columns:
+            wanted = str(symbol).upper().replace(".NS", "").strip()
+            matched = clean[clean["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).eq(wanted)]
+            if not matched.empty:
+                clean = matched
+        return clean.iloc[0]
 
     def get_latest_live_price(self, symbol, max_age_seconds=8):
         key = str(symbol).upper().replace(".NS", "").strip()
@@ -122,24 +135,31 @@ class PriceData:
             return None
         try:
             quote = dhan_data.market_quote(mapping, cache_seconds=min(max(max_age_seconds, 2), 10))
-            if quote is None or quote.empty:
+            row = self._quote_row(quote, key)
+            if row is None:
                 return None
-            row = quote.iloc[0]
+            close = float(row["LTP"])
+            open_price = float(row["TodayOpen"])
+            high = float(row["TodayHigh"])
+            low = float(row["TodayLow"])
+            previous_close = float(row["PreviousClose"])
+            net_change = float(row["NetChange"]) if "NetChange" in row.index else close - previous_close
+            values = [close, open_price, high, low, previous_close]
+            if any(pd.isna(v) or v <= 0 for v in values):
+                return None
+            if high < max(open_price, low, close) or low > min(open_price, high, close):
+                return None
             out = {
-                "Close": float(row["LTP"]),
-                "Open": float(row["TodayOpen"]),
-                "High": float(row["TodayHigh"]),
-                "Low": float(row["TodayLow"]),
-                "PreviousClose": float(row["PreviousClose"]),
-                "NetChange": float(row["NetChange"]),
+                "Close": close,
+                "Open": open_price,
+                "High": high,
+                "Low": low,
+                "PreviousClose": previous_close,
+                "NetChange": net_change,
                 "Datetime": datetime.now(INDIA_TZ),
                 "price_source": "DHAN_MARKETFEED_QUOTE",
             }
         except (KeyError, TypeError, ValueError, OverflowError):
-            return None
-        if any(pd.isna(out[k]) or out[k] <= 0 for k in ["Close", "Open", "High", "Low", "PreviousClose"]):
-            return None
-        if out["High"] < max(out["Open"], out["Low"], out["Close"]) or out["Low"] > min(out["Open"], out["High"], out["Close"]):
             return None
         with self._cache_lock:
             self._live_price_cache[key] = dict(out)
