@@ -21,36 +21,29 @@ def _headers():return {"Accept":"application/json","Content-Type":"application/j
 def _post(path,payload,timeout=15):
  """POST to Dhan with a process-wide quote throttle.
 
- DhanHQ v2 quote APIs are limited to one request/second per user. Streamlit
- fragments and the trading engine can execute in the same process, so the
- throttle must live at this shared API boundary rather than in one tab.
+ DhanHQ quote APIs allow one request per second per user.  Never retry a 429/805
+ immediately: doing so makes the rate-limit problem worse.  The shared bridge
+ retries only on the next normal 15-second application cycle.
  """
  global _LAST_QUOTE_API_AT
  if not configured():_set_status(ok=False,stage="CONFIG",message="DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN missing");return {}
  is_quote=path.startswith("/marketfeed/")
- attempts=3 if is_quote else 1
- for attempt in range(attempts):
-  try:
-   if is_quote:
-    with _QUOTE_API_LOCK:
-     wait=max(0.0,1.10-(time.monotonic()-_LAST_QUOTE_API_AT))
-     if wait:time.sleep(wait)
-     r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
-     _LAST_QUOTE_API_AT=time.monotonic()
-   else:
+ try:
+  if is_quote:
+   with _QUOTE_API_LOCK:
+    wait=max(0.0,1.10-(time.monotonic()-_LAST_QUOTE_API_AT))
+    if wait:time.sleep(wait)
     r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
-   body=r.json() if r.content else {}
-   if r.status_code!=200:
-    code=(body.get("errorCode") or body.get("error_code") or body.get("code")) if isinstance(body,dict) else None;msg=(body.get("errorMessage") or body.get("error_message") or body.get("message")) if isinstance(body,dict) else r.text[:300]
-    if is_quote and (r.status_code==429 or str(code)=="805") and attempt<attempts-1:
-     time.sleep(1.5*(attempt+1));continue
-    _set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
-   _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
-  except Exception as exc:
-   if is_quote and attempt<attempts-1:
-    time.sleep(1.2*(attempt+1));continue
-   _set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
- return {}
+    _LAST_QUOTE_API_AT=time.monotonic()
+  else:
+   r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout)
+  body=r.json() if r.content else {}
+  if r.status_code!=200:
+   code=(body.get("errorCode") or body.get("error_code") or body.get("code")) if isinstance(body,dict) else None;msg=(body.get("errorMessage") or body.get("error_message") or body.get("message")) if isinstance(body,dict) else r.text[:300]
+   _set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
+  _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
+ except Exception as exc:
+  _set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
 def _valid_master(x):
  if x is None or x.empty:return False
  cols={str(c).strip().upper() for c in x.columns};return bool({"SEM_SMST_SECURITY_ID","SEM_SECURITY_ID","SECURITY_ID"}&cols) and bool({"SEM_TRADING_SYMBOL","SM_SYMBOL_NAME","SYMBOL_NAME"}&cols)
