@@ -1,0 +1,145 @@
+name: PREMARKET FULL SYSTEM AUDIT
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Full Production Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          python -m pip install pytest pandas streamlit
+
+      - name: Python syntax audit
+        run: python -m compileall -q .
+
+      - name: Production import audit
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import importlib
+          modules = [
+              'main',
+              'engine.master_engine',
+              'engine.cycle_runner',
+              'market.dhan_data',
+              'market.price_data',
+              'market.nifty500_breadth',
+              'data.reference_store',
+              'data.stock_universe',
+              'data.sector_alignment',
+              'strategy.nifty500_price_action_strategies',
+              'papertrade.paper_trade_engine',
+              'dashboard.app',
+          ]
+          for name in modules:
+              importlib.import_module(name)
+              print('IMPORT OK:', name)
+          PY
+
+      - name: Approved 95 percent gate audit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('.')
+          failures = []
+          suspicious = []
+          for p in root.rglob('*.py'):
+              if any(part in {'.git', '.venv', '__pycache__'} for part in p.parts):
+                  continue
+              text = p.read_text(encoding='utf-8', errors='replace')
+              # Exact 500 is valid for defining the NIFTY 500 universe itself.
+              # It is not valid as a live-data coverage gate after the approved
+              # >=95% rule was adopted.
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  if re.search(r'(coverage|complete|available|priced|quotes|mapping|data).*(?:==|>=|>)\s*500|500\s*(?:==|<=|>)\s*(coverage|complete|available|priced|quotes|mapping|data)', line, re.I):
+                      if 'NIFTY500_UNIVERSE_INCOMPLETE' in line or 'len(u)!=500' in line or 'len(u) != 500' in line:
+                          continue
+                      suspicious.append(f'{p}:{lineno}: {line.strip()}')
+          if suspicious:
+              print('Suspicious 500 live-coverage gates:')
+              print('\n'.join(suspicious))
+              raise SystemExit(1)
+          print('95% coverage gate audit: PASS')
+          PY
+
+      - name: Engine to dashboard snapshot contract audit
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          import main
+          from market.nifty500_breadth import BREADTH
+
+          e = main.MasterEngine.__new__(main.MasterEngine)
+          e.last_snapshot = {
+              'verified': True,
+              'prices': pd.DataFrame({
+                  'Symbol': [f'S{i}' for i in range(475)],
+                  'LTP': [100.0] * 475,
+                  'PreviousClose': [99.0] * 475,
+                  'change_pct': [1.01] * 475,
+              }),
+              'sector': {
+                  'available': True,
+                  'priced': 475,
+                  'positive_sectors': 8,
+                  'negative_sectors': 4,
+              },
+              'nifty_change': 0.2,
+              'ad_ratio': 1.5,
+          }
+          e.diagnostics = {'rejections': {}}
+          e._publish_dashboard_snapshot()
+          snap = BREADTH.snapshot()
+          assert snap['complete'] is True
+          assert len(snap['quote_rows']) == 475
+          assert snap['sector_complete'] is True
+          assert snap['ad_ratio'] == 1.5
+          assert snap['positive_sectors'] == 8
+          assert snap['negative_sectors'] == 4
+          print('Engine -> dashboard snapshot contract: PASS (475/500)')
+          PY
+
+      - name: Full pytest regression
+        run: python -m pytest -q
+
+      - name: Streamlit startup smoke test
+        env:
+          PYTHONPATH: .
+        run: |
+          nohup python -m streamlit run dashboard/app.py --server.headless true --server.port 8501 > /tmp/streamlit.log 2>&1 &
+          echo $! > /tmp/streamlit.pid
+          python - <<'PY'
+          import time, urllib.request
+          url = 'http://127.0.0.1:8501/_stcore/health'
+          for _ in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as r:
+                      if r.status == 200:
+                          print('Streamlit startup: PASS')
+                          raise SystemExit(0)
+              except Exception:
+                  time.sleep(1)
+          print(open('/tmp/streamlit.log', encoding='utf-8', errors='replace').read())
+          raise SystemExit('Streamlit startup failed')
+
+      - name: Stop Streamlit
+        if: always()
+        run: |
+          if [ -f /tmp/streamlit.pid ]; then kill $(cat /tmp/streamlit.pid) || true; fi
