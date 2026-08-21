@@ -1,9 +1,8 @@
 """NSE Catalyst production dashboard.
 
 Compact production presentation layer for the NIFTY 500 paper-trading engine.
-It consumes the shared 15-second snapshot; it does not fetch constituent prices
-independently. The dashboard intentionally shows only market alignment, sector
-summary cards, S1-S5 strategy cards, CSV download and the daily tip.
+Consumes the shared snapshot and presents market alignment plus clean S1-S5
+strategy and performance cards. Presentation only; trading logic is unchanged.
 """
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +16,14 @@ from config.settings import MIN_DATA_COVERAGE_COUNT
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS = ROOT / "outputs"
 IST = ZoneInfo("Asia/Kolkata")
+STRATEGIES = ["S1", "S2", "S3", "S4", "S5"]
+PALETTE = {
+    "S1": ("#22c55e", "↩️", "PDH/PDL SWEEP REVERSAL"),
+    "S2": ("#38bdf8", "🔁", "BREAKOUT + RETEST"),
+    "S3": ("#f59e0b", "🎯", "INSIDE RANGE REVERSAL"),
+    "S4": ("#a78bfa", "⚡", "INTRADAY BREAKOUT"),
+    "S5": ("#f43f5e", "🚀", "PDH/PDL BREAKOUT"),
+}
 
 
 def read_csv(name):
@@ -65,34 +72,115 @@ def first(row, *names, default=""):
 
 
 def card(label, value, emphasis=""):
-    color = {"buy": "#67e8a5", "sell": "#ff7b7b", "wait": "#ffd166"}.get(emphasis, "#ffffff")
+    color = {"buy": "#22c55e", "sell": "#ef4444", "wait": "#d97706"}.get(emphasis, "#334155")
     return (
-        '<div style="background:#101b2b;border:1px solid #294367;border-radius:12px;'
-        'padding:12px;min-height:72px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;">'
-        f'<div style="font-size:10px;font-weight:900;color:#cbd5e1;text-transform:uppercase;">{label}</div>'
-        f'<div style="font-size:19px;font-weight:900;color:{color};margin-top:6px;line-height:1.15;">{value}</div>'
+        '<div class="metric-card">'
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value" style="color:{color};">{value}</div>'
         '</div>'
     )
 
 
 def card_grid(items):
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;width:100%;margin-bottom:8px;">' + "".join(items) + '</div>'
+    return '<div class="metric-grid">' + "".join(items) + '</div>'
 
 
 def strategy_card(strategy, state, state_color, cells):
+    """Clean strategy card matching the compact index-card visual style."""
+    accent, icon, subtitle = PALETTE.get(strategy, ("#64748b", "📊", "STRATEGY"))
     html = "".join(
-        f'<div style="background:#101b2b;border-radius:9px;padding:9px;min-width:0;">'
-        f'<div style="font-size:11px;color:#bfcbd9;text-transform:uppercase;font-weight:800;">{label}</div>'
-        f'<div style="font-size:14px;font-weight:900;color:#fff;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{value or "—"}</div></div>'
+        f'<div class="strategy-detail">'
+        f'<div class="strategy-detail-label">{label}</div>'
+        f'<div class="strategy-detail-value">{value or "—"}</div>'
+        '</div>'
         for label, value in cells
     )
     return (
-        '<div style="background:#0b1422;border:1px solid #294367;border-radius:13px;padding:13px;margin:9px 0;">'
-        f'<div style="font-size:18px;font-weight:950;color:#fff;margin-bottom:10px;">{strategy}'
-        f'<span style="float:right;font-size:12px;color:{state_color};padding:5px 9px;background:#162943;border-radius:8px;">{state}</span></div>'
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px;">'
-        + html + '</div></div>'
+        f'<div class="strategy-card" style="--accent:{accent};">'
+        f'<div class="strategy-top">'
+        f'<div class="strategy-heading"><span class="strategy-icon">{icon}</span>'
+        f'<div><div class="strategy-code" style="color:{accent};">{strategy}</div>'
+        f'<div class="strategy-subtitle">{subtitle}</div></div></div>'
+        f'<span class="strategy-state" style="color:{state_color};">{state}</span>'
+        '</div>'
+        f'<div class="strategy-details">{html}</div>'
+        '</div>'
     )
+
+
+def strategy_name_mask(df, strategy):
+    if df.empty:
+        return pd.Series(False, index=df.index)
+    cols = [c for c in ["strategy", "strategy_name", "signal", "setup_type"] if c in df.columns]
+    mask = pd.Series(False, index=df.index)
+    for col in cols:
+        vals = df[col].astype(str).str.upper().str.strip()
+        mask |= vals.eq(strategy) | vals.str.startswith(strategy + " ")
+    return mask
+
+
+def strategy_rows(df, strategy):
+    if df.empty:
+        return df
+    return df[strategy_name_mask(df, strategy)].copy()
+
+
+def performance_stats(df, strategy):
+    """Return robust strategy statistics from available trade rows."""
+    rows = strategy_rows(df, strategy)
+    if rows.empty:
+        return {"trades": 0, "open": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "pnl": 0.0}
+
+    pnl = pd.to_numeric(rows.get("pnl", pd.Series(0.0, index=rows.index)), errors="coerce").fillna(0.0)
+    status = rows.get("status", pd.Series("", index=rows.index)).astype(str).str.upper().str.strip()
+    exit_time = rows.get("exit_time", pd.Series("", index=rows.index)).astype(str).str.strip()
+    closed = status.eq("CLOSED") | exit_time.ne("").map(lambda x: x and x is not None)
+    # Treat a row with an exit price/reason as closed even if status is absent.
+    if "exit_price" in rows.columns:
+        closed |= rows["exit_price"].astype(str).str.strip().ne("")
+    open_count = int((~closed).sum())
+    wins = int((closed & pnl.gt(0)).sum())
+    losses = int((closed & pnl.lt(0)).sum())
+    decided = wins + losses
+    return {
+        "trades": int(len(rows)),
+        "open": open_count,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (wins / decided * 100.0) if decided else 0.0,
+        "pnl": float(pnl.sum()),
+    }
+
+
+def performance_card(strategy, stats, cumulative=False):
+    accent, icon, subtitle = PALETTE[strategy]
+    pnl = stats["pnl"]
+    pnl_color = "#16a34a" if pnl > 0 else "#dc2626" if pnl < 0 else "#64748b"
+    return f'''
+    <div class="perf-card" style="--accent:{accent};">
+      <div class="perf-head">
+        <div class="perf-name"><span class="perf-icon">{icon}</span><span style="color:{accent};">{strategy}</span></div>
+        <span class="perf-subtitle">{subtitle}</span>
+      </div>
+      <div class="perf-stats">
+        <div><span>OPEN</span><b>{stats["open"]}</b></div>
+        <div><span>TRADES</span><b>{stats["trades"]}</b></div>
+        <div><span>WINS</span><b class="win">{stats["wins"]}</b></div>
+        <div><span>LOSSES</span><b class="loss">{stats["losses"]}</b></div>
+        <div><span>WIN RATE</span><b>{stats["win_rate"]:.1f}%</b></div>
+        <div><span>{"CUMULATIVE P&L" if cumulative else "TODAY P&L"}</span><b style="color:{pnl_color};">₹{pnl:,.2f}</b></div>
+      </div>
+    </div>'''
+
+
+def total_performance(stats_map):
+    return {
+        "trades": sum(v["trades"] for v in stats_map.values()),
+        "open": sum(v["open"] for v in stats_map.values()),
+        "wins": sum(v["wins"] for v in stats_map.values()),
+        "losses": sum(v["losses"] for v in stats_map.values()),
+        "pnl": sum(v["pnl"] for v in stats_map.values()),
+    }
 
 
 st.markdown("""
@@ -100,6 +188,37 @@ st.markdown("""
 .stApp{background:#000!important;color:#fff!important}
 .block-container{max-width:1450px;padding:.7rem .8rem 2rem}
 .stCaption,.stCaption p{color:#cbd5e1!important}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;width:100%;margin-bottom:8px}
+.metric-card{background:#f8fafc;border:1px solid #dbe7f4;border-radius:11px;padding:11px 13px;min-height:67px;box-sizing:border-box}
+.metric-label{font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em}
+.metric-value{font-size:18px;font-weight:900;margin-top:6px;line-height:1.12}
+.strategy-card,.perf-card{background:#f8fafc;border:1px solid #dbe7f4;border-radius:11px;box-sizing:border-box}
+.strategy-card{padding:11px 13px;margin:9px 0}
+.strategy-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.strategy-heading{display:flex;align-items:center;gap:8px;min-width:0}
+.strategy-icon{font-size:21px}.strategy-code{font-size:17px;font-weight:950;line-height:1}
+.strategy-subtitle{font-size:9px;font-weight:800;color:#64748b;letter-spacing:.05em;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strategy-state{font-size:9px;font-weight:950;background:#eef4fa;border:1px solid #dbe7f4;border-radius:999px;padding:6px 8px;white-space:nowrap}
+.strategy-details{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+.strategy-detail{background:#eef4fa;border-radius:8px;padding:7px 8px;min-width:0}
+.strategy-detail-label{font-size:8px;font-weight:850;color:#64748b;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strategy-detail-value{font-size:12px;font-weight:900;color:#1e293b;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.performance-section{margin-top:18px}
+.performance-title{font-size:20px;font-weight:950;color:#fff;margin:0 0 4px}
+.performance-note{font-size:11px;color:#94a3b8;margin-bottom:9px}
+.performance-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.perf-card{padding:12px;border-top:3px solid var(--accent);box-shadow:0 3px 12px rgba(0,0,0,.10)}
+.perf-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.perf-name{font-size:18px;font-weight:950;display:flex;align-items:center;gap:7px}.perf-icon{font-size:20px}
+.perf-subtitle{font-size:8px;font-weight:850;color:#64748b;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perf-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.perf-stats div{background:#eef4fa;border-radius:8px;padding:7px 8px;min-width:0}
+.perf-stats span{display:block;font-size:8px;font-weight:850;color:#64748b;letter-spacing:.04em}
+.perf-stats b{display:block;font-size:13px;color:#1e293b;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.perf-stats .win{color:#16a34a}.perf-stats .loss{color:#dc2626}
+.performance-total{margin-top:9px;padding:10px 12px;border-top:2px solid #cbd5e1;border-bottom:1px solid #dbe7f4;color:#e2e8f0;font-size:13px;font-weight:900;display:flex;gap:20px;flex-wrap:wrap}
+.performance-total span{white-space:nowrap}.performance-total b{color:#fff}
+@media (max-width:1100px){.performance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.strategy-details{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:700px){.block-container{padding:.55rem .55rem 1.5rem}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.strategy-card{padding:10px;margin:7px 0}.strategy-details{grid-template-columns:repeat(2,minmax(0,1fr))}.strategy-top{align-items:flex-start}.strategy-subtitle{max-width:180px}.performance-grid{grid-template-columns:1fr;gap:7px}.perf-card{padding:11px}.perf-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.performance-title{font-size:18px}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -185,7 +304,6 @@ def live_dashboard():
         card("POSITIVE SECTORS", positive_sectors if sector_complete else "WAITING"),
         card("NEGATIVE SECTORS", negative_sectors if sector_complete else "WAITING"),
     ]), unsafe_allow_html=True)
-
     st.markdown(card_grid([
         card("UNCHANGED", unchanged if complete else "WAITING"),
         card("LIVE COVERAGE", f"{evaln}/500"),
@@ -203,34 +321,15 @@ def live_dashboard():
     border = "#28633f" if status_ok else "#6b3333"
     st.markdown(f'<div style="margin:8px 0;padding:11px 13px;background:{bg};border:1px solid {border};border-radius:11px;color:#e8eef7;font-size:13px;">{status}</div>', unsafe_allow_html=True)
 
-    # Sector performance table intentionally removed. Sector information remains
-    # available through the compact positive/negative sector cards above and is
-    # still used by the master market-alignment logic.
     st.markdown('<div style="font-size:20px;font-weight:950;color:#fff;margin:18px 0 9px;">⚡ S1–S5 — TODAY</div>', unsafe_allow_html=True)
-
-    for strategy in ["S1", "S2", "S3", "S4", "S5"]:
-        tr = pd.DataFrame()
-        sg = pd.DataFrame()
-        for source, target in [(trades_today, "tr"), (signals_today, "sg")]:
-            if source.empty:
-                continue
-            cols = [c for c in ["strategy", "strategy_name", "signal", "setup_type"] if c in source.columns]
-            if not cols:
-                continue
-            mask = pd.Series(False, index=source.index)
-            for c in cols:
-                vals = source[c].astype(str).str.upper().str.strip()
-                mask |= vals.eq(strategy) | vals.str.startswith(strategy + " ")
-            if target == "tr":
-                tr = source[mask]
-            else:
-                sg = source[mask]
-
+    for strategy in STRATEGIES:
+        tr = strategy_rows(trades_today, strategy)
+        sg = strategy_rows(signals_today, strategy)
         row = tr.iloc[-1] if not tr.empty else None
         signal_row = sg.iloc[-1] if not sg.empty else None
         if row is not None:
-            status = str(first(row, "status", default="OPEN")).upper()
-            state = "CLOSED" if status == "CLOSED" or first(row, "exit_time") not in {"", None} else "TRADE OPEN"
+            status_text = str(first(row, "status", default="OPEN")).upper()
+            state = "CLOSED" if status_text == "CLOSED" or first(row, "exit_time") not in {"", None} else "TRADE OPEN"
             cells = [("Stock", first(row, "symbol", "stock")), ("BUY / SELL", first(row, "buy_sell", "side", "signal")),
                      ("Signal Time", first(row, "trigger_entry_time", "entry_time", "market_entry_time")),
                      ("Entry", fmt(first(row, "entry", "entry_price"))), ("Stop Loss", fmt(first(row, "stop_loss"))),
@@ -248,9 +347,31 @@ def live_dashboard():
             state = "WAITING"
             cells = [("Stock", "—"), ("BUY / SELL", "—"), ("Signal Time", "—"), ("Entry", "—"), ("Stop Loss", "—"),
                      ("Target", "—"), ("Exit", "—"), ("P&L", "—"), ("Risk / Reward", "—"), ("Quantity", "—"), ("Exit Reason", "—")]
-
-        state_color = "#67e8a5" if state == "CLOSED" else "#5ec8ff" if state == "SIGNAL" else "#ffd166" if state == "TRADE OPEN" else "#fff"
+        state_color = "#16a34a" if state == "CLOSED" else "#0284c7" if state == "SIGNAL" else "#d97706" if state == "TRADE OPEN" else "#64748b"
         st.markdown(strategy_card(strategy, state, state_color, cells), unsafe_allow_html=True)
+
+    today_stats = {s: performance_stats(trades_today, s) for s in STRATEGIES}
+    cumulative_stats = {s: performance_stats(trades_all, s) for s in STRATEGIES}
+
+    st.markdown('<div class="performance-section">', unsafe_allow_html=True)
+    st.markdown('<div class="performance-title">📅 TODAY — ALL POSITIONS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="performance-note">All S1–S5 positions, wins, losses, open positions and P&amp;L for today only.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="performance-grid">' + ''.join(performance_card(s, today_stats[s]) for s in STRATEGIES) + '</div>', unsafe_allow_html=True)
+    tt = total_performance(today_stats)
+    twr = (tt["wins"] / (tt["wins"] + tt["losses"]) * 100) if tt["wins"] + tt["losses"] else 0
+    tpnl_color = "#16a34a" if tt["pnl"] > 0 else "#dc2626" if tt["pnl"] < 0 else "#fff"
+    st.markdown(f'<div class="performance-total"><span>OPEN <b>{tt["open"]}</b></span><span>TRADES <b>{tt["trades"]}</b></span><span>WINS <b>{tt["wins"]}</b></span><span>LOSSES <b>{tt["losses"]}</b></span><span>WIN RATE <b>{twr:.1f}%</b></span><span>P&amp;L <b style="color:{tpnl_color};">₹{tt["pnl"]:,.2f}</b></span></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="performance-section">', unsafe_allow_html=True)
+    st.markdown('<div class="performance-title">📈 CUMULATIVE — ALL DAYS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="performance-note">Complete historical performance across all available trading days.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="performance-grid">' + ''.join(performance_card(s, cumulative_stats[s], cumulative=True) for s in STRATEGIES) + '</div>', unsafe_allow_html=True)
+    ct = total_performance(cumulative_stats)
+    cwr = (ct["wins"] / (ct["wins"] + ct["losses"]) * 100) if ct["wins"] + ct["losses"] else 0
+    cpnl_color = "#16a34a" if ct["pnl"] > 0 else "#dc2626" if ct["pnl"] < 0 else "#fff"
+    st.markdown(f'<div class="performance-total"><span>OPEN <b>{ct["open"]}</b></span><span>TRADES <b>{ct["trades"]}</b></span><span>WINS <b>{ct["wins"]}</b></span><span>LOSSES <b>{ct["losses"]}</b></span><span>WIN RATE <b>{cwr:.1f}%</b></span><span>P&amp;L <b style="color:{cpnl_color};">₹{ct["pnl"]:,.2f}</b></span></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="font-size:20px;font-weight:950;color:#fff;margin:18px 0 9px;">📥 DOWNLOAD</div>', unsafe_allow_html=True)
     st.download_button("⬇️ Download Master CSV", trades_all.to_csv(index=False).encode("utf-8"), "nse_catalyst_master.csv", "text/csv", use_container_width=True, key="master_csv")

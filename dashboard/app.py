@@ -16,6 +16,7 @@ st.set_page_config(
 )
 
 import main as _engine_main
+from config.settings import SCAN_INTERVAL_SECONDS
 
 
 @st.cache_resource(show_spinner=False)
@@ -23,9 +24,9 @@ def _get_trading_engine():
     return _engine_main.MasterEngine()
 
 
-@st.fragment(run_every="15s")
+@st.fragment(run_every=f"{SCAN_INTERVAL_SECONDS}s")
 def _live_trade_worker():
-    """Run the single production cycle; all consumers share its snapshot."""
+    """Run one fresh 15s-collection + 10s-decision production cycle."""
     try:
         engine = _get_trading_engine()
         engine.run_cycle()

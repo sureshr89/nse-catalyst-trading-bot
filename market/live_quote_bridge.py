@@ -1,9 +1,8 @@
 """Shared Dhan NIFTY 500 live-data bridge.
 
-One controlled collector builds one 15-second NIFTY-500 market snapshot.
+One controlled collector builds one fresh NIFTY-500 market snapshot per cycle.
 Dhan's market-feed API supports up to 1,000 instruments per request, so the
-500-stock universe is fetched in one request per cycle. The same snapshot is
-reused by the engine, dashboard, AD, sectors and S1-S5.
+500-stock universe is fetched in one request per cycle.
 """
 from datetime import datetime
 import math
@@ -17,7 +16,7 @@ _CACHE_LOCK = threading.RLock()
 _CACHE_ROWS = pd.DataFrame()
 _CACHE_KEY = None
 _CACHE_AT = 0.0
-CACHE_SECONDS = float(LIVE_COLLECTION_WINDOW_SECONDS)
+CACHE_SECONDS = 0.0  # Every cycle must request fresh prices; never serve an old snapshot as fresh.
 COLLECTION_WINDOW_SECONDS = float(LIVE_COLLECTION_WINDOW_SECONDS)
 MAX_INSTRUMENTS_PER_REQUEST = 1000
 
@@ -67,36 +66,41 @@ def _clean_mapping(mapping):
 
 
 def market_quote_partial(mapping):
-    """Return one shared 15-second NIFTY-500 snapshot.
+    """Return one fresh NIFTY-500 snapshot within the configured 15-second window.
 
-    The old implementation split 500 stocks into five 100-stock quote calls.
-    Dhan documents up to 1,000 instruments per market-quote request, so those
-    extra calls were unnecessary and could trigger 805/429 throttling. This
-    implementation makes one bounded request for the full NIFTY 500 each cycle.
+    The caller treats the collection window as a hard safety deadline. This
+    function never retries missing symbols and never uses a previous-cycle
+    quote to increase fresh coverage. One request is used for the full 500
+    universe, subject to Dhan's 1,000-instrument request limit.
     """
     global _CACHE_ROWS, _CACHE_KEY, _CACHE_AT
     clean = _clean_mapping(mapping)
     if clean.empty or not dhan_data.configured() or len(clean) > MAX_INSTRUMENTS_PER_REQUEST:
         return pd.DataFrame()
-    key = tuple(sorted(clean["SecurityId"].tolist()))
-    now = time.monotonic()
-    with _CACHE_LOCK:
-        if _CACHE_KEY == key and not _CACHE_ROWS.empty and now - _CACHE_AT < CACHE_SECONDS:
-            return _CACHE_ROWS.copy()
 
+    # No cache hit: every 15-second cycle must make a new market-feed request.
     started = time.monotonic()
-    response = dhan_data._marketfeed("NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc")
-    merged = _rows_from_response(response, clean)
+    response = dhan_data._marketfeed(
+        "NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc",
+        timeout=max(0.1, COLLECTION_WINDOW_SECONDS),
+    )
     elapsed = time.monotonic() - started
+    merged = _rows_from_response(response, clean)
 
+    # A response arriving after the hard collection window is invalid even if
+    # it contains 490+ rows. The next cycle must request all 500 again.
+    if elapsed > COLLECTION_WINDOW_SECONDS:
+        return pd.DataFrame()
+
+    # Keep the last response only for diagnostics/backward compatibility; it is
+    # never returned as a fresh snapshot on a later cycle.
     with _CACHE_LOCK:
         if not merged.empty:
             _CACHE_ROWS = merged.copy()
-            _CACHE_KEY = key
+            _CACHE_KEY = tuple(sorted(clean["SecurityId"].tolist()))
             _CACHE_AT = time.monotonic()
     return merged
 
 
-# Backward-compatible name for existing callers.
 def market_quote_partial_15s(mapping):
     return market_quote_partial(mapping)
