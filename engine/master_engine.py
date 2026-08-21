@@ -10,6 +10,7 @@ from data.reference_store import ReferenceStore
 from data.stock_universe import StockUniverse
 from data.sector_alignment import load_sector_map,calculate_sector_alignment
 from market.dhan_data import configured,map_nifty500,market_quote,index_quote,dhan_status
+from market.live_quote_bridge import market_quote_partial
 from market.price_data import PriceData
 from papertrade.paper_trade_engine import PaperTradeEngine
 from papertrade.trade_journal_clean import TradeJournal
@@ -85,7 +86,9 @@ class MasterEngine:
         symbols=self.references["Symbol"].astype(str).str.upper().tolist();mapping=map_nifty500(symbols)
         if len(mapping)<MIN_DATA_COVERAGE_COUNT:
             self.diagnostics["rejections"]["mapping"]=f"DHAN_MAPPING_BELOW_95PCT_{len(mapping)}/500";self.last_snapshot=blocked;self._write_diagnostics();return blocked
-        quotes=market_quote(mapping,cache_seconds=5)
+        # Keep all valid Dhan quotes for dashboard visibility. The 475/500 rule
+        # is enforced below as the trade gate, not by deleting the live rows.
+        quotes=market_quote_partial(mapping)
         if quotes.empty:
             self.diagnostics["rejections"]["market_data"]="DHAN_QUOTES_UNAVAILABLE";self.diagnostics["dhan_status"]=dhan_status();self.last_snapshot=blocked;self._write_diagnostics();return blocked
         prices=quotes[["Symbol","LTP","PreviousClose","change_pct"]].copy();prices["change_pct"]=pd.to_numeric(prices["change_pct"],errors="coerce");prices["PreviousClose"]=pd.to_numeric(prices["PreviousClose"],errors="coerce");prices=prices.dropna(subset=["change_pct","PreviousClose"]);prices=prices[prices["PreviousClose"]>0].drop_duplicates("Symbol")
@@ -102,7 +105,7 @@ class MasterEngine:
         pos=int(sector.get("positive_sectors",0) or 0);neg=int(sector.get("negative_sectors",0) or 0);sector_ready=bool(sector.get("available")) and int(sector.get("priced",0) or 0)>=MIN_DATA_COVERAGE_COUNT;index_ready=nifty is not None
         trade_ready=coverage>=MIN_DATA_COVERAGE_COUNT and sector_ready and index_ready;buy=bool(trade_ready and nifty>0 and ad>1 and pos>neg);sell=bool(trade_ready and nifty<0 and ad<1 and neg>pos);qmap={str(r["Symbol"]).upper():r.to_dict() for _,r in quotes.iterrows()}
         snap={"intraday":{},"prices":prices,"sector":{**sector,"positive_sectors":pos,"negative_sectors":neg,"alignment_pct":float(sector.get("alignment_pct",0) or 0)},"nifty_change":nifty,"ad_ratio":ad,"ad_complete":coverage>=MIN_DATA_COVERAGE_COUNT,"ad_coverage":f"{coverage}/500","buy_alignment":buy,"sell_alignment":sell,"dhan_quotes":qmap,"verified":coverage>=MIN_DATA_COVERAGE_COUNT,"trade_ready":trade_ready,"dhan_status":dhan_status()};self.last_snapshot=snap
-        self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":coverage,"reference_data_count":len(self.references),"market_data_coverage":f"{coverage}/500","nifty500_change_pct":nifty,"sector_change_pct":float(sector.get("alignment_pct",0) or 0),"sector_available":bool(sector.get("available")),"sector_mapping":f"{len(self.sector_map)}/500","sector_priced":f"{int(sector.get('priced',0))}/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sectors",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":f"{coverage}/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","dhan_status":dhan_status(),"trade_data_verified":coverage>=MIN_DATA_COVERAGE_COUNT,"trade_ready":trade_ready,"trade_path_status":"READY" if buy or sell else "BLOCKED"});
+        self.diagnostics.update({"timestamp":self.now().isoformat(timespec="seconds"),"stocks_scanned":coverage,"reference_data_count":len(self.references),"market_data_coverage":f"{coverage}/500","nifty500_change_pct":nifty,"sector_change_pct":float(sector.get("alignment_pct",0) or 0),"sector_available":bool(sector.get("available")),"sector_mapping":f"{len(self.sector_map)}/500","sector_priced":f"{int(sector.get('priced',0))}/500","positive_sectors":pos,"negative_sectors":neg,"sector_count":int(sector.get("sectors",0) or 0),"ad_ratio":ad,"ad_advances":adv,"ad_declines":dec,"ad_coverage":f"{coverage}/500","buy_alignment":buy,"sell_alignment":sell,"market_data_source":"DHAN_ONLY","dhan_status":dhan_status(),"trade_data_verified":coverage>=MIN_DATA_COVERAGE_COUNT,"trade_ready":trade_ready,"trade_path_status":"READY" if buy or sell else "BLOCKED"})
         if not trade_ready:
             reasons=[]
             if coverage<MIN_DATA_COVERAGE_COUNT:reasons.append(f"quotes {coverage}/500")
