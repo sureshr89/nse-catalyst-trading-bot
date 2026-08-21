@@ -15,7 +15,9 @@ _CACHE_LOCK = threading.RLock()
 _CACHE_ROWS = pd.DataFrame()
 _CACHE_KEY = None
 _CACHE_AT = 0.0
-CACHE_SECONDS = 12.0
+# The app has multiple 15-second Streamlit fragments. Keep one snapshot long
+# enough for all fragments in the same cycle to reuse it.
+CACHE_SECONDS = 20.0
 
 
 def _rows_from_response(response, clean):
@@ -73,8 +75,6 @@ def market_quote_partial(mapping):
     with _CACHE_LOCK:
         if _CACHE_KEY == key and not _CACHE_ROWS.empty and now - _CACHE_AT < CACHE_SECONDS:
             return _CACHE_ROWS.copy()
-        # Only one caller may fetch the shared snapshot.  Other Streamlit
-        # fragments arriving at the same time reuse the result immediately.
         response = dhan_data._marketfeed("NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc")
         rows = _rows_from_response(response, clean)
         if not rows.empty:
