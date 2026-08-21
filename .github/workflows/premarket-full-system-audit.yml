@@ -96,7 +96,6 @@ jobs:
           python - <<'PY'
           import pandas as pd
           import main
-          from market.nifty500_breadth import BREADTH
 
           e = main.MasterEngine.__new__(main.MasterEngine)
           e.last_snapshot = {
@@ -117,8 +116,7 @@ jobs:
               'ad_ratio': 1.5,
           }
           e.diagnostics = {'rejections': {}}
-          e._publish_dashboard_snapshot()
-          snap = BREADTH.snapshot()
+          snap = e._publish_dashboard_snapshot()
           assert snap['complete'] is True
           assert len(snap['quote_rows']) == 490
           assert snap['sector_complete'] is True
