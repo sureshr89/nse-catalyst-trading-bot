@@ -84,10 +84,11 @@ class MasterEngine:
         if len(self.references)<MIN_DATA_COVERAGE_COUNT or not configured():
             self.diagnostics["rejections"]["market_data"]="DHAN_OR_REFERENCE_BELOW_95PCT";self.last_snapshot=blocked;self._write_diagnostics();return blocked
         symbols=self.references["Symbol"].astype(str).str.upper().tolist();mapping=map_nifty500(symbols)
-        if len(mapping)<MIN_DATA_COVERAGE_COUNT:
-            self.diagnostics["rejections"]["mapping"]=f"DHAN_MAPPING_BELOW_95PCT_{len(mapping)}/500";self.last_snapshot=blocked;self._write_diagnostics();return blocked
-        # Keep all valid Dhan quotes for dashboard visibility. The 475/500 rule
-        # is enforced below as the trade gate, not by deleting the live rows.
+        if mapping is None or mapping.empty:
+            self.diagnostics["rejections"]["mapping"]="DHAN_MAPPING_UNAVAILABLE";self.last_snapshot=blocked;self._write_diagnostics();return blocked
+        # Keep every valid Dhan quote for dashboard visibility. Mapping or quote
+        # coverage below 475/500 never becomes trade approval; it only prevents
+        # the market-level gate from opening.
         quotes=market_quote_partial(mapping)
         if quotes.empty:
             self.diagnostics["rejections"]["market_data"]="DHAN_QUOTES_UNAVAILABLE";self.diagnostics["dhan_status"]=dhan_status();self.last_snapshot=blocked;self._write_diagnostics();return blocked
