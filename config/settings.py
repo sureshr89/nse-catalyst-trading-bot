@@ -59,8 +59,6 @@ SELL_PREVIOUS_CANDLE = "RED"
 # ---------------------------------------------------------------------------
 # Canonical risk settings
 # ---------------------------------------------------------------------------
-# Keep these names for existing imports. The executable sizing helpers live in
-# config.trading_limits so there is one implementation of risk arithmetic.
 ALLOCATED_CAPITAL_PER_TRADE = 250_000
 MIN_REQUIRED_RISK = 1_400
 MAX_RISK_PER_TRADE = 1_500
@@ -81,6 +79,9 @@ LIVE_TRADING = False
 
 STRATEGY_NAME = "NIFTY_500_OHLC_PDH_PDL_S1_S5"
 STOP_LOSS_METHOD = "STRATEGY_SPECIFIC_ENTRY_TIME_ONLY"
+
+# Output files: the runtime keeps separate signal/trade logs while retaining
+# the master journal path for backwards compatibility with existing consumers.
 MASTER_JOURNAL_FILE = "outputs/strategy_journal_master.csv"
 SIGNAL_LOG_FILE = "outputs/signals.csv"
 TRADE_LOG_FILE = "outputs/trades.csv"
