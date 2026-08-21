@@ -17,7 +17,7 @@ REQUIRED=500
 
 class Nifty500Breadth:
  def __init__(self):
-  self.universe_engine=StockUniverse();self._lock=threading.RLock();self._cached_at=0.0;self._cached=None;self._mapping=pd.DataFrame();self._mapping_at=0.0;self._universe=pd.DataFrame()
+  self.universe_engine=StockUniverse();self._lock=threading.RLock();self._cached_at=0.0;self._cached=None;self._mapping=pd.DataFrame();self._mapping_at=0.0;self._universe=pd.DataFrame();self._sector_map=pd.DataFrame()
  def _get_universe(self):
   if self._universe is not None and len(self._universe)==REQUIRED and self._universe["Symbol"].nunique()==REQUIRED and "Sector" in self._universe.columns and not self._universe["Sector"].astype(str).str.upper().isin({"UNKNOWN","NAN","NONE",""}).any():return self._universe
   u=self.universe_engine.get_dataframe(refresh=False)
@@ -32,6 +32,11 @@ class Nifty500Breadth:
   now=time.monotonic()
   if not self._mapping.empty and now-self._mapping_at<3600 and set(self._mapping.Symbol.astype(str).str.upper())==set(symbols):return self._mapping
   self._mapping=map_nifty500(symbols,force=False);self._mapping_at=now;return self._mapping
+ def _get_sector_map(self,u):
+  if self._sector_map is not None and len(self._sector_map)>=REQUIRED:return self._sector_map
+  try:self._sector_map=load_sector_map(u,refresh=False)
+  except Exception:self._sector_map=pd.DataFrame()
+  return self._sector_map
  @staticmethod
  def _closed_session_mode(now):return now.timetz().replace(tzinfo=None)>=MARKET_CLOSE or now.timetz().replace(tzinfo=None)<MARKET_OPEN
  def _unknown(self,reason,mode,now,evaluated=0,sector=None):
@@ -50,9 +55,6 @@ class Nifty500Breadth:
   mapping=self._get_mapping(symbols)
   if mapping.empty:return self._fail("DHAN_SECURITY_MAPPING_EMPTY",mode,now)
   if len(mapping)<MIN_DATA_COVERAGE_COUNT:return self._fail(f"DHAN_SECURITY_MAPPING_BELOW_98PCT_{len(mapping)}/500",mode,now,len(mapping))
-
-  # One shared 15-second collection window. Valid prices are merged by Symbol;
-  # no strategy/dashboard component performs another 500-stock request.
   quotes=market_quote_partial(mapping)
   if quotes.empty:return self._fail("DHAN_QUOTES_UNAVAILABLE",mode,now,0)
   for c in ["LTP","PreviousClose","TodayClose"]:
@@ -60,18 +62,14 @@ class Nifty500Breadth:
   if "TodayClose" not in quotes.columns:quotes["TodayClose"]=quotes["LTP"]
   quotes["SessionClose"]=quotes["TodayClose"] if mode=="closed" else quotes["LTP"]
   quotes=quotes.dropna(subset=["SessionClose","PreviousClose"]);quotes=quotes[(quotes.SessionClose>0)&(quotes.PreviousClose>0)].drop_duplicates("Symbol")
-  coverage=len(quotes)
-  quotes["change_pct"]=(quotes.SessionClose-quotes.PreviousClose)/quotes.PreviousClose*100
+  coverage=len(quotes);quotes["change_pct"]=(quotes.SessionClose-quotes.PreviousClose)/quotes.PreviousClose*100
   delta=quotes.SessionClose-quotes.PreviousClose;tolerance=quotes.PreviousClose.abs()*1e-10
   advances=int((delta>tolerance).sum());declines=int((delta<-tolerance).sum());unchanged=int(coverage-advances-declines);ad_ratio=advances/declines if declines else None
-
   try:
-   sm=load_sector_map(u,refresh=True);sector=calculate_sector_alignment(quotes[["Symbol","change_pct"]],sm,"change_pct")
+   sm=self._get_sector_map(u);sector=calculate_sector_alignment(quotes[["Symbol","change_pct"]],sm,"change_pct")
   except Exception as exc:
    sector={"available":False,"alignment_pct":None,"mapped":0,"priced":0,"sectors":0,"positive_sectors":0,"negative_sectors":0,"unchanged_sectors":0,"coverage":f"{coverage}/500","error":str(exc)}
-  sector_priced=int(sector.get("priced",0) or 0)
-  sector_complete=bool(sector.get("available")) and sector_priced>=MIN_DATA_COVERAGE_COUNT
-
+  sector_priced=int(sector.get("priced",0) or 0);sector_complete=bool(sector.get("available")) and sector_priced>=MIN_DATA_COVERAGE_COUNT
   try:nifty=index_quote("NIFTY 500")
   except Exception:nifty=None
   if not nifty:return self._fail("DHAN_NIFTY_500_INDEX_QUOTE_UNAVAILABLE",mode,now,coverage,sector)
@@ -79,7 +77,6 @@ class Nifty500Breadth:
   if prev_close<=0 or live_ltp<=0:return self._fail("DHAN_NIFTY_500_INDEX_INVALID_PRICE",mode,now,coverage,sector)
   if mode=="closed":session_close=day_close if day_close>0 else live_ltp;nifty_change=(session_close-prev_close)/prev_close*100;display_close=session_close;label="Latest completed NSE session"
   else:nifty_change=(live_ltp-prev_close)/prev_close*100;display_close=prev_close;label="Previous completed NSE session"
-
   complete=coverage>=MIN_DATA_COVERAGE_COUNT
   result={"universe":"NIFTY 500","total":REQUIRED,"evaluated":coverage,"advances":advances,"declines":declines,"unchanged":unchanged,"ad_ratio":ad_ratio,"direction":"BULLISH" if advances>declines else "BEARISH" if declines>advances else "NEUTRAL","complete":complete,"reason":"OK" if complete else f"BELOW_98PCT_{coverage}/500","updated_at":f"{label} • refreshed {now.strftime('%H:%M:%S')} IST","nifty500_change_pct":nifty_change,"nifty500_ltp":live_ltp,"nifty500_previous_close":display_close,"nifty500_reference_close":prev_close,"closed_session_label":label,"closed_session_basis":"Dhan completed-session close" if mode=="closed" else "Dhan live LTP","market_close_time":"15:30 IST","sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":sector_complete,"sector_coverage":sector.get("coverage",f"{sector_priced}/500"),"sector_mapped":int(sector.get("mapped",0) or 0),"sector_priced":sector_priced,"sector_count":sector.get("sectors",0),"positive_sectors":sector.get("positive_sectors",0),"negative_sectors":sector.get("negative_sectors",0),"unchanged_sectors":sector.get("unchanged_sectors",0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":quotes.copy(),"_cache_date":now.date(),"_cache_mode":mode}
   return self._store(result)
