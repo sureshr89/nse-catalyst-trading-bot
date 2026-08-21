@@ -11,7 +11,9 @@ from config.settings import (
     MIN_DATA_COVERAGE_PCT,
 )
 
-STRATEGY_VERSION = "2026.08.21.clean-dhan-v2"
+# Canonical runtime contract version. Keep this in one place so diagnostics,
+# paper state and tests cannot drift to different clean-dhan versions.
+STRATEGY_VERSION = "2026.08.21.clean-dhan-v3"
 STRATEGY_1_NAME = "PDH/PDL Sweep + Open Reclaim"
 STRATEGY_2_NAME = "PDH/PDL Breakout + Retest"
 STRATEGY_3_NAME = "Opposite PDH/PDL Sweep + Open Reversal"
