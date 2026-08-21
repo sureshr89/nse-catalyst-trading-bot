@@ -1,14 +1,21 @@
-"""Partial Dhan quote bridge for live dashboard visibility.
+"""Shared Dhan NIFTY 500 live-data bridge.
 
-Dashboard visibility is deliberately separate from the 475/500 trade gate.
-Valid quotes returned by Dhan are retained individually even when coverage is
-below 95%.  The bridge prefers the full quote endpoint and falls back to the
-OHLC endpoint because the dashboard only requires LTP/OHLC/change data.
+One shared OHLC snapshot is used by the trading engine and dashboard.  This
+prevents the Streamlit fragments from independently hitting Dhan's 1-request-
+per-second Quote API and triggering error 805.
 """
 from datetime import datetime
 import math
+import threading
+import time
 import pandas as pd
 from market import dhan_data
+
+_CACHE_LOCK = threading.RLock()
+_CACHE_ROWS = pd.DataFrame()
+_CACHE_KEY = None
+_CACHE_AT = 0.0
+CACHE_SECONDS = 12.0
 
 
 def _rows_from_response(response, clean):
@@ -26,29 +33,27 @@ def _rows_from_response(response, clean):
             op = float(ohlc.get("open"))
             hi = float(ohlc.get("high"))
             lo = float(ohlc.get("low"))
-            net_raw = item.get("net_change")
-            net = float(net_raw) if net_raw is not None else ltp - prev
-            volume = float(item.get("volume") or 0)
         except (TypeError, ValueError, OverflowError):
             continue
         if not all(math.isfinite(v) and v > 0 for v in (ltp, prev, op, hi, lo)):
             continue
         if hi < max(op, lo, ltp) or lo > min(op, hi, ltp):
             continue
-        if not math.isfinite(net) or volume < 0:
-            continue
+        net = ltp - prev
         rows.append({
             "Symbol": by_id[sid], "SecurityId": sid, "LTP": ltp,
             "TodayOpen": op, "TodayHigh": hi, "TodayLow": lo,
             "TodayClose": ltp, "PreviousClose": prev, "NetChange": net,
-            "Volume": volume, "change_pct": (ltp - prev) / prev * 100.0,
+            "Volume": float(item.get("volume") or 0),
+            "change_pct": (ltp - prev) / prev * 100.0,
             "UpdatedAt": datetime.now().isoformat(timespec="seconds"),
-            "price_source": "DHAN_MARKETFEED_QUOTE",
+            "price_source": "DHAN_MARKETFEED_OHLC",
         })
-    return rows
+    return pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
 
 
 def market_quote_partial(mapping):
+    global _CACHE_ROWS, _CACHE_KEY, _CACHE_AT
     if mapping is None or mapping.empty or not dhan_data.configured():
         return pd.DataFrame()
     if not {"SecurityId", "Symbol"}.issubset(mapping.columns):
@@ -63,18 +68,17 @@ def market_quote_partial(mapping):
     if clean.empty:
         return pd.DataFrame()
 
-    ids = clean["SecurityId"].tolist()
-
-    # Full quote gives the richest data.  If that endpoint is unavailable or
-    # returns no usable rows, OHLC is enough for the dashboard's stock values
-    # and breadth calculations, so retry once with the simpler endpoint.
-    response = dhan_data._marketfeed("NSE_EQ", ids, "/marketfeed/quote")
-    rows = _rows_from_response(response, clean)
-
-    if not rows:
-        response = dhan_data._marketfeed("NSE_EQ", ids, "/marketfeed/ohlc")
+    key = tuple(sorted(clean["SecurityId"].tolist()))
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if _CACHE_KEY == key and not _CACHE_ROWS.empty and now - _CACHE_AT < CACHE_SECONDS:
+            return _CACHE_ROWS.copy()
+        # Only one caller may fetch the shared snapshot.  Other Streamlit
+        # fragments arriving at the same time reuse the result immediately.
+        response = dhan_data._marketfeed("NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc")
         rows = _rows_from_response(response, clean)
-        for row in rows:
-            row["price_source"] = "DHAN_MARKETFEED_OHLC"
-
-    return pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
+        if not rows.empty:
+            _CACHE_ROWS = rows.copy()
+            _CACHE_KEY = key
+            _CACHE_AT = time.monotonic()
+        return rows
