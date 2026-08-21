@@ -106,18 +106,23 @@ class PriceData:
         return result
 
     @staticmethod
-    def _quote_row(quote, symbol):
+    def _quote_row(quote, symbol, security_id=None):
         if quote is None or not isinstance(quote, pd.DataFrame) or quote.empty:
             return None
         required = {"LTP", "TodayOpen", "TodayHigh", "TodayLow", "PreviousClose"}
         if not required.issubset(quote.columns):
             return None
         clean = quote.copy()
+        wanted = str(symbol).upper().replace(".NS", "").strip()
         if "Symbol" in clean.columns:
-            wanted = str(symbol).upper().replace(".NS", "").strip()
-            matched = clean[clean["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).eq(wanted)]
+            normalized = clean["Symbol"].astype(str).str.upper().str.replace(".NS", "", regex=False).str.strip()
+            matched = clean[normalized.eq(wanted)]
             if not matched.empty:
-                clean = matched
+                return matched.iloc[0]
+        if security_id is not None and "SecurityId" in clean.columns:
+            matched = clean[clean["SecurityId"].astype(str).eq(str(security_id))]
+            if not matched.empty:
+                return matched.iloc[0]
         return clean.iloc[0]
 
     def get_latest_live_price(self, symbol, max_age_seconds=8):
@@ -133,9 +138,10 @@ class PriceData:
         mapping = self._map([key])
         if mapping is None or len(mapping) != 1:
             return None
+        security_id = str(mapping.iloc[0]["SecurityId"])
         try:
             quote = dhan_data.market_quote(mapping, cache_seconds=min(max(max_age_seconds, 2), 10))
-            row = self._quote_row(quote, key)
+            row = self._quote_row(quote, key, security_id)
             if row is None:
                 return None
             close = float(row["LTP"])
@@ -149,16 +155,7 @@ class PriceData:
                 return None
             if high < max(open_price, low, close) or low > min(open_price, high, close):
                 return None
-            out = {
-                "Close": close,
-                "Open": open_price,
-                "High": high,
-                "Low": low,
-                "PreviousClose": previous_close,
-                "NetChange": net_change,
-                "Datetime": datetime.now(INDIA_TZ),
-                "price_source": "DHAN_MARKETFEED_QUOTE",
-            }
+            out = {"Close": close, "Open": open_price, "High": high, "Low": low, "PreviousClose": previous_close, "NetChange": net_change, "Datetime": datetime.now(INDIA_TZ), "price_source": "DHAN_MARKETFEED_QUOTE"}
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
         with self._cache_lock:
