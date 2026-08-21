@@ -1,101 +1,83 @@
-# NIFTY 500 Trading Bot — Code & System Checklist
+# NIFTY 500 Trading Bot — Current System Checklist
 
-Last reviewed: 2026-08-18
+Last reviewed: 2026-08-21
 
-## 1. Runtime / worker
-- [x] `bot_runner.py` owns the single persistent paper worker for both strategies.
-- [x] Weekday loop, 09:45 entry start, 14:00 last entry, 15:00 mandatory square-off.
-- [x] Live trading hard-blocked by `LIVE_TRADING=False` and paper-trading checks.
-- [x] Master data refresh runs after final square-off.
-- [x] Control scan interval is configured in `config/settings.py` (`5` seconds currently).
-- [x] Dashboard UI refresh is 5 seconds.
+## 1. Runtime
+- [x] One canonical `MasterEngine` in `engine/master_engine.py`.
+- [x] `main.py` is the compatibility/production entrypoint.
+- [x] `engine/cycle_runner.py` is the only strategy/execution cycle.
+- [x] Streamlit worker runs paper trading through the canonical engine.
+- [x] Entry window: 09:45–14:00 IST.
+- [x] Mandatory paper square-off: 15:00 IST.
+- [x] `LIVE_TRADING=False`; paper trading only.
 
-## 2. Market data / universe
-- [x] NIFTY 500 universe is used for Strategy 1 and Strategy 2 candidate discovery.
-- [x] Reference data provides previous close, PDH and PDL.
-- [x] Market data is normalized to IST and forming 1-minute data is excluded where completed data is required.
-- [x] NIFTY 500 market filter uses the latest available index change supplied by `PriceData`.
-- [x] Scanner minimum synchronized 1-minute stock coverage is currently `60%` (`MIN_MARKET_DATA_COVERAGE`).
+## 2. Live NIFTY 500 data
+- [x] Universe: exactly 500 NIFTY 500 constituents.
+- [x] Security mapping: Dhan NSE_EQ.
+- [x] Live collection window: 15 seconds.
+- [x] Dhan market-feed OHLC fetch uses one request for all 500 instruments.
+- [x] Dhan supports up to 1,000 instruments per market-quote request; the old 100-stock burst was removed.
+- [x] 98% trade-readiness gate = 490/500.
+- [x] Valid live prices are shared by breadth, sectors, dashboard and S1–S5.
+- [x] A failed/429 quote response does not overwrite the last good bridge cache.
 
-## 3. Strategy 1 — PDH/PDL + Open Return
-- [x] BUY market gate: NIFTY 500 `>= +0.25%`.
-- [x] SELL market gate: NIFTY 500 `<= -0.25%`.
-- [x] BUY candidate: `Today's Open > PDH`.
-- [x] SELL candidate: `Today's Open < PDL`.
-- [x] BUY live sequence: price must first fall to/touch PDH, then live LTP must return to/above Today's Open.
-- [x] SELL live sequence: price must first rise to/touch PDL, then live LTP must return to/below Today's Open.
-- [x] No candle-close confirmation is used for the active trigger.
-- [x] Final entry uses the current live market price and re-checks the market/price conditions.
-- [x] BUY SL = PDH.
-- [x] SELL SL = PDL.
-- [x] Target = 1.25R from actual live entry-to-SL distance.
-- [x] Entry window is `09:45–14:00 IST`.
+## 3. Market alignment
+- [x] NIFTY 500 live change.
+- [x] Advances / declines / unchanged.
+- [x] A/D ratio.
+- [x] Positive / negative sectors.
+- [x] Sector mapping is cached instead of being rebuilt every 15 seconds.
+- [x] BUY: NIFTY 500 > 0%, A/D > 1, positive sectors > negative sectors.
+- [x] SELL: NIFTY 500 < 0%, A/D < 1, negative sectors > positive sectors.
+- [x] Market alignment is a hard trade gate.
 
-## 4. Strategy 2 — Gap Extension Reversal
-- [x] SELL candidate: `Today's Open > PDH`, price extends above Open, then live LTP crosses below Open.
-- [x] BUY candidate: `Today's Open < PDL`, price extends below Open, then live LTP crosses above Open.
-- [x] Strong opposite NIFTY 500 movement blocks the setup; this is a soft protective filter.
-- [x] Entry is live LTP; no candle-close entry confirmation.
-- [x] SELL SL = trigger-day high.
-- [x] BUY SL = trigger-day low.
-- [x] SELL target = PDH; BUY target = PDL, subject to minimum 1.25R.
-- [x] Strategy 2 has isolated paper capital/state/journal files.
+## 4. References
+- [x] PDH / PDL / previous close are Dhan-derived.
+- [x] Full-universe daily reference preparation is paced at Dhan's documented data rate.
+- [x] References are cached for the trading session.
+- [x] Stocks without valid references are skipped; they do not invalidate otherwise valid stocks.
 
-## 5. Scanner / state management
-- [x] Strategy 1 waiting/qualified states persist across scanner cycles.
-- [x] Candidate identity prevents repeated finalization of the same setup.
-- [x] Qualified candidates are ranked before final execution.
-- [x] Final entry re-checks current NIFTY 500 alignment and stock price relative to Open.
-- [x] Diagnostics record coverage, waiting counts, qualified counts, ranking and final signals.
-- [x] Strategy contract version is centralized in `strategy/contracts.py` and currently `2026.08.18.v3`.
+## 5. S1–S5
+- [x] S1 — PDH/PDL sweep + open reclaim.
+- [x] S2 — PDH/PDL breakout + retest.
+- [x] S3 — opposite PDH/PDL sweep + open reversal.
+- [x] S4 — completed intraday high/low breakout.
+- [x] S5 — direct PDH/PDL breakout.
+- [x] S1/S3/S5 do not require a previous candle merely for diagnostics.
+- [x] S2/S4 require completed intraday data because their setup definitions depend on it.
+- [x] S1/S3/S5 are evaluated before any historical 1-minute request.
+- [x] S2/S4 historical requests are only made when needed.
+- [x] Live LTP is used for the actual entry.
 
-## 6. Risk / execution
-- [x] Maximum risk per trade = ₹1,500.
-- [x] Intended actual risk = ₹1,400–₹1,500.
-- [x] Minimum R:R = 1:1.25.
-- [x] Maximum 1 trade per stock per day.
-- [x] Strategy 1 maximum open positions = 2.
-- [x] Strategy 2 maximum open positions = 2.
-- [x] Daily loss/profit limits are enforced by the respective runtime/risk engine.
-- [x] Paper execution validates risk before opening.
-- [x] Fast position monitoring checks live price independently of the scanner.
-- [x] 15:00 square-off is mandatory.
+## 6. Risk / paper execution
+- [x] ₹2,50,000 capital allocation per trade.
+- [x] ₹1,400–₹1,500 intended actual risk.
+- [x] 1.25R target.
+- [x] Maximum 1 trade per strategy per day.
+- [x] Daily strategy loss limit ₹1,500.
+- [x] Paper execution only.
+- [x] Mandatory 15:00 square-off.
 
-## 7. Dashboard / UI alignment
-- [x] `dashboard/pages/current_trading.py` is the active Strategy 1 page.
-- [x] `dashboard/pages/strategy2_current.py` is the active Strategy 2 page.
-- [x] Both pages use `strategy_metadata()` as the authoritative strategy identity/version source.
-- [x] Both pages display live-LTP entry/SL/target behavior.
-- [x] Strategy 2 status is derived from the single `bot_runner.py` worker; the old standalone Strategy 2 worker is not used.
-- [x] Unified trade/signal downloads combine Strategy 1 + Strategy 2 records and include a `strategy` column.
+## 7. Dashboard
+- [x] Compact market-alignment cards.
+- [x] Live coverage and 98% gate cards.
+- [x] S1–S5 strategy cards with readable trade details.
+- [x] Sector performance table removed from the UI.
+- [x] Raw 500-stock table removed from the production UI.
+- [x] One Master CSV download.
+- [x] One Daily Trading Tip at the bottom.
+- [x] No production TEST tab.
+- [x] Auto refresh: 15 seconds.
 
-## 8. Persistence / outputs
-- [x] Strategy 1 uses `outputs/trades.csv`, `outputs/signals.csv`, `outputs/paper_engine_state.json` and `outputs/waiting_candidates.json`.
-- [x] Strategy 2 uses `outputs/strategy2_trades.csv`, `outputs/strategy2_signals.csv`, `outputs/strategy2_paper_engine_state.json` and `outputs/strategy2_diagnostics.json`.
-- [x] The dashboard's trade/signal download layer presents unified S1+S2 CSVs rather than separate strategy CSV downloads.
-- [x] Gap boards and strategy-specific JSON diagnostics remain separate because their schemas/meaning are strategy-specific.
+## 8. Cleanup
+- [x] Obsolete tabbed/test dashboard wrapper removed.
+- [x] Obsolete standalone NIFTY 500 diagnostic module removed.
+- [x] Obsolete duplicate `data/price_data.py` removed; `market/price_data.py` is canonical.
+- [x] `main.py` no longer opens the old test-tab wrapper.
 
-## 9. Automated checks
-- [x] GitHub Actions compiles every Python file.
-- [x] Core import checks run after compilation succeeds.
-- [x] Strategy 1 and Strategy 2 contract/integration tests exist.
-- [x] Strategy 2 risk-adjustment tests exist.
-- [x] Regression tests now verify that Strategy 1 cannot qualify without a genuine PDH/PDL touch sequence.
-- [ ] Final live-market workflow test — code/tests cannot prove live-data behavior until observed during an actual market session.
+## 9. Verification still required
+- [ ] Run the current full regression workflow on `main` after these changes.
+- [ ] Observe one live market session with coverage >=490/500.
+- [ ] Confirm a qualifying paper setup creates a trade record.
 
-## 10. Final paper-trading flow
-
-`09:15 market open`
-→ `NIFTY 500 + Today's Open + PDH + PDL`
-→ `09:45 entry window starts`
-→ `S1: NIFTY 500 gate + Open > PDH / Open < PDL`
-→ `S1: live LTP touches PDH/PDL in the required direction`
-→ `S1: live LTP returns through Today's Open`
-→ `S2: gap extension beyond Open`
-→ `S2: live LTP reverses through Open`
-→ `final market/risk checks`
-→ `live paper entry`
-→ `live SL/target monitoring`
-→ `14:00 no new entries`
-→ `15:00 square-off`
-→ `journal + master data + analysis + unified downloads`
+The final live observation is the only part that code review/tests cannot prove by themselves.
