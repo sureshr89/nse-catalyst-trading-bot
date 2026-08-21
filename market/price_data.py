@@ -144,7 +144,9 @@ class PriceData:
             return None
         security_id = str(mapping.iloc[0]["SecurityId"])
         try:
-            quote = dhan_data.market_quote(mapping, cache_seconds=min(max(max_age_seconds, 2), 10))
+            # Keep the PriceData -> Dhan boundary on the canonical public API.
+            # The adapter owns its own short-lived market-feed cache.
+            quote = dhan_data.market_quote(mapping)
             row = self._quote_row(quote, key, security_id)
             if row is None:
                 return None
