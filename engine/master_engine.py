@@ -114,3 +114,25 @@ class MasterEngine:
             if not index_ready:reasons.append("NIFTY 500 index unavailable")
             self.diagnostics["rejections"]["trade_gate"]="; ".join(reasons)
         self._write_diagnostics();return snap
+    def _publish_dashboard_snapshot(self):
+        """Publish the engine snapshot to the shared breadth/dashboard cache.
+
+        This is a presentation bridge only. Partial live quotes remain visible,
+        while the approved 475/500 threshold is still enforced for trade
+        readiness. No visual layout or strategy rule is changed.
+        """
+        from market.nifty500_breadth import BREADTH
+        snap=getattr(self,"last_snapshot",{}) or {}
+        prices=snap.get("prices")
+        prices=prices.copy() if isinstance(prices,pd.DataFrame) else pd.DataFrame()
+        sector=snap.get("sector") or {}
+        coverage=len(prices)
+        adv=int((pd.to_numeric(prices["change_pct"],errors="coerce")>0).sum()) if "change_pct" in prices.columns else 0
+        dec=int((pd.to_numeric(prices["change_pct"],errors="coerce")<0).sum()) if "change_pct" in prices.columns else 0
+        unchanged=max(0,coverage-adv-dec)
+        priced=int(sector.get("priced",0) or 0)
+        complete=coverage>=MIN_DATA_COVERAGE_COUNT
+        sector_complete=bool(sector.get("available")) and priced>=MIN_DATA_COVERAGE_COUNT
+        result={"universe":"NIFTY 500","total":500,"evaluated":coverage,"advances":adv,"declines":dec,"unchanged":unchanged,"ad_ratio":snap.get("ad_ratio"),"direction":"BULLISH" if adv>dec else "BEARISH" if dec>adv else "NEUTRAL","complete":complete,"reason":"OK" if complete else f"CURRENT_ENGINE_COVERAGE_BELOW_95PCT_{coverage}/500","updated_at":self.now().isoformat(timespec="seconds"),"nifty500_change_pct":snap.get("nifty_change"),"nifty500_ltp":None,"nifty500_previous_close":None,"nifty500_reference_close":None,"sector_alignment_pct":sector.get("alignment_pct"),"sector_complete":sector_complete,"sector_coverage":f"{priced}/500","sector_mapped":int(sector.get("mapped",0) or 0),"sector_priced":priced,"sector_count":int(sector.get("sectors",0) or 0),"positive_sectors":int(sector.get("positive_sectors",0) or 0),"negative_sectors":int(sector.get("negative_sectors",0) or 0),"unchanged_sectors":int(sector.get("unchanged_sectors",0) or 0),"sector_error":sector.get("error"),"market_data_source":"DHAN","quote_rows":prices}
+        BREADTH._store(result)
+        return result
