@@ -22,14 +22,10 @@ def test_02_master_engine_is_single_runtime_entry():
 
 def test_03_legacy_patch_layers_are_absent():
     legacy = [
-        "engine/authoritative_dhan_snapshot_patch.py",
-        "engine/diagnostic_consistency_patch.py",
-        "engine/live_data_alignment_patch.py",
-        "engine/stability_patch.py",
-        "engine/strategy_diagnostics_patch.py",
-        "engine/trade_path_fix.py",
-        "engine/strategy_sector_count_gate_patch.py",
-        "engine/execution_diagnostics_patch.py",
+        "engine/authoritative_dhan_snapshot_patch.py", "engine/diagnostic_consistency_patch.py",
+        "engine/live_data_alignment_patch.py", "engine/stability_patch.py",
+        "engine/strategy_diagnostics_patch.py", "engine/trade_path_fix.py",
+        "engine/strategy_sector_count_gate_patch.py", "engine/execution_diagnostics_patch.py",
         "engine/dhan_patch.py",
     ]
     assert all(not (ROOT / p).exists() for p in legacy)
@@ -38,18 +34,16 @@ def test_03_legacy_patch_layers_are_absent():
 def test_04_dhan_is_the_only_price_adapter():
     source = (ROOT / "market" / "price_data.py").read_text(encoding="utf-8").lower()
     dhan = (ROOT / "market" / "dhan_data.py").read_text(encoding="utf-8").lower()
-    assert "yfinance" not in source
-    assert "yfinance" not in dhan
-    assert "dhan" in source
-    assert "dhan" in dhan
+    assert "yfinance" not in source and "yfinance" not in dhan
+    assert "dhan" in source and "dhan" in dhan
 
 
 def test_05_strategy_rules_have_common_market_gate():
     from strategy.nifty500_price_action_strategies import market_gate
     assert market_gate("BUY", 0.1, 1.0, 1.1, 500, 8, 4)
     assert market_gate("SELL", -0.1, -1.0, 0.9, 500, 4, 8)
-    assert market_gate("BUY", 0.1, 1.0, 1.1, 475, 8, 4)
-    assert not market_gate("BUY", 0.1, 1.0, 1.1, 474, 8, 4)
+    assert market_gate("BUY", 0.1, 1.0, 1.1, 490, 8, 4)
+    assert not market_gate("BUY", 0.1, 1.0, 1.1, 489, 8, 4)
     assert not market_gate("BUY", -0.1, 1.0, 1.1, 500, 8, 4)
 
 
@@ -70,9 +64,7 @@ def test_06_all_five_strategies_produce_correct_side_and_rr():
         (evaluate_s5, ("T", "BUY", 100, 90, 101)),
     ]:
         sig = fn(*args, **g)
-        assert sig is not None
-        assert sig.side == "BUY"
-        assert sig.rr == 1.25
+        assert sig is not None and sig.side == "BUY" and sig.rr == 1.25
         assert sig.stop_loss < sig.entry < sig.target
 
 
@@ -100,20 +92,17 @@ def test_08_no_yahoo_dependency_or_active_legacy_strategy_imports():
 
 def test_09_paper_trading_only():
     from config.settings import PAPER_TRADING, LIVE_TRADING, SQUARE_OFF_TIME, TRADING_START, LAST_ENTRY_TIME
-    assert PAPER_TRADING is True
-    assert LIVE_TRADING is False
-    assert TRADING_START == "09:45"
-    assert LAST_ENTRY_TIME == "14:00"
-    assert SQUARE_OFF_TIME == "15:00"
+    assert PAPER_TRADING is True and LIVE_TRADING is False
+    assert TRADING_START == "09:45" and LAST_ENTRY_TIME == "14:00" and SQUARE_OFF_TIME == "15:00"
 
 
 def test_10_contract_and_diagnostics_are_consistent():
     from strategy.contracts import STRATEGY_VERSION, strategy_metadata
     from engine.master_engine import MasterEngine
-    assert STRATEGY_VERSION.startswith("2026.08.20.clean-dhan")
+    assert STRATEGY_VERSION.startswith("2026.08.21.clean-dhan")
     for s in ("S1", "S2", "S3", "S4", "S5"):
         assert strategy_metadata(s)["strategy"] == s
     diag = MasterEngine._blank_diag(MasterEngine.__new__(MasterEngine))
-    assert diag["strategy_version"] == "clean-dhan-v1"
+    assert diag["strategy_version"] == "clean-dhan-v3"
     assert diag["market_data_source"] == "DHAN_ONLY"
     assert set(diag["signals_by_strategy"]) == {"S1", "S2", "S3", "S4", "S5"}
