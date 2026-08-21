@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from market.price_data import PriceData
-from market.dhan_data import dhan_configured, map_nifty500, market_quote
+from market.dhan_data import configured, map_nifty500, market_quote
 
 INDIA_TZ = ZoneInfo("Asia/Kolkata")
 REQUIRED = 500
@@ -131,7 +131,7 @@ class ReferenceStore:
 
     def _attach_dhan_open(self, result, symbols):
         """Replace any historical 'today open' with the live Dhan session open."""
-        if result.empty or not dhan_configured():
+        if result.empty or not configured():
             return result
         try:
             mapping = map_nifty500(symbols, force=False)
@@ -172,8 +172,6 @@ class ReferenceStore:
         result["ReferenceCoverage"] = round(self._coverage(result) * 100, 1)
         result.to_csv(self.path, index=False)
 
-        # Gap classification is useful to S1/S3 and is derived from the same
-        # canonical PDH/PDL/PDC/open reference set. No signal logic is added here.
         board_cols = {"TodayOpen", "PreviousDayClose", "PDH", "PDL"}
         board = result.dropna(subset=["TodayOpen"]).copy() if "TodayOpen" in result.columns else pd.DataFrame()
         if not board.empty and board_cols.issubset(board.columns):
@@ -205,13 +203,8 @@ class ReferenceStore:
 
     def _cached_file_is_valid(self, saved):
         required = {
-            "Symbol",
-            "PDH",
-            "PDL",
-            "PreviousDayClose",
-            "PreviousDayVolume",
-            "PreviousDayTurnover",
-            "PreparedAtIST",
+            "Symbol", "PDH", "PDL", "PreviousDayClose",
+            "PreviousDayVolume", "PreviousDayTurnover", "PreparedAtIST",
         }
         if not required.issubset(saved.columns):
             return False
@@ -233,10 +226,7 @@ class ReferenceStore:
             try:
                 saved = pd.read_csv(self.path)
                 if self._cached_file_is_valid(saved):
-                    # A valid cached file is sufficient pre-open. During market
-                    # hours, refresh only the live open when Dhan can verify the
-                    # complete quote batch.
-                    if dhan_configured():
+                    if configured():
                         refreshed = self._attach_dhan_open(saved, symbols)
                         if "TodayOpen" in refreshed.columns and refreshed["TodayOpen"].notna().all():
                             return self._save_result(refreshed)
@@ -244,8 +234,6 @@ class ReferenceStore:
             except Exception:
                 pass
 
-        # Historical PDH/PDL/PDC is a batch preparation problem, not 500 live
-        # quote requests. Keep it outside the 15-second live-data cycle.
         try:
             result = self._rows_from_daily_map(
                 PriceData().get_multi_daily(symbols, period="10d"), symbols
@@ -256,7 +244,7 @@ class ReferenceStore:
         if len(result) != REQUIRED or self._coverage(result) < 1.0:
             try:
                 from market.dhan_data import previous_day_references
-                mapping = map_nifty500(symbols, force=False) if dhan_configured() else pd.DataFrame()
+                mapping = map_nifty500(symbols, force=False) if configured() else pd.DataFrame()
                 dhan_refs = previous_day_references(mapping) if len(mapping) == REQUIRED else pd.DataFrame()
                 if self._coverage(dhan_refs) > self._coverage(result):
                     result = dhan_refs
