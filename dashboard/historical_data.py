@@ -1,7 +1,13 @@
-"""Closed-market / previous-day data view, separate from live scanning."""
+"""Closed-market / previous-session reference data view.
+
+This page is intentionally separate from the live 15-second scanner. Dhan's
+marketfeed/ohlc endpoint returns current-session OHLC, so these values are
+shown as a verification snapshot, not mislabeled as PDH/PDL/PDC.
+"""
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import io
 import json
 import requests
 import pandas as pd
@@ -9,7 +15,8 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 IST = ZoneInfo("Asia/Kolkata")
-st.set_page_config(page_title="Closed Data | NSE Catalyst", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Reference Data | NSE Catalyst", page_icon="📚", layout="wide")
+
 st.markdown("""
 <style>
 html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}.block-container{max-width:1450px;padding:1.1rem .9rem 2rem}
@@ -18,100 +25,193 @@ html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,"Segoe UI",sa
 @media(max-width:900px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:600px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.block-container{padding:.9rem .8rem 1.5rem}.title{font-size:1.65rem}.card{padding:11px;min-height:76px}.card b{font-size:1.02rem}}
 </style>""", unsafe_allow_html=True)
 
-def secret(name):
-    try:return str(st.secrets.get(name, "")).strip()
-    except Exception:return ""
 
-def card(label,value,cls=""):
+def secret(name):
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
+def card(label, value, cls=""):
     return f"<div class='card'><small>{label}</small><b class='{cls}'>{value}</b></div>"
 
+
 def load_json(name):
-    try:return json.loads((ROOT/"outputs"/name).read_text(encoding="utf-8"))
-    except Exception:return {}
+    try:
+        return json.loads((ROOT / "outputs" / name).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
 
 def clean_symbols(df):
-    if df is None or df.empty:return pd.DataFrame(columns=["Symbol","SecurityId"])
-    symbol_col=next((c for c in df.columns if str(c).upper() in {"SEM_TRADING_SYMBOL","SEM_CUSTOM_SYMBOL","SYMBOL_NAME","SM_SYMBOL_NAME","SYMBOL"}),None)
-    sec_col=next((c for c in df.columns if str(c).upper() in {"SECURITY_ID","SEM_SM_SECURITY_ID","SECURITYID"}),None)
-    if not symbol_col or not sec_col:return pd.DataFrame(columns=["Symbol","SecurityId"])
-    out=pd.DataFrame({"Symbol":df[symbol_col].astype(str).str.upper().str.strip().str.replace("-EQ$","",regex=True),"SecurityId":df[sec_col].astype(str).str.strip()})
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Symbol", "SecurityId"])
+    symbol_col = next((c for c in df.columns if str(c).upper() in {
+        "SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SYMBOL_NAME", "SM_SYMBOL_NAME", "SYMBOL"
+    }), None)
+    sec_col = next((c for c in df.columns if str(c).upper() in {
+        "SECURITY_ID", "SEM_SM_SECURITY_ID", "SECURITYID"
+    }), None)
+    if not symbol_col or not sec_col:
+        return pd.DataFrame(columns=["Symbol", "SecurityId"])
+    out = pd.DataFrame({
+        "Symbol": df[symbol_col].astype(str).str.upper().str.strip().str.replace("-EQ$", "", regex=True),
+        "SecurityId": df[sec_col].astype(str).str.strip(),
+    })
     return out[out["SecurityId"].ne("")].drop_duplicates("Symbol")
 
-@st.cache_data(ttl=3600,show_spinner=False)
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def dhan_instrument_master():
     try:
-        r=requests.get("https://images.dhan.co/api-data/api-scrip-master.csv",timeout=30)
-        if r.ok:return pd.read_csv(__import__("io").StringIO(r.text),low_memory=False)
-    except Exception:pass
+        response = requests.get(
+            "https://images.dhan.co/api-data/api-scrip-master.csv",
+            timeout=30,
+        )
+        if response.ok:
+            return pd.read_csv(io.StringIO(response.text), low_memory=False)
+    except Exception:
+        pass
     return pd.DataFrame()
 
-def dhan_ohlc(client_id,token,instruments):
-    if not instruments:return {},"No instruments"
+
+def dhan_ohlc(client_id, token, instruments):
+    if not instruments:
+        return {}, "NO_INSTRUMENTS"
     try:
-        r=requests.post("https://api.dhan.co/v2/marketfeed/ohlc",headers={"access-token":token,"client-id":client_id,"Accept":"application/json","Content-Type":"application/json"},json=instruments,timeout=20)
-        if r.ok:
-            payload=r.json();return payload.get("data",{}),"OK"
-        return {},f"HTTP {r.status_code}"
-    except Exception as e:return {},f"ERROR {type(e).__name__}"
+        response = requests.post(
+            "https://api.dhan.co/v2/marketfeed/ohlc",
+            headers={
+                "access-token": token,
+                "client-id": client_id,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            json=instruments,
+            timeout=20,
+        )
+        if response.ok:
+            payload = response.json()
+            return payload.get("data", {}), "OK"
+        return {}, f"HTTP_{response.status_code}"
+    except Exception as exc:
+        return {}, f"ERROR_{type(exc).__name__}"
 
-client_id=secret("DHAN_CLIENT_ID");token=secret("DHAN_ACCESS_TOKEN")
-reference=load_json("master_data.json")
 
-st.markdown("<div class='title'>📚 Closed / Previous-Day Data</div>",unsafe_allow_html=True)
-st.markdown("<div class='sub'>Closed-market reference values • Dhan verification • PDH / PDL / PDC • never mixed with the live 15-second strategy scanner</div>",unsafe_allow_html=True)
+client_id = secret("DHAN_CLIENT_ID")
+token = secret("DHAN_ACCESS_TOKEN")
+reference = load_json("master_data.json")
+
+st.markdown("<div class='title'>📚 Reference & Previous-Day Data</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='sub'>Previous-session PDH / PDL / PDC reference layer • live Dhan OHLC verification kept separate from strategy execution</div>",
+    unsafe_allow_html=True,
+)
 
 st.markdown("### 🔐 Dhan Data Connection")
 if client_id and token:
     try:
-        r=requests.get("https://api.dhan.co/v2/fundlimit",headers={"access-token":token,"client-id":client_id},timeout=10)
-        st.markdown(card("DHAN API","CONNECTED" if r.ok else f"HTTP {r.status_code}","ok" if r.ok else "bad"),unsafe_allow_html=True)
-    except Exception:st.markdown(card("DHAN API","ERROR","bad"),unsafe_allow_html=True)
-else:st.markdown(card("DHAN API","SECRETS MISSING","wait"),unsafe_allow_html=True)
+        response = requests.get(
+            "https://api.dhan.co/v2/fundlimit",
+            headers={"access-token": token, "client-id": client_id},
+            timeout=10,
+        )
+        st.markdown(
+            card("DHAN API", "CONNECTED" if response.ok else f"HTTP {response.status_code}", "ok" if response.ok else "bad"),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        st.markdown(card("DHAN API", "ERROR", "bad"), unsafe_allow_html=True)
+else:
+    st.markdown(card("DHAN API", "SECRETS MISSING", "wait"), unsafe_allow_html=True)
 
-st.markdown("### 📅 Dhan Closed Values")
+st.markdown("### 📅 Current Dhan OHLC Verification")
 if client_id and token:
-    if st.button("🔄 Refresh Dhan Closed Values",use_container_width=True):
-        master=dhan_instrument_master()
+    if st.button("🔄 Refresh Current OHLC Check", use_container_width=True):
+        master = dhan_instrument_master()
         try:
             from data.stock_universe import StockUniverse
-            universe=StockUniverse().get_dataframe(refresh=False)
+            universe = StockUniverse().get_dataframe(refresh=False)
         except Exception:
-            universe=pd.DataFrame()
-        eq=master.copy()
-        if not eq.empty and "SEGMENT" in eq.columns: eq=eq[eq["SEGMENT"].astype(str).str.upper().eq("E")]
-        mapping=clean_symbols(eq)
+            universe = pd.DataFrame()
+
+        eq = master.copy()
+        if not eq.empty and "SEGMENT" in eq.columns:
+            eq = eq[eq["SEGMENT"].astype(str).str.upper().eq("E")]
+        mapping = clean_symbols(eq)
         if not universe.empty and "Symbol" in universe.columns:
-            symbols=universe["Symbol"].astype(str).str.upper().tolist()[:500]
-            mapping=mapping[mapping["Symbol"].isin(symbols)].copy()
-        mapping=mapping.drop_duplicates("Symbol")
-        inst={"NSE_EQ":[int(x) if str(x).isdigit() else str(x) for x in mapping["SecurityId"].tolist()]}
-        data,status=dhan_ohlc(client_id,token,inst)
-        rows=[]
-        block=data.get("NSE_EQ",{}) if isinstance(data,dict) else {}
-        reverse={str(r.SecurityId):r.Symbol for r in mapping.itertuples()}
-        for sec,q in block.items():
-            o=q.get("ohlc",{}) if isinstance(q,dict) else {}
-            rows.append({"Symbol":reverse.get(str(sec),str(sec)),"Previous/Close":o.get("close"),"Today Open":o.get("open"),"Today High":o.get("high"),"Today Low":o.get("low"),"LTP":q.get("last_price")})
-        df=pd.DataFrame(rows)
-        st.session_state["dhan_closed_df"]=df
-        st.session_state["dhan_closed_status"]=status
-        st.session_state["dhan_closed_count"]=len(df)
-    df=st.session_state.get("dhan_closed_df",pd.DataFrame())
-    status=st.session_state.get("dhan_closed_status","Not refreshed yet")
-    count=int(st.session_state.get("dhan_closed_count",0))
-    st.markdown("<div class='grid'>"+"".join([card("NIFTY 500 STOCKS",f"{count}/500"),card("Dhan Quote Status",status),card("CLOSED VALUES","READY" if count else "WAITING","ok" if count else "wait"),card("PDH/PDL SOURCE","Historical layer"),card("LAST CHECK",datetime.now(IST).strftime("%H:%M:%S"))])+"</div>",unsafe_allow_html=True)
+            symbols = universe["Symbol"].astype(str).str.upper().str.strip().tolist()[:500]
+            mapping = mapping[mapping["Symbol"].isin(symbols)].copy()
+        mapping = mapping.drop_duplicates("Symbol")
+        instruments = {
+            "NSE_EQ": [int(x) if str(x).isdigit() else str(x) for x in mapping["SecurityId"].tolist()]
+        }
+        data, status = dhan_ohlc(client_id, token, instruments)
+        rows = []
+        block = data.get("NSE_EQ", {}) if isinstance(data, dict) else {}
+        reverse = {str(r.SecurityId): r.Symbol for r in mapping.itertuples()}
+        for security_id, quote in block.items():
+            ohlc = quote.get("ohlc", {}) if isinstance(quote, dict) else {}
+            rows.append({
+                "Symbol": reverse.get(str(security_id), str(security_id)),
+                "Current Session Open": ohlc.get("open"),
+                "Current Session High": ohlc.get("high"),
+                "Current Session Low": ohlc.get("low"),
+                "Dhan Previous/Reference Close": ohlc.get("close"),
+                "Current LTP": quote.get("last_price"),
+            })
+        df = pd.DataFrame(rows)
+        st.session_state["dhan_ohlc_df"] = df
+        st.session_state["dhan_ohlc_status"] = status
+        st.session_state["dhan_ohlc_count"] = len(df)
+
+    df = st.session_state.get("dhan_ohlc_df", pd.DataFrame())
+    status = st.session_state.get("dhan_ohlc_status", "NOT_REFRESHED")
+    count = int(st.session_state.get("dhan_ohlc_count", 0))
+    st.markdown(
+        "<div class='grid'>" + "".join([
+            card("NIFTY 500 QUOTES", f"{count}/500"),
+            card("Dhan Quote Status", status),
+            card("CURRENT OHLC", "READY" if count else "WAITING", "ok" if count else "wait"),
+            card("PDH/PDL SOURCE", "Reference layer"),
+            card("LAST CHECK", datetime.now(IST).strftime("%H:%M:%S")),
+        ]) + "</div>",
+        unsafe_allow_html=True,
+    )
     if not df.empty:
-        st.dataframe(df.sort_values("Symbol"),use_container_width=True,hide_index=True,height=520)
-        st.download_button("⬇️ Download Dhan Closed Values CSV",df.to_csv(index=False).encode(),"dhan_closed_values.csv","text/csv")
-else:st.info("Add DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN to Streamlit Secrets first.")
+        st.dataframe(df.sort_values("Symbol"), use_container_width=True, hide_index=True, height=520)
+        st.download_button(
+            "⬇️ Download Current OHLC Verification CSV",
+            df.to_csv(index=False).encode(),
+            "dhan_current_ohlc_verification.csv",
+            "text/csv",
+        )
+else:
+    st.info("Add DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN to Streamlit Secrets first.")
 
-st.markdown("### 📌 PDH / PDL / PDC Reference")
-payload=reference.get("previous_day",{}) if isinstance(reference,dict) else {}
-if not isinstance(payload,dict):payload={}
-nifty_close=payload.get("nifty500_close") or payload.get("nifty_close") or reference.get("nifty500_previous_close")
-pdh=payload.get("pdh");pdl=payload.get("pdl");pdc=payload.get("pdc") or payload.get("previous_close")
-coverage=payload.get("coverage") or reference.get("reference_data_count")
-st.markdown("<div class='grid'>"+"".join([card("NIFTY 500 PREVIOUS CLOSE",nifty_close if nifty_close is not None else "WAITING"),card("PDH",pdh if pdh is not None else "WAITING"),card("PDL",pdl if pdl is not None else "WAITING"),card("PDC",pdc if pdc is not None else "WAITING"),card("REFERENCE COVERAGE",f"{coverage}/500" if coverage is not None else "WAITING")])+"</div>",unsafe_allow_html=True)
+st.markdown("### 📌 Canonical PDH / PDL / PDC Reference")
+payload = reference.get("previous_day", {}) if isinstance(reference, dict) else {}
+if not isinstance(payload, dict):
+    payload = {}
+nifty_close = payload.get("nifty500_close") or payload.get("nifty_close") or reference.get("nifty500_previous_close")
+pdh = payload.get("pdh")
+pdl = payload.get("pdl")
+pdc = payload.get("pdc") or payload.get("previous_close")
+coverage = payload.get("coverage") or reference.get("reference_data_count")
+st.markdown(
+    "<div class='grid'>" + "".join([
+        card("NIFTY 500 PREVIOUS CLOSE", nifty_close if nifty_close is not None else "WAITING"),
+        card("PDH", pdh if pdh is not None else "WAITING"),
+        card("PDL", pdl if pdl is not None else "WAITING"),
+        card("PDC", pdc if pdc is not None else "WAITING"),
+        card("REFERENCE COVERAGE", f"{coverage}/500" if coverage is not None else "WAITING"),
+    ]) + "</div>",
+    unsafe_allow_html=True,
+)
 
-st.markdown("<div class='note'><b>Separation rule:</b> this page is for closed/reference data. Today's live NIFTY 500, A/D, sectors, LTP and S1–S5 signals remain on the live dashboard. No artificial values are generated when Dhan data is unavailable.</div>",unsafe_allow_html=True)
+st.markdown(
+    "<div class='note'><b>Separation rule:</b> PDH / PDL / PDC must come from the canonical previous-session reference layer used by the trading engine. Current-session Dhan OHLC is displayed only as a verification view and is never substituted for previous-day levels.</div>",
+    unsafe_allow_html=True,
+)
 st.caption(f"Checked {datetime.now(IST).strftime('%d %b %Y %H:%M:%S IST')} • Paper trading only")
