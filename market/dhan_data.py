@@ -69,6 +69,24 @@ def _finite_positive(v):
  try:return math.isfinite(float(v)) and float(v)>0
  except (TypeError,ValueError):return False
 def _valid_ohlc(op,hi,lo,close,ltp):return all(_finite_positive(v) for v in (op,hi,lo,close,ltp)) and hi>=max(op,lo,ltp) and lo<=min(op,hi,ltp)
+def _parse_quote_response(response,mapping):
+ data=response.get("data",{}).get("NSE_EQ",{}) if response else {};clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=clean["SecurityId"].astype(str);by_id=dict(zip(clean["SecurityId"],clean["Symbol"]));rows=[]
+ for sid,item in data.items():
+  if str(sid) not in by_id or not isinstance(item,dict):continue
+  o=item.get("ohlc") or {}
+  try:
+   ltp=float(item.get("last_price") or 0);op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);prev=float(o.get("close") or 0);net_raw=item.get("net_change");net=float(net_raw) if net_raw is not None else ltp-prev;vol=float(item.get("volume") or 0)
+   if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,prev,ltp) or not math.isfinite(net) or vol<0:continue
+   rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":ltp,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
+  except (TypeError,ValueError,OverflowError,KeyError):pass
+ return pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame()
+def diagnostic_nifty500_live(mapping):
+ """Return raw Dhan quote diagnostics without applying the 475/500 trade gate."""
+ if mapping is None or mapping.empty:return {"configured":configured(),"requested":0,"returned":0,"valid":0,"rows":pd.DataFrame(),"status":dhan_status(),"error":"EMPTY_MAPPING"}
+ clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean=clean.dropna(subset=["SecurityId"]);clean["SecurityId"]=clean["SecurityId"].astype("int64").astype(str);clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.drop_duplicates("Symbol")
+ response=_marketfeed("NSE_EQ",clean["SecurityId"].tolist(),"/marketfeed/quote") if configured() else {}
+ data=response.get("data",{}).get("NSE_EQ",{}) if response else {};rows=_parse_quote_response(response,clean);returned=len(data) if isinstance(data,dict) else 0;_set_status(received=len(rows),requested=len(clean),ok=len(rows)>0,stage="DIAGNOSTIC_QUOTE",message=f"Raw Dhan quote diagnostic: {len(rows)}/{len(clean)} valid rows")
+ return {"configured":configured(),"requested":len(clean),"returned":returned,"valid":len(rows),"rows":rows,"status":dhan_status(),"error":None if len(rows)>0 else (dhan_status().get("message") or "NO_VALID_QUOTES")}
 def market_quote(mapping,cache_seconds=10):
  global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
  if mapping is None or mapping.empty or not configured() or not {"SecurityId","Symbol"}.issubset(mapping.columns):return pd.DataFrame()
@@ -79,17 +97,7 @@ def market_quote(mapping,cache_seconds=10):
   if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
    cached=pd.DataFrame(list(_QUOTE_CACHE.values()));cached_ids=set(cached.get("SecurityId",pd.Series(dtype=str)).astype(str));cached_symbols=set(cached.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper())
    if len(cached)>=MIN_DATA_COVERAGE_COUNT and cached_ids.issubset(expected_ids) and cached_symbols.issubset(expected_symbols):return cached
- response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(clean["SecurityId"],clean["Symbol"]));rows=[]
- for sid,item in data.items():
-  if str(sid) not in expected_ids or not isinstance(item,dict):continue
-  o=item.get("ohlc") or {}
-  try:
-   ltp=float(item.get("last_price") or 0);op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);prev=float(o.get("close") or 0)
-   net_raw=item.get("net_change");net=float(net_raw) if net_raw is not None else ltp-prev;vol=float(item.get("volume") or 0)
-   if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,prev,ltp) or not math.isfinite(net) or vol<0:continue
-   rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":ltp,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
-  except (TypeError,ValueError,OverflowError,KeyError):pass
- result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame();result_ids=set(result.get("SecurityId",pd.Series(dtype=str)).astype(str));result_symbols=set(result.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper());verified=len(result)>=MIN_DATA_COVERAGE_COUNT and result_ids.issubset(expected_ids) and result_symbols.issubset(expected_symbols)
+ response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");result=_parse_quote_response(response,clean);result_ids=set(result.get("SecurityId",pd.Series(dtype=str)).astype(str));result_symbols=set(result.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper());verified=len(result)>=MIN_DATA_COVERAGE_COUNT and result_ids.issubset(expected_ids) and result_symbols.issubset(expected_symbols)
  _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/quote",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes; minimum {MIN_DATA_COVERAGE_COUNT}/500")
  if not verified:return pd.DataFrame()
  with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
