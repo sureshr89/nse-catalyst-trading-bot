@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime
 from config import settings, trading_limits, trading_rules
 
 
@@ -7,7 +7,10 @@ def test_single_s1_s5_market_contract():
     assert settings.MAX_STOCKS == 500
     assert settings.PAPER_TRADING is True
     assert settings.LIVE_TRADING is False
-    assert settings.SCAN_INTERVAL_SECONDS == 15
+    # 15s collection window + 10s decision window = 25s cycle.
+    assert settings.COLLECTION_WINDOW_SECONDS == 15
+    assert settings.DECISION_WINDOW_SECONDS == 10
+    assert settings.SCAN_INTERVAL_SECONDS == 25
 
 
 def test_trading_window_and_square_off():
