@@ -5,8 +5,8 @@ G_SELL={"nifty500_change_pct":-0.10,"sector_alignment_pct":-1.0,"ad_ratio":0.8,"
 
 def test_market_gate_requires_verified_breadth_and_sector_count():
     assert market_gate("BUY",0.01,1,1.01,500,10,5);assert market_gate("SELL",-0.01,-1,0.99,500,5,10)
-    assert market_gate("BUY",0.01,1,1.01,475,10,5);assert market_gate("SELL",-0.01,-1,0.99,475,5,10)
-    assert not market_gate("BUY",0.01,1,1.01,474,10,5);assert not market_gate("BUY",0,1,1.2,500,10,5);assert not market_gate("BUY",0.1,1,1.2,500,5,10)
+    assert market_gate("BUY",0.01,1,1.01,490,10,5);assert market_gate("SELL",-0.01,-1,0.99,490,5,10)
+    assert not market_gate("BUY",0.01,1,1.01,489,10,5);assert not market_gate("BUY",0,1,1.2,500,10,5);assert not market_gate("BUY",0.1,1,1.2,500,5,10)
 
 def test_risk_band_and_capital():
     assert position_size(100.0,99.0)==(1400,1.0,1400.0,140000.0);assert position_size(2000.0,400.0) is None;assert position_size(100.0,0.0) is None
@@ -34,7 +34,7 @@ def test_s5_buy_and_sell():
     assert buy and buy.stop_loss==100;assert sell and sell.stop_loss==90
 
 def test_invalid_breadth_blocks_signals():
-    bad=dict(G_BUY);bad["ad_coverage"]=474;assert evaluate_s5("ABC","BUY",100,90,101,**bad) is None
+    bad=dict(G_BUY);bad["ad_coverage"]=489;assert evaluate_s5("ABC","BUY",100,90,101,**bad) is None
 
 def test_s4_does_not_use_future_current_extreme():
     assert evaluate_s4("ABC","BUY",120,98,115,105,115,**G_BUY) is None;assert evaluate_s4("XYZ","SELL",102,80,95,85,85,**G_SELL) is None
