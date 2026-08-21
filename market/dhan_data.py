@@ -1,9 +1,8 @@
 """DhanHQ-only market-data adapter for the clean S1-S5 pipeline."""
 from __future__ import annotations
-from datetime import datetime,timedelta
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor,as_completed
 import math,os,threading,time
 import pandas as pd,requests
 from config.settings import MIN_DATA_COVERAGE_COUNT
@@ -24,7 +23,7 @@ def _post(path,payload,timeout=15):
  try:
   r=requests.post(f"{BASE_URL}{path}",headers=_headers(),json=payload,timeout=timeout);body=r.json() if r.content else {}
   if r.status_code!=200:
-   code=body.get("errorCode") or body.get("error_code") or body.get("code") if isinstance(body,dict) else None;msg=body.get("errorMessage") or body.get("error_message") or body.get("message") if isinstance(body,dict) else r.text[:300];_set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
+   code=(body.get("errorCode") or body.get("error_code") or body.get("code")) if isinstance(body,dict) else None;msg=(body.get("errorMessage") or body.get("error_message") or body.get("message")) if isinstance(body,dict) else r.text[:300];_set_status(ok=False,stage=path,http_status=r.status_code,error_code=code,message=str(msg));return {}
   _set_status(ok=True,stage=path,http_status=200,error_code=None,message="Dhan API response received");return body if isinstance(body,dict) else {}
  except Exception as exc:_set_status(ok=False,stage=path,message=f"{type(exc).__name__}: {exc}");return {}
 def _valid_master(x):
@@ -64,8 +63,7 @@ def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
    if pd.notna(number) and float(number).is_integer():normalized.append(int(number))
   except (TypeError,ValueError,OverflowError):pass
  ids=normalized;_set_status(stage=endpoint,requested=len(ids),received=0)
- if not ids:
-  _set_status(ok=False,stage=endpoint,message="No valid numeric Dhan security IDs supplied");return {}
+ if not ids:_set_status(ok=False,stage=endpoint,message="No valid numeric Dhan security IDs supplied");return {}
  return _post(endpoint,{exchange_segment:ids})
 def _finite_positive(v):
  try:return math.isfinite(float(v)) and float(v)>0
@@ -86,9 +84,10 @@ def market_quote(mapping,cache_seconds=10):
   if str(sid) not in expected_ids or not isinstance(item,dict):continue
   o=item.get("ohlc") or {}
   try:
-   ltp=float(item.get("last_price") or 0);net=float(item.get("net_change"));prev=ltp-net;op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);close=float(o.get("close") or 0);vol=float(item.get("volume") or 0)
-   if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,close,ltp) or not math.isfinite(net) or vol<0:continue
-   rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":close,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
+   ltp=float(item.get("last_price") or 0);op=float(o.get("open") or 0);hi=float(o.get("high") or 0);lo=float(o.get("low") or 0);prev=float(o.get("close") or 0)
+   net_raw=item.get("net_change");net=float(net_raw) if net_raw is not None else ltp-prev;vol=float(item.get("volume") or 0)
+   if not _finite_positive(ltp) or not _finite_positive(prev) or not _valid_ohlc(op,hi,lo,prev,ltp) or not math.isfinite(net) or vol<0:continue
+   rows.append({"Symbol":by_id[str(sid)],"SecurityId":str(sid),"LTP":ltp,"TodayOpen":op,"TodayHigh":hi,"TodayLow":lo,"TodayClose":ltp,"PreviousClose":prev,"NetChange":net,"Volume":vol,"change_pct":(ltp-prev)/prev*100.0,"UpdatedAt":datetime.now().isoformat(timespec="seconds"),"price_source":"DHAN_MARKETFEED_QUOTE"})
   except (TypeError,ValueError,OverflowError,KeyError):pass
  result=pd.DataFrame(rows).drop_duplicates("SecurityId") if rows else pd.DataFrame();result_ids=set(result.get("SecurityId",pd.Series(dtype=str)).astype(str));result_symbols=set(result.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper());verified=len(result)>=MIN_DATA_COVERAGE_COUNT and result_ids.issubset(expected_ids) and result_symbols.issubset(expected_symbols)
  _set_status(received=len(result),requested=len(ids),ok=verified,stage="/marketfeed/quote",message=f"Verified {len(result)}/{len(ids)} NSE_EQ quotes; minimum {MIN_DATA_COVERAGE_COUNT}/500")
@@ -96,7 +95,6 @@ def market_quote(mapping,cache_seconds=10):
  with _LOCK:_QUOTE_CACHE={str(r["Symbol"]):r.to_dict() for _,r in result.iterrows()};_QUOTE_CACHE_AT=time.monotonic();_QUOTE_CACHE_KEY=cache_key
  return result
 def index_quote(index_name="NIFTY 500"):
- """Return a verified NSE index quote from Dhan's IDX_I market-feed segment."""
  if not configured():return None
  m=load_instrument_master(False)
  if m.empty:return None
@@ -108,12 +106,11 @@ def index_quote(index_name="NIFTY 500"):
  if x.empty:return None
  sid_raw=pd.to_numeric(x.iloc[0][ic],errors="coerce")
  if pd.isna(sid_raw) or not float(sid_raw).is_integer():return None
- sid=str(int(sid_raw))
- response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
+ sid=str(int(sid_raw));response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
  if not isinstance(item,dict):return None
  o=item.get("ohlc") or {}
  try:
-  ltp=float(item.get("last_price") or 0);net=float(item.get("net_change") or 0);prev=ltp-net;close=float(o.get("close") or 0)
+  ltp=float(item.get("last_price") or 0);close=float(o.get("close") or 0);net_raw=item.get("net_change");net=float(net_raw) if net_raw is not None else ltp-close;prev=close if _finite_positive(close) else ltp-net
   if not _finite_positive(ltp) or not _finite_positive(prev):return None
   return {"Symbol":wanted,"SecurityId":sid,"LTP":ltp,"Close":close,"PreviousClose":prev,"NetChange":net,"change_pct":(ltp-prev)/prev*100.0,"price_source":"DHAN_INDEX_QUOTE"}
  except (TypeError,ValueError,OverflowError):return None
