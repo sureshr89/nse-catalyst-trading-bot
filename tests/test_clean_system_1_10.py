@@ -42,9 +42,10 @@ def test_05_strategy_rules_have_common_market_gate():
     from strategy.nifty500_price_action_strategies import market_gate
     assert market_gate("BUY", 0.1, 1.0, 1.1, 500, 8, 4)
     assert market_gate("SELL", -0.1, -1.0, 0.9, 500, 4, 8)
-    assert market_gate("BUY", 0.1, 1.0, 1.1, 490, 8, 4)
     assert not market_gate("BUY", 0.1, 1.0, 1.1, 489, 8, 4)
     assert not market_gate("BUY", -0.1, 1.0, 1.1, 500, 8, 4)
+    assert not market_gate("SELL", 0.1, -1.0, 0.9, 500, 4, 8)
+    assert not market_gate("BUY", 0.1, 1.0, 1.1, 500, 4, 8)
 
 
 def test_06_all_five_strategies_produce_correct_side_and_rr():
@@ -99,9 +100,10 @@ def test_09_paper_trading_only():
 def test_10_contract_and_diagnostics_are_consistent():
     from strategy.contracts import STRATEGY_VERSION, strategy_metadata
     from engine.master_engine import MasterEngine
-    assert STRATEGY_VERSION.startswith("2026.08.21.clean-dhan")
+    assert STRATEGY_VERSION == "2026.08.21.clean-dhan-v2"
     for s in ("S1", "S2", "S3", "S4", "S5"):
         assert strategy_metadata(s)["strategy"] == s
+        assert strategy_metadata(s)["version"] == STRATEGY_VERSION
     diag = MasterEngine._blank_diag(MasterEngine.__new__(MasterEngine))
     assert diag["strategy_version"] == "clean-dhan-v3"
     assert diag["market_data_source"] == "DHAN_ONLY"
