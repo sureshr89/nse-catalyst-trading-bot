@@ -22,7 +22,9 @@ def test_nifty500_index_quote_does_not_use_hardcoded_id(monkeypatch):
     result = dd.index_quote("NIFTY 500")
     assert result is not None
     assert result["SecurityId"] == "999"
-    assert seen["payload"] == {"IDX_I": ["999"]}
+    # Dhan market-feed payloads use numeric security IDs.  The response keys
+    # remain strings, so the production adapter normalizes only at the boundary.
+    assert seen["payload"] == {"IDX_I": [999]}
 
 
 def test_nifty500_mapping_failure_returns_none(monkeypatch):
