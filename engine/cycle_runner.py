@@ -8,7 +8,7 @@ from config.settings import (
     DAILY_MAX_LOSS_PER_STRATEGY, MAX_TRADES_PER_STRATEGY_PER_DAY,
     COLLECTION_WINDOW_SECONDS, DECISION_WINDOW_SECONDS, MIN_DATA_COVERAGE_COUNT,
 )
-from market.news_ranker import rank as rank_news, refresh_async as refresh_news
+from market.news_ranker import rank as rank_news, refresh_async as refresh_news, snapshot as news_snapshot
 
 OUTPUT = Path("outputs")
 SIGNAL_FILE = OUTPUT / "signals.csv"
@@ -64,7 +64,7 @@ def _sector_candidates(engine, snap, side):
     return merged.loc[merged["Sector"].isin(eligible), "Symbol"].drop_duplicates().tolist()
 
 
-def _try_stock(engine, symbol, ref, snap, side, now):
+def _try_stock(engine, symbol, ref, snap, side, now, news_meta=None):
     """Evaluate the unchanged S1-S5 logic after news/sector prioritization."""
     local_snap = dict(snap)
     local_snap["intraday"] = {}
@@ -81,6 +81,9 @@ def _try_stock(engine, symbol, ref, snap, side, now):
         if not _open_allowed(engine, signal):
             continue
         trade = dict(signal)
+        if news_meta:
+            trade.update(news_meta)
+            signal.update(news_meta)
         trade.update({"approved": True, "entry_time": now})
         opened = engine.paper_engine.open_trade(trade)
         if opened.get("opened"):
@@ -118,9 +121,6 @@ def run_cycle(engine):
     if not _within(now, "09:15", "15:30"):
         return []
 
-    # HARD COLLECTION DEADLINE: once 15 seconds have elapsed, this snapshot is
-    # invalid. We never wait for missing symbols and never trade an incomplete
-    # snapshot. The next worker cycle starts again with the full 500 universe.
     collection_started = monotonic_time.monotonic()
     snap = engine._market_snapshot()
     collection_elapsed = monotonic_time.monotonic() - collection_started
@@ -172,6 +172,26 @@ def run_cycle(engine):
     refresh_news(sector_symbols)
     ranked_news = rank_news(sector_symbols, side)
     ranked_symbols = [symbol for symbol, _score in ranked_news]
+    news_cache = news_snapshot()
+    news_meta_by_symbol = {}
+    for rank_position, symbol in enumerate(ranked_symbols, start=1):
+        item = news_cache.get(symbol, {})
+        headlines = item.get("headlines") or []
+        score = float(item.get("score", 0.0) or 0.0)
+        latest = max(headlines, key=lambda h: str(h.get("published", ""))) if headlines else {}
+        published = str(latest.get("published", ""))
+        news_meta_by_symbol[symbol] = {
+            "news_available": bool(headlines),
+            "news_sentiment": "POSITIVE" if score > 0 else "NEGATIVE" if score < 0 else "NEUTRAL",
+            "news_strength_score": round(abs(score), 2),
+            "news_signed_score": round(score, 2),
+            "news_priority_rank": rank_position,
+            "news_headline": str(latest.get("title", "")),
+            "news_published": published,
+            "news_source": str(latest.get("source", "")),
+            "news_headline_count": len(headlines),
+            "news_selected_at": now.isoformat(timespec="seconds"),
+        }
     engine.diagnostics["sector_candidate_stocks"] = len(sector_symbols)
     engine.diagnostics["news_ranked_stocks"] = len(ranked_symbols)
 
@@ -190,7 +210,7 @@ def run_cycle(engine):
         quote = snap.get("dhan_quotes", {}).get(symbol, {})
         if not quote or not _candidate(quote, ref, side):
             continue
-        signal = _try_stock(engine, symbol, ref, snap, side, now)
+        signal = _try_stock(engine, symbol, ref, snap, side, now, news_meta_by_symbol.get(symbol))
         if signal is not None:
             signals.append(signal)
 
