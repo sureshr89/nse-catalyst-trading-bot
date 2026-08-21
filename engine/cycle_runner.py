@@ -19,6 +19,7 @@ def _within(now, start, end):
 
 
 def _candidate(quote, ref, side):
+    """Cheap first-pass filter; final S1-S5 evaluation remains authoritative."""
     try:
         op = float(quote.get("TodayOpen")); hi = float(quote.get("TodayHigh")); lo = float(quote.get("TodayLow")); ltp = float(quote.get("LTP"))
         pdh = float(ref.get("PDH")); pdl = float(ref.get("PDL"))
@@ -65,18 +66,8 @@ def _sector_candidates(engine, snap, side):
 
 
 def _try_stock(engine, symbol, ref, snap, side, now, news_meta=None):
-    """Evaluate the unchanged S1-S5 logic after news/sector prioritization."""
-    local_snap = dict(snap)
-    local_snap["intraday"] = {}
-    signals = engine._evaluate_stock(symbol, ref, local_snap)
-    if not signals:
-        try:
-            intraday = engine.price_data.get_1m(symbol)
-        except Exception:
-            intraday = pd.DataFrame()
-        if intraday is not None and not intraday.empty:
-            local_snap["intraday"] = {symbol: intraday}
-            signals = engine._evaluate_stock(symbol, ref, local_snap)
+    """Evaluate S1-S5 using already-prepared snapshot/history; no per-stock network call."""
+    signals = engine._evaluate_stock(symbol, ref, snap)
     for signal in signals:
         if not _open_allowed(engine, signal):
             continue
@@ -116,7 +107,7 @@ def _invalidate_cycle(engine, reason, collected_count=0, elapsed=None):
 
 
 def run_cycle(engine):
-    """Run one fresh 15-second collection + <=10-second decision cycle."""
+    """Run one fresh collection + bounded decision cycle."""
     now = engine.now()
     if not _within(now, "09:15", "15:30"):
         return []
@@ -146,8 +137,13 @@ def run_cycle(engine):
     for symbol in list(engine.paper_engine.open_positions):
         quote = snap.get("dhan_quotes", {}).get(symbol, {})
         if quote:
-            engine.paper_engine.process_live_price(symbol, quote.get("LTP"), timestamp=now,
-                                                    high=quote.get("TodayHigh"), low=quote.get("TodayLow"))
+            engine.paper_engine.process_live_price(
+                symbol,
+                quote.get("LTP"),
+                timestamp=now,
+                high=quote.get("TodayHigh"),
+                low=quote.get("TodayLow"),
+            )
 
     if now.time() >= time.fromisoformat(SQUARE_OFF_TIME):
         for symbol in list(engine.paper_engine.open_positions):
@@ -158,7 +154,13 @@ def run_cycle(engine):
         engine.diagnostics["decision_deadline_met"] = monotonic_time.monotonic() <= decision_deadline
         engine._write_diagnostics()
         return []
+
     if not _within(now, TRADING_START, LAST_ENTRY_TIME):
+        engine.diagnostics["trade_path_status"] = "BLOCKED"
+        engine.diagnostics["no_trade_reason"] = "OUTSIDE_ENTRY_WINDOW"
+        engine.diagnostics["decision_elapsed_seconds"] = round(monotonic_time.monotonic() - decision_started, 3)
+        engine.diagnostics["decision_deadline_met"] = monotonic_time.monotonic() <= decision_deadline
+        engine._write_diagnostics()
         return []
 
     side = "BUY" if snap.get("buy_alignment") else "SELL" if snap.get("sell_alignment") else None
@@ -168,6 +170,8 @@ def run_cycle(engine):
         engine._write_diagnostics()
         return []
 
+    # News refresh is explicitly asynchronous and is never awaited. Existing
+    # cache is used immediately for ranking so the decision path stays bounded.
     sector_symbols = _sector_candidates(engine, snap, side)
     refresh_news(sector_symbols)
     ranked_news = rank_news(sector_symbols, side)
@@ -192,8 +196,16 @@ def run_cycle(engine):
             "news_headline_count": len(headlines),
             "news_selected_at": now.isoformat(timespec="seconds"),
         }
+
     engine.diagnostics["sector_candidate_stocks"] = len(sector_symbols)
     engine.diagnostics["news_ranked_stocks"] = len(ranked_symbols)
+
+    # Prepare completed 1-minute history in one bounded stage. S2/S4 then use
+    # one consistent snapshot instead of issuing a network call per stock.
+    snap = dict(snap)
+    snap["intraday"] = {}
+    if hasattr(engine, "prepare_intraday_for_symbols"):
+        snap["intraday"] = engine.prepare_intraday_for_symbols(ranked_symbols, decision_deadline)
 
     ref_by_symbol = {
         str(r.get("Symbol", "")).upper().strip(): r
@@ -216,8 +228,13 @@ def run_cycle(engine):
 
     engine.last_signals = signals
     engine.diagnostics["final_signals"] = len(signals)
-    engine.diagnostics["signals_by_strategy"] = {s: sum(1 for x in signals if str(x.get("strategy", "")).upper() == s) for s in engine.daily_counts}
-    engine.diagnostics["trade_path_status"] = "READY" if signals or snap.get("buy_alignment") or snap.get("sell_alignment") else "BLOCKED"
+    engine.diagnostics["signals_by_strategy"] = {
+        s: sum(1 for x in signals if str(x.get("strategy", "")).upper() == s)
+        for s in engine.daily_counts
+    }
+    engine.diagnostics["trade_path_status"] = "READY" if signals else "BLOCKED"
+    if not signals:
+        engine.diagnostics["no_trade_reason"] = "NO_ELIGIBLE_S1_S5_SETUP"
     engine.diagnostics["decision_elapsed_seconds"] = round(monotonic_time.monotonic() - decision_started, 3)
     engine.diagnostics["decision_deadline_met"] = engine.diagnostics.get("decision_deadline_met", True) and monotonic_time.monotonic() <= decision_deadline
     engine._write_diagnostics()
