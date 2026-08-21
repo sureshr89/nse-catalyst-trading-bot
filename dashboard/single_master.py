@@ -17,13 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS = ROOT / "outputs"
 IST = ZoneInfo("Asia/Kolkata")
 
-st.set_page_config(
-    page_title="NSE Catalyst",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
 
 def read_csv(name):
     path = OUTPUTS / name
@@ -81,9 +74,7 @@ def card(label, value, emphasis=""):
 
 def build_sector_rows(quote_rows):
     """Build sector returns from the finalized shared live snapshot."""
-    if not isinstance(quote_rows, pd.DataFrame) or quote_rows.empty:
-        return pd.DataFrame()
-    if "Symbol" not in quote_rows.columns:
+    if not isinstance(quote_rows, pd.DataFrame) or quote_rows.empty or "Symbol" not in quote_rows.columns:
         return pd.DataFrame()
     try:
         from data.sector_alignment import load_sector_map
@@ -95,24 +86,13 @@ def build_sector_rows(quote_rows):
 
     q = quote_rows.copy()
     q["Symbol"] = q["Symbol"].astype(str).str.upper().str.strip().str.replace(".NS", "", regex=False)
-    change_col = next(
-        (c for c in ["change_pct", "ChangePct", "change_percent", "NetChangePct"] if c in q.columns),
-        None,
-    )
+    change_col = next((c for c in ["change_pct", "ChangePct", "change_percent", "NetChangePct"] if c in q.columns), None)
     if change_col is None:
         if {"NetChange", "PreviousClose"}.issubset(q.columns):
-            q["_change_pct"] = (
-                pd.to_numeric(q["NetChange"], errors="coerce")
-                / pd.to_numeric(q["PreviousClose"], errors="coerce")
-                * 100
-            )
+            q["_change_pct"] = pd.to_numeric(q["NetChange"], errors="coerce") / pd.to_numeric(q["PreviousClose"], errors="coerce") * 100
             change_col = "_change_pct"
         elif {"LTP", "PreviousClose"}.issubset(q.columns):
-            q["_change_pct"] = (
-                pd.to_numeric(q["LTP"], errors="coerce")
-                / pd.to_numeric(q["PreviousClose"], errors="coerce")
-                - 1
-            ) * 100
+            q["_change_pct"] = (pd.to_numeric(q["LTP"], errors="coerce") / pd.to_numeric(q["PreviousClose"], errors="coerce") - 1) * 100
             change_col = "_change_pct"
         else:
             return pd.DataFrame()
@@ -124,15 +104,9 @@ def build_sector_rows(quote_rows):
     if merged.empty:
         return pd.DataFrame()
 
-    grouped = (
-        merged.groupby("Sector", sort=True)[change_col]
-        .agg(["mean", "count"])
-        .reset_index()
-        .rename(columns={"mean": "Change %", "count": "Stocks"})
-    )
-    grouped["Status"] = grouped["Change %"].map(
-        lambda x: "POSITIVE" if x > 0 else "NEGATIVE" if x < 0 else "UNCHANGED"
-    )
+    grouped = merged.groupby("Sector", sort=True)[change_col].agg(["mean", "count"]).reset_index()
+    grouped = grouped.rename(columns={"mean": "Change %", "count": "Stocks"})
+    grouped["Status"] = grouped["Change %"].map(lambda x: "POSITIVE" if x > 0 else "NEGATIVE" if x < 0 else "UNCHANGED")
     return grouped.sort_values("Change %", ascending=False).reset_index(drop=True)
 
 
@@ -188,21 +162,7 @@ def live_dashboard():
                 market["nifty500_previous_close"] = prev
                 market["nifty500_change_pct"] = net / prev * 100
     except Exception as exc:
-        market = {
-            "complete": False,
-            "sector_complete": False,
-            "evaluated": 0,
-            "sector_priced": 0,
-            "nifty500_change_pct": None,
-            "ad_ratio": None,
-            "advances": 0,
-            "declines": 0,
-            "unchanged": 0,
-            "positive_sectors": 0,
-            "negative_sectors": 0,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "quote_rows": pd.DataFrame(),
-        }
+        market = {"complete": False, "sector_complete": False, "evaluated": 0, "sector_priced": 0, "nifty500_change_pct": None, "ad_ratio": None, "advances": 0, "declines": 0, "unchanged": 0, "positive_sectors": 0, "negative_sectors": 0, "reason": f"{type(exc).__name__}: {exc}", "quote_rows": pd.DataFrame()}
         dhan_ok = False
         api_status = {"ok": False, "message": str(exc)}
         raw_index = None
@@ -220,26 +180,20 @@ def live_dashboard():
         dc = next((c for c in ["exit_time", "entry_time", "market_entry_time", "trigger_entry_time"] if c in trades_today.columns), None)
         if dc:
             d = pd.to_datetime(trades_today[dc], errors="coerce", utc=True)
-            try:
-                d = d.dt.tz_convert(IST)
-            except Exception:
-                pass
+            try: d = d.dt.tz_convert(IST)
+            except Exception: pass
             trades_today = trades_today[d.dt.date == today]
-
     if not signals_today.empty:
         dc = next((c for c in ["timestamp", "entry_time", "logged_at"] if c in signals_today.columns), None)
         if dc:
             d = pd.to_datetime(signals_today[dc], errors="coerce", utc=True)
-            try:
-                d = d.dt.tz_convert(IST)
-            except Exception:
-                pass
+            try: d = d.dt.tz_convert(IST)
+            except Exception: pass
             signals_today = signals_today[d.dt.date == today]
 
     complete = bool(market.get("complete"))
     sector_complete = bool(market.get("sector_complete"))
     evaluated = int(market.get("evaluated", 0) or 0)
-    sector_priced = int(market.get("sector_priced", 0) or 0)
     advances = int(market.get("advances", 0) or 0)
     declines = int(market.get("declines", 0) or 0)
     unchanged = int(market.get("unchanged", 0) or 0)
@@ -256,8 +210,6 @@ def live_dashboard():
         positive_sectors = int(market.get("positive_sectors", 0) or 0)
         negative_sectors = int(market.get("negative_sectors", 0) or 0)
 
-    # Market alignment remains a master gate; S1-S5 themselves retain their
-    # canonical production rules in the strategy engine.
     buy = bool(complete and num(change) > 0 and num(ad) > 1 and positive_sectors > negative_sectors)
     sell = bool(complete and num(change) < 0 and num(ad, 2) < 1 and negative_sectors > positive_sectors)
     bias = "🟢 BUY" if buy else "🔴 SELL" if sell else "⚪ NO TRADE"
@@ -265,16 +217,12 @@ def live_dashboard():
     coverage_ok = quote_count >= MIN_DATA_COVERAGE_COUNT
 
     st.markdown('<div class="title">📊 NSE Catalyst — Master Dashboard</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="sub">NIFTY 500 • PAPER TRADING ONLY • Dhan • {now.strftime("%d %b %Y %H:%M:%S")} IST • auto refresh 15s</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="sub">NIFTY 500 • PAPER TRADING ONLY • Dhan • {now.strftime("%d %b %Y %H:%M:%S")} IST • auto refresh 15s</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sec">🎯 MARKET ALIGNMENT</div>', unsafe_allow_html=True)
     index_display = pct(change)
     if raw_index and market.get("nifty500_ltp") is not None:
         index_display = f'{fmt(market.get("nifty500_ltp"))} ({pct(change)})'
-
     top_cards = [
         ("NIFTY 500", index_display if complete else "WAITING"),
         ("ADVANCES", advances if complete else "WAITING"),
@@ -291,20 +239,10 @@ def live_dashboard():
         ("98% GATE", "PASS" if coverage_ok else "BLOCK"),
         ("MASTER BIAS", bias),
     ]
-    st.markdown(
-        '<div class="grid4">' + ''.join(
-            card(label, value, bias_class if label == "MASTER BIAS" else "")
-            for label, value in bottom_cards
-        ) + '</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="grid4">' + ''.join(card(label, value, bias_class if label == "MASTER BIAS" else "") for label, value in bottom_cards) + '</div>', unsafe_allow_html=True)
 
     reason = str(market.get("reason") or "").replace("<", "&lt;").replace(">", "&gt;")
-    status_text = (
-        f'<b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • '
-        f'Live snapshot: {quote_count}/500 • 98% gate: {"PASS" if coverage_ok else "BLOCK"} • '
-        "15-second shared snapshot"
-    )
+    status_text = f'<b>Dhan: {"CONNECTED" if dhan_ok else "WAITING"}</b> • Live snapshot: {quote_count}/500 • 98% gate: {"PASS" if coverage_ok else "BLOCK"} • 15-second shared snapshot'
     if not coverage_ok:
         status_text += f" • {reason or 'waiting for sufficient verified live data'}"
     elif not api_status.get("ok", True):
@@ -315,107 +253,50 @@ def live_dashboard():
     if sector_complete and not sector_rows.empty:
         sector_display = sector_rows[["Sector", "Change %", "Status", "Stocks"]].copy()
         sector_display["Change %"] = sector_display["Change %"].map(lambda x: f"{x:+.2f}%")
-        sector_display["Status"] = sector_display["Status"].map(
-            lambda x: "🟢 POSITIVE" if x == "POSITIVE" else "🔴 NEGATIVE" if x == "NEGATIVE" else "⚪ UNCHANGED"
-        )
-        st.dataframe(
-            sector_display,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Sector": "Sector",
-                "Change %": "Change vs PDC",
-                "Status": "Direction",
-                "Stocks": st.column_config.NumberColumn("Stocks", format="%d"),
-            },
-        )
+        sector_display["Status"] = sector_display["Status"].map(lambda x: "🟢 POSITIVE" if x == "POSITIVE" else "🔴 NEGATIVE" if x == "NEGATIVE" else "⚪ UNCHANGED")
+        st.dataframe(sector_display, width="stretch", hide_index=True, column_config={"Sector": "Sector", "Change %": "Change vs PDC", "Status": "Direction", "Stocks": st.column_config.NumberColumn("Stocks", format="%d")})
     else:
         st.info("Waiting for the finalized shared NIFTY 500 snapshot.")
 
     st.markdown('<div class="sec">⚡ S1–S5 STRATEGY STATUS</div>', unsafe_allow_html=True)
     for strategy in ["S1", "S2", "S3", "S4", "S5"]:
-        tr = pd.DataFrame()
-        sg = pd.DataFrame()
+        tr = pd.DataFrame(); sg = pd.DataFrame()
         for source, target in [(trades_today, "tr"), (signals_today, "sg")]:
-            if source.empty:
-                continue
+            if source.empty: continue
             cols = [c for c in ["strategy", "strategy_name", "signal", "setup_type"] if c in source.columns]
-            if not cols:
-                continue
+            if not cols: continue
             mask = pd.Series(False, index=source.index)
             for col in cols:
                 vals = source[col].astype(str).str.upper().str.strip()
                 mask |= vals.eq(strategy) | vals.str.startswith(strategy + " ")
-            if target == "tr":
-                tr = source[mask]
-            else:
-                sg = source[mask]
+            if target == "tr": tr = source[mask]
+            else: sg = source[mask]
 
         row = tr.iloc[-1] if not tr.empty else None
         signal_row = sg.iloc[-1] if not sg.empty else None
         if row is not None:
             status = str(first(row, "status", default="OPEN")).upper()
             state = "CLOSED" if status == "CLOSED" or first(row, "exit_time") not in {"", None} else "TRADE OPEN"
-            stock = first(row, "symbol", "stock")
-            side = first(row, "buy_sell", "side", "signal")
-            signal_time = first(row, "trigger_entry_time", "entry_time", "market_entry_time")
-            entry = first(row, "entry", "entry_price")
-            sl = first(row, "stop_loss")
-            target = first(row, "target")
-            exit_price = first(row, "exit_price", "exit")
-            pnl = first(row, "pnl")
-            rr = first(row, "rr", "reward", "risk_reward")
+            stock = first(row, "symbol", "stock"); side = first(row, "buy_sell", "side", "signal"); signal_time = first(row, "trigger_entry_time", "entry_time", "market_entry_time")
+            entry = first(row, "entry", "entry_price"); sl = first(row, "stop_loss"); target = first(row, "target"); exit_price = first(row, "exit_price", "exit"); pnl = first(row, "pnl"); rr = first(row, "rr", "reward", "risk_reward")
         elif signal_row is not None:
-            state = "SIGNAL"
-            stock = first(signal_row, "symbol", "stock")
-            side = first(signal_row, "buy_sell", "side", "signal")
-            signal_time = first(signal_row, "timestamp", "entry_time", "logged_at")
-            entry = first(signal_row, "entry", "entry_price")
-            sl = first(signal_row, "stop_loss")
-            target = first(signal_row, "target")
-            exit_price = pnl = ""
-            rr = first(signal_row, "risk_reward", "rr", "reward")
+            state = "SIGNAL"; stock = first(signal_row, "symbol", "stock"); side = first(signal_row, "buy_sell", "side", "signal"); signal_time = first(signal_row, "timestamp", "entry_time", "logged_at")
+            entry = first(signal_row, "entry", "entry_price"); sl = first(signal_row, "stop_loss"); target = first(signal_row, "target"); exit_price = pnl = ""; rr = first(signal_row, "risk_reward", "rr", "reward")
         else:
-            state = "WAITING"
-            stock = side = signal_time = entry = sl = target = exit_price = pnl = rr = ""
+            state = "WAITING"; stock = side = signal_time = entry = sl = target = exit_price = pnl = rr = ""
 
-        cells = [
-            ("Stock", stock), ("BUY / SELL", side), ("Signal Time", signal_time),
-            ("Entry", fmt(entry)), ("Stop Loss", fmt(sl)), ("Target", fmt(target)),
-            ("Exit", fmt(exit_price)), ("P&L", fmt(pnl)), ("Risk / Reward", fmt(rr)),
-        ]
-        html = ''.join(
-            f'<div class="trade-cell"><div class="trade-label">{label}</div>'
-            f'<div class="trade-value">{value or "—"}</div></div>'
-            for label, value in cells
-        )
+        cells = [("Stock", stock), ("BUY / SELL", side), ("Signal Time", signal_time), ("Entry", fmt(entry)), ("Stop Loss", fmt(sl)), ("Target", fmt(target)), ("Exit", fmt(exit_price)), ("P&L", fmt(pnl)), ("Risk / Reward", fmt(rr))]
+        html = ''.join(f'<div class="trade-cell"><div class="trade-label">{label}</div><div class="trade-value">{value or "—"}</div></div>' for label, value in cells)
         color = "#67e8a5" if state == "CLOSED" else "#5ec8ff" if state == "SIGNAL" else "#ffd166" if state == "TRADE OPEN" else "#fff"
-        st.markdown(
-            f'<div class="strategy"><span class="state" style="color:{color}">{state}</span>'
-            f'<div class="strategy-title">{strategy}</div><div class="trade-grid">{html}</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="strategy"><span class="state" style="color:{color}">{state}</span><div class="strategy-title">{strategy}</div><div class="trade-grid">{html}</div></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sec">📥 DOWNLOAD</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec">📥 DOWNLOAD CSV</div>', unsafe_allow_html=True)
     master_csv = trades_all
-    st.download_button(
-        "⬇️ Download Master CSV",
-        master_csv.to_csv(index=False).encode("utf-8"),
-        "nse_catalyst_master.csv",
-        "text/csv",
-        use_container_width=True,
-        key="master_csv_final",
-    )
+    st.download_button("⬇️ Download Master CSV", master_csv.to_csv(index=False).encode("utf-8"), "nse_catalyst_master.csv", "text/csv", use_container_width=True, key="master_csv_final")
     st.caption(f"Cumulative trade journal: {len(master_csv)} record(s). Original journal columns preserved.")
 
     st.markdown('<div class="sec">💡 DAILY TRADING TIP</div>', unsafe_allow_html=True)
-    tips = [
-        "Follow the setup, not the emotion.",
-        "Protect capital first; profits come second.",
-        "Wait for confirmation before entering.",
-        "One disciplined trade is better than many emotional trades.",
-        "Never chase a missed entry.",
-    ]
+    tips = ["Follow the setup, not the emotion.", "Protect capital first; profits come second.", "Wait for confirmation before entering.", "One disciplined trade is better than many emotional trades.", "Never chase a missed entry."]
     st.markdown(f'<div class="tip">💡 {tips[now.date().toordinal() % len(tips)]}</div>', unsafe_allow_html=True)
     st.caption("NSE Catalyst • paper trading only • shared live snapshot refreshes every 15 seconds")
 
