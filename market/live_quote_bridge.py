@@ -1,16 +1,16 @@
 """Shared Dhan NIFTY 500 live-data bridge.
 
-One controlled collector builds a single 15-second market snapshot. Quotes are
-collected in small batches, merged by Symbol, and then reused by the engine,
-dashboard, AD, sector calculations and S1-S5. The 98% rule is a trade-readiness
-gate, not a reason to discard valid prices collected during the window.
+One controlled collector builds one 15-second NIFTY-500 market snapshot.
+Dhan's market-feed API supports up to 1,000 instruments per request, so the
+500-stock universe is fetched in one request per cycle. The same snapshot is
+reused by the engine, dashboard, AD, sectors and S1-S5.
 """
 from datetime import datetime
 import math
 import threading
 import time
 import pandas as pd
-from config.settings import LIVE_COLLECTION_WINDOW_SECONDS, MIN_DATA_COVERAGE_COUNT
+from config.settings import LIVE_COLLECTION_WINDOW_SECONDS
 from market import dhan_data
 
 _CACHE_LOCK = threading.RLock()
@@ -19,11 +19,11 @@ _CACHE_KEY = None
 _CACHE_AT = 0.0
 CACHE_SECONDS = float(LIVE_COLLECTION_WINDOW_SECONDS)
 COLLECTION_WINDOW_SECONDS = float(LIVE_COLLECTION_WINDOW_SECONDS)
-BATCH_SIZE = 100
+MAX_INSTRUMENTS_PER_REQUEST = 1000
 
 
 def _rows_from_response(response, clean):
-    data = (response.get("data", {}).get("NSE_EQ", {}) if isinstance(response, dict) else {})
+    data = response.get("data", {}).get("NSE_EQ", {}) if isinstance(response, dict) else {}
     by_id = dict(zip(clean["SecurityId"].astype(str), clean["Symbol"].astype(str).str.upper()))
     rows = []
     for sid, item in data.items():
@@ -55,18 +55,6 @@ def _rows_from_response(response, clean):
     return pd.DataFrame(rows).drop_duplicates("Symbol") if rows else pd.DataFrame()
 
 
-def _merge(existing, incoming):
-    if incoming is None or incoming.empty:
-        return existing.copy() if existing is not None else pd.DataFrame()
-    if existing is None or existing.empty:
-        return incoming.copy().drop_duplicates("Symbol")
-    combined = pd.concat([existing, incoming], ignore_index=True)
-    # The latest valid observation wins for a symbol. This freezes the
-    # collection window without losing earlier arrivals.
-    combined = combined.drop_duplicates("Symbol", keep="last")
-    return combined.reset_index(drop=True)
-
-
 def _clean_mapping(mapping):
     if mapping is None or mapping.empty or not {"SecurityId", "Symbol"}.issubset(mapping.columns):
         return pd.DataFrame()
@@ -79,18 +67,16 @@ def _clean_mapping(mapping):
 
 
 def market_quote_partial(mapping):
-    """Return one shared 15-second merged NIFTY-500 snapshot.
+    """Return one shared 15-second NIFTY-500 snapshot.
 
-    Dhan can return up to 1,000 instruments per request, but the collector uses
-    100-instrument batches to make the collection incremental. Five batches can
-    therefore arrive at different times and are merged into one snapshot.
-    A second pass only retries still-missing batches if time remains. No 429
-    retry burst is created and no partial quote is discarded merely because the
-    final coverage is below 98%.
+    The old implementation split 500 stocks into five 100-stock quote calls.
+    Dhan documents up to 1,000 instruments per market-quote request, so those
+    extra calls were unnecessary and could trigger 805/429 throttling. This
+    implementation makes one bounded request for the full NIFTY 500 each cycle.
     """
     global _CACHE_ROWS, _CACHE_KEY, _CACHE_AT
     clean = _clean_mapping(mapping)
-    if clean.empty or not dhan_data.configured():
+    if clean.empty or not dhan_data.configured() or len(clean) > MAX_INSTRUMENTS_PER_REQUEST:
         return pd.DataFrame()
     key = tuple(sorted(clean["SecurityId"].tolist()))
     now = time.monotonic()
@@ -99,49 +85,18 @@ def market_quote_partial(mapping):
             return _CACHE_ROWS.copy()
 
     started = time.monotonic()
-    merged = pd.DataFrame()
-    batches = [clean.iloc[i:i + BATCH_SIZE].copy() for i in range(0, len(clean), BATCH_SIZE)]
-    completed_batches = set()
+    response = dhan_data._marketfeed("NSE_EQ", clean["SecurityId"].tolist(), "/marketfeed/ohlc")
+    merged = _rows_from_response(response, clean)
+    elapsed = time.monotonic() - started
 
-    def collect_batch(batch_index, batch):
-        nonlocal merged
-        response = dhan_data._marketfeed("NSE_EQ", batch["SecurityId"].tolist(), "/marketfeed/ohlc")
-        incoming = _rows_from_response(response, batch)
-        if not incoming.empty:
-            merged = _merge(merged, incoming)
-        completed_batches.add(batch_index)
-
-    # First pass: collect every batch once. The shared Dhan throttle enforces
-    # the API request interval across the whole process.
-    for idx, batch in enumerate(batches):
-        if time.monotonic() - started >= COLLECTION_WINDOW_SECONDS:
-            break
-        collect_batch(idx, batch)
-
-    # Second pass: only retry batches that produced no rows, and only while the
-    # same 15-second collection window is still open.
-    if len(merged) < min(MIN_DATA_COVERAGE_COUNT, len(clean)):
-        missing = []
-        merged_symbols = set(merged.get("Symbol", pd.Series(dtype=str)).astype(str).str.upper())
-        for idx, batch in enumerate(batches):
-            if time.monotonic() - started >= COLLECTION_WINDOW_SECONDS:
-                break
-            if not set(batch["Symbol"]).issubset(merged_symbols):
-                missing.append((idx, batch))
-        for idx, batch in missing:
-            if time.monotonic() - started >= COLLECTION_WINDOW_SECONDS:
-                break
-            collect_batch(idx, batch)
-
-    merged = merged.drop_duplicates("Symbol").reset_index(drop=True) if not merged.empty else pd.DataFrame()
     with _CACHE_LOCK:
-        _CACHE_ROWS = merged.copy()
-        _CACHE_KEY = key
-        _CACHE_AT = time.monotonic()
+        if not merged.empty:
+            _CACHE_ROWS = merged.copy()
+            _CACHE_KEY = key
+            _CACHE_AT = time.monotonic()
     return merged
 
 
-# Backward-compatible name for existing callers. It now uses the same merged
-# 15-second snapshot and never performs a second independent 500-stock fetch.
+# Backward-compatible name for existing callers.
 def market_quote_partial_15s(mapping):
     return market_quote_partial(mapping)
