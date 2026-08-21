@@ -33,7 +33,12 @@ class PriceData:
         x=self._clean(df);return x[x["Datetime"].dt.date==datetime.now(INDIA_TZ).date()].reset_index(drop=True) if not x.empty else x
     def _map(self,symbols):return dhan_data.map_nifty500(symbols)
     def _dhan_configured(self):return dhan_data.configured()
-    def _dhan_market_quote(self,mapping):return dhan_data.market_quote(mapping,cache_seconds=1)
+    def _dhan_market_quote(self,mapping):
+        # Individual stock reads must not inherit the 475/500 market gate.
+        # The market gate is enforced by Nifty500Breadth/strategy approval;
+        # this boundary is only responsible for obtaining one live quote.
+        from market.live_quote_bridge import market_quote_partial
+        return market_quote_partial(mapping)
     def get_candles(self,symbol,interval="5m",period="1d"):
         if interval not in self.valid_intervals:raise ValueError(f"Unsupported interval: {interval}")
         if not dhan_data.configured():return pd.DataFrame()
