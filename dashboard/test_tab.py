@@ -1,4 +1,4 @@
-"""Live NIFTY 500 Dhan diagnostic tab. No trades are created here."""
+"""Shared live NIFTY 500 diagnostic tab. No trades are created here."""
 import pandas as pd
 import streamlit as st
 
@@ -19,43 +19,37 @@ def _live_diagnostic():
     try:
         from market.nifty500_breadth import BREADTH
         from market.dhan_data import configured, dhan_status, index_quote
-        from market.dhan_live_nifty500_test import live_nifty500_ltp, enrich_ohlc
+        from market.live_quote_bridge import market_quote_partial
 
         universe = BREADTH._get_universe()
         symbols = universe["Symbol"].astype(str).str.upper().str.strip().tolist() if not universe.empty else []
         mapping = BREADTH._get_mapping(symbols) if symbols else pd.DataFrame()
         configured_ok = bool(configured())
 
-        diagnostic = live_nifty500_ltp(mapping) if configured_ok and not mapping.empty else {
-            "rows": pd.DataFrame(), "requested": len(mapping), "returned": 0, "valid": 0,
-            "status": dhan_status(), "raw_keys": []
-        }
-        rows = diagnostic.get("rows") if isinstance(diagnostic.get("rows"), pd.DataFrame) else pd.DataFrame()
-        if not rows.empty:
-            rows = enrich_ohlc(mapping, rows)
-        returned = int(diagnostic.get("returned", 0) or 0)
-        valid = int(diagnostic.get("valid", 0) or 0)
-        status = diagnostic.get("status") or dhan_status()
+        # IMPORTANT: use the same shared 500-stock snapshot as the production
+        # engine. This tab must never make a second LTP/OHLC request of its own.
+        rows = market_quote_partial(mapping) if configured_ok and not mapping.empty else pd.DataFrame()
+        returned = len(rows)
+        valid = len(rows)
+        status = dhan_status()
         idx = index_quote("NIFTY 500") if configured_ok else None
 
         html = "<div class='diag-grid'>"
         html += _card("DHAN", "CONNECTED" if configured_ok else "NOT CONFIGURED")
         html += _card("UNIVERSE", f"{len(symbols)}/500")
         html += _card("SECURITY MAPPING", f"{len(mapping)}/500")
-        html += _card("LTP REQUEST", f"{len(mapping)}/500")
+        html += _card("SHARED LTP/OHLC", f"{len(mapping)}/500")
         html += _card("DHAN RETURNED", str(returned))
-        html += _card("VALID LIVE LTP", f"{valid}/500")
+        html += _card("VALID LIVE PRICES", f"{valid}/500")
         html += _card("95% GATE", "PASS" if valid >= 475 else "BLOCK")
         html += _card("NIFTY 500 LTP", f"₹{_fmt(idx.get('LTP'))}" if idx else "NO LIVE INDEX")
         html += "</div>"
         st.markdown(html, unsafe_allow_html=True)
 
         if valid:
-            st.success(f"LIVE Dhan LTP data received: {valid}/500. This diagnostic does not create trades.")
+            st.success(f"LIVE Dhan stock data received: {valid}/500. Shared snapshot; no extra quote request from this tab.")
         else:
-            st.error(f"NO LIVE STOCK LTP RECEIVED. Stage: {status.get('stage', '—')} • {status.get('message', 'No Dhan LTP response')}")
-            if diagnostic.get("raw_keys"):
-                st.warning(f"Dhan response top-level keys: {diagnostic.get('raw_keys')}")
+            st.error(f"NO LIVE STOCK PRICES RECEIVED. Stage: {status.get('stage', '—')} • {status.get('message', 'No Dhan response')}")
 
         st.write(
             f"**Dhan diagnostic:** {status.get('updated_at', '—')} • "
@@ -80,7 +74,7 @@ def _live_diagnostic():
             st.dataframe(rows[show].sort_values("Symbol").head(100), use_container_width=True, hide_index=True)
             missing = sorted(set(mapping.Symbol.astype(str).str.upper()) - set(rows.Symbol.astype(str).str.upper()))
             if missing:
-                st.markdown(f"#### Missing from Dhan LTP response: {len(missing)}")
+                st.markdown(f"#### Missing from shared Dhan snapshot: {len(missing)}")
                 st.dataframe(pd.DataFrame({"MissingSymbol": missing[:100]}), use_container_width=True, hide_index=True)
     except Exception as exc:
         st.error(f"LIVE TESTING ERROR: {type(exc).__name__}: {exc}")
@@ -88,7 +82,7 @@ def _live_diagnostic():
 
 def render_test_tab():
     st.subheader("🧪 LIVE NIFTY 500 DATA TEST")
-    st.caption("Direct Dhan LTP/OHLC diagnostic • refreshes every 15 seconds • no trade is created and no journal is modified.")
+    st.caption("Shared Dhan LTP/OHLC snapshot • refreshes every 15 seconds • no trade is created and no journal is modified.")
     _live_diagnostic()
     st.markdown("""
     <style>
