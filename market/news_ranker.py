@@ -80,6 +80,7 @@ def _fetch_batch(symbols: list[str]):
     for item in root.findall("./channel/item")[:40]:
         title = (item.findtext("title") or "").strip()
         summary = re.sub(r"<[^>]+>", " ", item.findtext("description") or "").strip()
+        source = (item.findtext("source") or "").strip()
         text = f"{title} {summary}"
         try:
             published = parsedate_to_datetime(item.findtext("pubDate") or "")
@@ -92,7 +93,12 @@ def _fetch_batch(symbols: list[str]):
             continue
         for symbol in symbols:
             if re.search(rf"\b{re.escape(symbol)}\b", text, flags=re.I):
-                out[symbol].append({"title": title, "score": score, "published": published.isoformat()})
+                out[symbol].append({
+                    "title": title,
+                    "score": score,
+                    "published": published.isoformat(),
+                    "source": source,
+                })
     return out
 
 
@@ -121,12 +127,9 @@ def refresh_async(symbols):
         stale = [s for s in symbols if s not in _CACHE or _age_seconds(_CACHE[s]["updated_at"]) >= NEWS_CACHE_SECONDS]
         if not stale:
             return
-        if stale:
-            start = _REFRESH_CURSOR % len(stale)
-            ordered = stale[start:] + stale[:start]
-            _REFRESH_CURSOR += NEWS_MAX_BATCHES_PER_REFRESH * NEWS_MAX_BATCH_SYMBOLS
-        else:
-            ordered = []
+        start = _REFRESH_CURSOR % len(stale)
+        ordered = stale[start:] + stale[:start]
+        _REFRESH_CURSOR += NEWS_MAX_BATCHES_PER_REFRESH * NEWS_MAX_BATCH_SYMBOLS
         batches = [ordered[i:i + NEWS_MAX_BATCH_SYMBOLS] for i in range(0, len(ordered), NEWS_MAX_BATCH_SYMBOLS)][:NEWS_MAX_BATCHES_PER_REFRESH]
         for batch in batches:
             if any(s in _INFLIGHT for s in batch):
