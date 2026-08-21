@@ -5,6 +5,7 @@ from pathlib import Path
 def test_final_system_health_check():
     root = Path(__file__).resolve().parents[1]
 
+    from config import settings
     from engine.master_engine import MasterEngine
     from main import MasterEngine as DashboardMasterEngine
     from engine.cycle_runner import run_cycle
@@ -18,10 +19,11 @@ def test_final_system_health_check():
     assert callable(run_cycle)
     assert hasattr(DashboardMasterEngine, "run_cycle")
 
-    # Approved market-data coverage gate: >=95% of NIFTY 500 = 475 symbols.
-    assert strategies.market_gate("BUY", 0.1, 1.0, 1.1, 475, 8, 4)
-    assert strategies.market_gate("SELL", -0.1, -1.0, 0.9, 475, 4, 8)
-    assert not strategies.market_gate("BUY", 0.1, 1.0, 1.1, 474, 8, 4)
+    # Production coverage gate is 98% of NIFTY 500 = 490 verified stocks.
+    assert settings.MIN_DATA_COVERAGE_COUNT == 490
+    assert strategies.market_gate("BUY", 0.1, 1.0, 1.1, 490, 8, 4)
+    assert strategies.market_gate("SELL", -0.1, -1.0, 0.9, 490, 4, 8)
+    assert not strategies.market_gate("BUY", 0.1, 1.0, 1.1, 489, 8, 4)
 
     # Dhan integration remains the production market-data source.
     assert hasattr(dhan_data, "configured")
