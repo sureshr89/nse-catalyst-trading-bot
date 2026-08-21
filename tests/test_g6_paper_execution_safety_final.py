@@ -22,6 +22,7 @@ def _valid_trade():
         "approved": True,
         "symbol": "ABC",
         "signal": "BUY",
+        "setup_type": "S1",
         "entry": 100.0,
         "stop_loss": 98.6,
         "target": 101.75,
@@ -74,13 +75,11 @@ def test_ambiguous_bar_uses_stop_first(tmp_path):
     assert e.open_trade(_valid_trade())["opened"] is True
 
     import papertrade.paper_trade_engine as engine_module
-
     real_datetime = datetime
 
     class FixedSessionDateTime(real_datetime):
         @classmethod
         def now(cls, tz=None):
-            # 10:30 IST is safely inside the engine's 09:15–15:30 gate.
             utc_value = real_datetime(2026, 8, 21, 5, 0, 0, tzinfo=timezone.utc)
             return utc_value.astimezone(tz) if tz is not None else utc_value.replace(tzinfo=None)
 
