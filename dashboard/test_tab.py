@@ -8,6 +8,7 @@ import streamlit as st
 IST=dt.timezone(dt.timedelta(hours=5,minutes=30)); ENTRY_START=dt.time(9,15); FORCE_EXIT=dt.time(14,45)
 STATE_FILE=Path(__file__).resolve().parents[1]/"outputs"/"test_trade_state.json"
 
+
 def _fmt(v,digits=2):
     try:return f"{float(v):,.{digits}f}"
     except Exception:return "—"
@@ -66,8 +67,6 @@ def _card(label,value):return f'<div class="test-card"><div class="test-label">{
 
 @st.fragment(run_every="15s")
 def _live_test():
-    # IMPORTANT: fetch fresh Dhan/breadth data INSIDE the fragment. Passing rows
-    # from the parent function would freeze the quote snapshot between reruns.
     st.markdown("#### 🧪 Test trade")
     st.caption("One isolated paper trade • first aligned entry at/after 09:15 IST • live Dhan P&L every 15 seconds • forced exit 14:45 IST")
     now=_now_ist();today=now.date().isoformat();s=_state(today)
@@ -75,12 +74,15 @@ def _live_test():
     from market.dhan_data import index_quote
     snap=BREADTH.snapshot(force=True);q=snap.get("quote_rows");rows=q.copy() if isinstance(q,pd.DataFrame) else pd.DataFrame();idx=index_quote("NIFTY 500")
     if s.get("status")=="WAITING" and ENTRY_START<=now.time()<FORCE_EXIT:
-        complete=bool(snap.get("complete")) and len(rows)==500;sector_ok=bool(snap.get("sector_complete")) and int(snap.get("sector_priced",0) or 0)==500;alignment=_alignment(snap,idx) if complete and sector_ok else None
+        # Approved system rule: 95% of NIFTY 500 is sufficient (475/500).
+        complete=bool(snap.get("complete")) and len(rows)>=475
+        sector_ok=bool(snap.get("sector_complete")) and int(snap.get("sector_priced",0) or 0)>=475
+        alignment=_alignment(snap,idx) if complete and sector_ok else None
         if alignment:
             c=_candidate(rows,alignment)
             if c:s=_open(c,alignment,now)
             else:st.info(f"{alignment} alignment present; waiting for an eligible NIFTY 500 stock.")
-        else:st.info("Waiting for complete 500/500 data and BUY/SELL alignment.")
+        else:st.info("Waiting for >=475/500 data and BUY/SELL alignment.")
     elif s.get("status")=="WAITING":st.info("Waiting for 09:15 AM IST." if now.time()<ENTRY_START else "Today's entry window is closed; no late entry will be created.")
     if s.get("status")=="OPEN":s=_update(rows,now,s)
     if s.get("status") in {"OPEN","CLOSED"}:
