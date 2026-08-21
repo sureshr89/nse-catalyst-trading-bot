@@ -54,10 +54,19 @@ def map_nifty500(symbols,force=False):
  if seg:x=x[x[seg].astype(str).str.upper().eq("E")]
  if ex:x=x[x[ex].astype(str).str.upper().eq("NSE")]
  if ser:x=x[x[ser].astype(str).str.upper().isin({"EQ","BE","BZ","SM","ST","SZ"})]
- x=x[x["_symbol"].isin(wanted)].copy();x["Symbol"]=x["_symbol"];x["SecurityId"]=x[ic].astype(str).str.strip();x["ExchangeSegment"]="NSE_EQ";x["Instrument"]=x[ins].astype(str).str.upper() if ins else "EQUITY"
- return x[x["SecurityId"].ne("")&x["SecurityId"].ne("NAN")][["Symbol","SecurityId","ExchangeSegment","Instrument"]].drop_duplicates("Symbol")
+ x=x[x["_symbol"].isin(wanted)].copy();x["Symbol"]=x["_symbol"];x["SecurityId"]=pd.to_numeric(x[ic],errors="coerce");x=x.dropna(subset=["SecurityId"]);x["SecurityId"]=x["SecurityId"].astype("int64").astype(str);x["ExchangeSegment"]="NSE_EQ";x["Instrument"]=x[ins].astype(str).str.upper() if ins else "EQUITY"
+ return x[x["SecurityId"].ne("")][["Symbol","SecurityId","ExchangeSegment","Instrument"]].drop_duplicates("Symbol")
 def _marketfeed(exchange_segment,security_ids,endpoint="/marketfeed/ohlc"):
- ids=[int(x) for x in security_ids[:1000] if str(x).isdigit()];_set_status(stage=endpoint,requested=len(ids),received=0);return _post(endpoint,{exchange_segment:ids})
+ normalized=[]
+ for value in security_ids[:1000]:
+  try:
+   number=pd.to_numeric(value,errors="coerce")
+   if pd.notna(number) and float(number).is_integer():normalized.append(int(number))
+  except (TypeError,ValueError,OverflowError):pass
+ ids=normalized;_set_status(stage=endpoint,requested=len(ids),received=0)
+ if not ids:
+  _set_status(ok=False,stage=endpoint,message="No valid numeric Dhan security IDs supplied");return {}
+ return _post(endpoint,{exchange_segment:ids})
 def _finite_positive(v):
  try:return math.isfinite(float(v)) and float(v)>0
  except (TypeError,ValueError):return False
@@ -65,14 +74,14 @@ def _valid_ohlc(op,hi,lo,close,ltp):return all(_finite_positive(v) for v in (op,
 def market_quote(mapping,cache_seconds=10):
  global _QUOTE_CACHE,_QUOTE_CACHE_AT,_QUOTE_CACHE_KEY
  if mapping is None or mapping.empty or not configured() or not {"SecurityId","Symbol"}.issubset(mapping.columns):return pd.DataFrame()
- clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.dropna(subset=["SecurityId"]).drop_duplicates("SecurityId")
- if len(clean)!=len(mapping) or clean["Symbol"].duplicated().any():return pd.DataFrame()
- ids=clean["SecurityId"].astype(int).astype(str).tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
+ clean=mapping[["SecurityId","Symbol"]].copy();clean["SecurityId"]=pd.to_numeric(clean["SecurityId"],errors="coerce");clean=clean.dropna(subset=["SecurityId"]);clean["SecurityId"]=clean["SecurityId"].astype("int64").astype(str);clean["Symbol"]=clean["Symbol"].astype(str).str.upper().str.strip();clean=clean.drop_duplicates("SecurityId")
+ if clean.empty or clean["Symbol"].duplicated().any():return pd.DataFrame()
+ ids=clean["SecurityId"].tolist();expected_ids=set(ids);expected_symbols=set(clean["Symbol"]);cache_key=tuple(sorted(expected_ids));now=time.monotonic()
  with _LOCK:
   if _QUOTE_CACHE and _QUOTE_CACHE_KEY==cache_key and now-_QUOTE_CACHE_AT<=cache_seconds:
    cached=pd.DataFrame(list(_QUOTE_CACHE.values()));cached_ids=set(cached.get("SecurityId",pd.Series(dtype=str)).astype(str));cached_symbols=set(cached.get("Symbol",pd.Series(dtype=str)).astype(str).str.upper())
    if len(cached)>=MIN_DATA_COVERAGE_COUNT and cached_ids.issubset(expected_ids) and cached_symbols.issubset(expected_symbols):return cached
- response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(clean["SecurityId"].astype(str),clean["Symbol"]));rows=[]
+ response=_marketfeed("NSE_EQ",ids,"/marketfeed/quote");data=response.get("data",{}).get("NSE_EQ",{}) if response else {};by_id=dict(zip(clean["SecurityId"],clean["Symbol"]));rows=[]
  for sid,item in data.items():
   if str(sid) not in expected_ids or not isinstance(item,dict):continue
   o=item.get("ohlc") or {}
@@ -97,9 +106,10 @@ def index_quote(index_name="NIFTY 500"):
  if seg:x=x[x[seg].astype(str).str.upper().eq("I")]
  if ex:x=x[x[ex].astype(str).str.upper().eq("NSE")]
  if x.empty:return None
- sid=str(x.iloc[0][ic]).strip()
- if not sid.isdigit():return None
- response=_post("/marketfeed/quote",{"IDX_I":[sid]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
+ sid_raw=pd.to_numeric(x.iloc[0][ic],errors="coerce")
+ if pd.isna(sid_raw) or not float(sid_raw).is_integer():return None
+ sid=str(int(sid_raw))
+ response=_post("/marketfeed/quote",{"IDX_I":[int(sid)]});item=(response.get("data",{}).get("IDX_I",{}) if response else {}).get(sid,{})
  if not isinstance(item,dict):return None
  o=item.get("ohlc") or {}
  try:
