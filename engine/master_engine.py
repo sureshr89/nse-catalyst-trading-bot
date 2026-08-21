@@ -33,13 +33,11 @@ class MasterEngine:
         intraday=snap.get("intraday",{}).get(symbol,pd.DataFrame());intraday=pd.DataFrame() if intraday is None else intraday
         po=pc=None;prior_high=prior_low=None;pullback_low=pullback_high=None;breakout_seen=False
         if isinstance(intraday,pd.DataFrame) and not intraday.empty:
-            cols={str(c).lower():c for c in intraday.columns}
-            row=intraday.iloc[-1];po=row[cols["open"]] if "open" in cols else None;pc=row[cols["close"]] if "close" in cols else None
+            cols={str(c).lower():c for c in intraday.columns};row=intraday.iloc[-1];po=row[cols["open"]] if "open" in cols else None;pc=row[cols["close"]] if "close" in cols else None
             completed=intraday.copy()
             if "datetime" in cols:
                 try:
-                    ts=pd.to_datetime(completed[cols["datetime"]],errors="coerce")
-                    cutoff=self.now().replace(second=0,microsecond=0)
+                    ts=pd.to_datetime(completed[cols["datetime"]],errors="coerce");cutoff=self.now().replace(second=0,microsecond=0)
                     if getattr(ts.dt,"tz",None) is None:ts=ts.dt.tz_localize(IST)
                     else:ts=ts.dt.tz_convert(IST)
                     completed=completed.loc[ts < cutoff].copy()
@@ -121,7 +119,6 @@ class MasterEngine:
             self.diagnostics["rejections"]["trade_gate"]="; ".join(reasons)
         self._write_diagnostics();return snap
     def _publish_dashboard_snapshot(self):
-        """Publish the engine snapshot to the shared breadth/dashboard cache."""
         from market.nifty500_breadth import BREADTH
         snap=getattr(self,"last_snapshot",{}) or {};prices=snap.get("prices");prices=prices.copy() if isinstance(prices,pd.DataFrame) else pd.DataFrame();sector=snap.get("sector") or {}
         coverage=len(prices);adv=int((pd.to_numeric(prices["change_pct"],errors="coerce")>0).sum()) if "change_pct" in prices.columns else 0;dec=int((pd.to_numeric(prices["change_pct"],errors="coerce")<0).sum()) if "change_pct" in prices.columns else 0;unchanged=max(0,coverage-adv-dec);priced=int(sector.get("priced",0) or 0);complete=coverage>=MIN_DATA_COVERAGE_COUNT;sector_complete=bool(sector.get("available")) and priced>=MIN_DATA_COVERAGE_COUNT
