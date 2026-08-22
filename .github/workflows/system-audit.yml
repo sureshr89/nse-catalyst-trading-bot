@@ -1,0 +1,131 @@
+name: SYSTEM AUDIT
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Full System Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Python syntax audit
+        run: python -m compileall -q .
+
+      - name: Production import audit
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import importlib
+          modules = [
+              'main',
+              'config.settings',
+              'config.trading_limits',
+              'config.trading_rules',
+              'data.reference_store',
+              'data.stock_universe',
+              'data.sector_alignment',
+              'market.dhan_data',
+              'market.price_data',
+              'market.nifty500_breadth',
+              'market.live_quote_bridge',
+              'strategy.contracts',
+              'strategy.nifty500_price_action_strategies',
+              'scanner.scanner',
+              'engine.master_engine',
+              'engine.cycle_runner',
+              'papertrade.paper_trade_engine',
+              'journal.trade_journal',
+              'dashboard.app',
+          ]
+          for module in modules:
+              importlib.import_module(module)
+              print(f'IMPORT OK: {module}')
+          PY
+
+      - name: Canonical production contract audit
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import inspect
+          from config import settings, trading_limits, trading_rules
+          from data.reference_store import ReferenceStore
+          from strategy.contracts import STRATEGY_RULES
+          from strategy.nifty500_price_action_strategies import STRATEGY_DEFINITIONS
+
+          assert settings.PAPER_TRADING is True
+          assert settings.LIVE_TRADING is False
+          assert settings.STOCK_UNIVERSE == 'NIFTY_500'
+          assert settings.MAX_STOCKS == 500
+          assert settings.MIN_DATA_COVERAGE_COUNT == 490
+          assert settings.MIN_DATA_COVERAGE_PCT == 98.0
+          assert settings.COLLECTION_WINDOW_SECONDS == 15
+          assert settings.DECISION_WINDOW_SECONDS == 10
+          assert settings.SCAN_INTERVAL_SECONDS == 25
+          assert settings.ALLOCATED_CAPITAL_PER_TRADE == trading_limits.CAPITAL_PER_TRADE == trading_rules.CAPITAL_PER_STRATEGY
+          assert settings.MIN_REQUIRED_RISK == trading_limits.MIN_TRADE_RISK == trading_rules.RISK_MIN
+          assert settings.MAX_RISK_PER_TRADE == trading_limits.MAX_TRADE_RISK == trading_rules.RISK_MAX
+          assert settings.RISK_REWARD_RATIO == trading_limits.TARGET_R_MULTIPLE == trading_rules.TARGET_RR
+          assert set(STRATEGY_RULES) == {'S1', 'S2', 'S3', 'S4', 'S5'}
+          assert set(STRATEGY_DEFINITIONS) == {'S1', 'S2', 'S3', 'S4', 'S5'}
+
+          reference_source = inspect.getsource(ReferenceStore)
+          for field in ('PDH', 'PDL', 'PDC', 'TodayOpen'):
+              assert field in reference_source, f'missing reference contract field: {field}'
+
+          print('Canonical production contract: PASS')
+          PY
+
+      - name: Full pytest regression
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q
+
+      - name: Streamlit startup smoke test
+        env:
+          PYTHONPATH: .
+        run: |
+          set -e
+          nohup python -m streamlit run dashboard/app.py --server.headless true --server.port 8501 > /tmp/streamlit.log 2>&1 &
+          pid=$!
+          ready=0
+          for _ in $(seq 1 30); do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2).read()" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          cat /tmp/streamlit.log
+          kill "$pid" 2>/dev/null || true
+          if [ "$ready" -ne 1 ]; then
+            echo 'Streamlit startup health check failed.'
+            exit 1
+          fi
+          echo 'Streamlit startup health check: PASS'
