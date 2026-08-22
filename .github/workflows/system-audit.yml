@@ -88,7 +88,7 @@ jobs:
               'strategy.contracts',
               'strategy.nifty500_price_action_strategies',
               'strategy.risk_engine',
-              'scanner.scanner',
+              'scanner.scanner_engine',
               'engine.master_engine',
               'engine.cycle_runner',
               'papertrade.paper_trade_engine',
