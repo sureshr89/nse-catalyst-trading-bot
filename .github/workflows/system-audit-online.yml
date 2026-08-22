@@ -1,0 +1,66 @@
+name: SYSTEM AUDIT ONLINE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: system-audit-online
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: '1'
+  PYTHONPATH: .
+
+jobs:
+  online:
+    name: Live Data / Paper-Only Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Verify secrets exist
+        env:
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+        run: |
+          test -n "$DHAN_CLIENT_ID"
+          test -n "$DHAN_ACCESS_TOKEN"
+      - name: Online Dhan and news audit (NO ORDERS)
+        env:
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import market.dhan_data as dhan
+          import market.news_ranker as news
+          from market.price_data import PriceData
+          assert dhan.configured(), 'Dhan credentials are not configured'
+          universe = dhan.map_nifty500()
+          assert universe is not None and len(universe) >= 490, f'NIFTY 500 mapping coverage below 490: {len(universe) if universe is not None else 0}'
+          quote = dhan.market_quote(universe)
+          assert quote is not None and len(quote) >= 490, f'Live quote coverage below 490: {len(quote) if quote is not None else 0}'
+          pd = PriceData()
+          assert callable(news.refresh_async) and callable(news.rank)
+          symbols = list(universe['Symbol'].astype(str).head(25)) if 'Symbol' in universe.columns else []
+          news.refresh_async(symbols)
+          print('ONLINE AUDIT: Dhan configured')
+          print(f'ONLINE AUDIT: NIFTY 500 mapping rows={len(universe)}')
+          print(f'ONLINE AUDIT: live quote rows={len(quote)}')
+          print('ONLINE AUDIT: news refresh submitted')
+          print('ONLINE AUDIT: NO ORDERS / PAPER ONLY')
+          PY
