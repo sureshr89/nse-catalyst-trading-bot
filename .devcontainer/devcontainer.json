@@ -22,7 +22,7 @@
   },
   "updateContentCommand": "python -m pip install --upgrade pip && if [ -f packages.txt ]; then sudo apt-get update && sudo apt-get install -y $(grep -vE '^\\s*(#|$)' packages.txt); fi && if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi && python -m compileall -q . && echo 'Environment, dependencies, and Python syntax verified'",
   "postAttachCommand": {
-    "server": "streamlit run dashboard/app.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "streamlit run dashboard/app.py --server.enableCORS false --server.enableXsrfProtection true"
   },
   "portsAttributes": {
     "8501": {
