@@ -28,10 +28,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -74,25 +74,14 @@ jobs:
           import importlib
           modules = [
               'main',
-              'config.settings',
-              'config.trading_limits',
-              'config.trading_rules',
-              'data.reference_store',
-              'data.stock_universe',
-              'data.sector_alignment',
-              'market.dhan_data',
-              'market.price_data',
-              'market.nifty500_breadth',
-              'market.live_quote_bridge',
-              'market.news_ranker',
-              'strategy.contracts',
-              'strategy.nifty500_price_action_strategies',
-              'strategy.risk_engine',
+              'config.settings', 'config.trading_limits', 'config.trading_rules',
+              'data.reference_store', 'data.stock_universe', 'data.sector_alignment',
+              'market.dhan_data', 'market.price_data', 'market.nifty500_breadth',
+              'market.live_quote_bridge', 'market.news_ranker',
+              'strategy.contracts', 'strategy.nifty500_price_action_strategies', 'strategy.risk_engine',
               'scanner.scanner_engine',
-              'engine.master_engine',
-              'engine.cycle_runner',
-              'papertrade.paper_trade_engine',
-              'dashboard.app',
+              'engine.master_engine', 'engine.cycle_runner',
+              'papertrade.paper_trade_engine', 'dashboard.app',
           ]
           for module in modules:
               importlib.import_module(module)
@@ -105,15 +94,10 @@ jobs:
           from config import settings, trading_limits, trading_rules
           from strategy.contracts import STRATEGY_RULES
           from strategy.nifty500_price_action_strategies import STRATEGY_DEFINITIONS
-
-          assert settings.PAPER_TRADING is True
-          assert settings.LIVE_TRADING is False
-          assert settings.STOCK_UNIVERSE == 'NIFTY_500'
-          assert settings.MAX_STOCKS == 500
-          assert settings.MIN_DATA_COVERAGE_COUNT == 490
-          assert settings.MIN_DATA_COVERAGE_PCT == 98.0
-          assert settings.COLLECTION_WINDOW_SECONDS == 15
-          assert settings.DECISION_WINDOW_SECONDS == 10
+          assert settings.PAPER_TRADING is True and settings.LIVE_TRADING is False
+          assert settings.STOCK_UNIVERSE == 'NIFTY_500' and settings.MAX_STOCKS == 500
+          assert settings.MIN_DATA_COVERAGE_COUNT == 490 and settings.MIN_DATA_COVERAGE_PCT == 98.0
+          assert settings.COLLECTION_WINDOW_SECONDS == 15 and settings.DECISION_WINDOW_SECONDS == 10
           assert settings.SCAN_INTERVAL_SECONDS == 25
           assert settings.ALLOCATED_CAPITAL_PER_TRADE == trading_limits.CAPITAL_PER_TRADE == trading_rules.CAPITAL_PER_STRATEGY
           assert settings.MIN_REQUIRED_RISK == trading_limits.MIN_TRADE_RISK == trading_rules.RISK_MIN
@@ -132,13 +116,9 @@ jobs:
           import market.news_ranker as news
           from market.price_data import PriceData
           from market.live_quote_bridge import market_quote_partial
-
-          assert callable(dhan.configured)
-          assert callable(dhan.market_quote)
+          assert callable(dhan.configured) and callable(dhan.market_quote)
           assert callable(market_quote_partial)
-          assert callable(news.rank)
-          assert callable(news.refresh_async)
-          assert callable(news.snapshot)
+          assert callable(news.rank) and callable(news.refresh_async) and callable(news.snapshot)
           assert 'DHAN_MARKETFEED_QUOTE' in inspect.getsource(PriceData.get_latest_live_price)
           print('Dhan/news boundaries: PASS')
           PY
@@ -153,34 +133,17 @@ jobs:
           pid=$!
           ready=0
           for _ in $(seq 1 30); do
-            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2).read()" >/dev/null 2>&1; then
-              ready=1
-              break
-            fi
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2).read()" >/dev/null 2>&1; then ready=1; break; fi
             sleep 1
           done
           cat /tmp/streamlit.log
           kill "$pid" 2>/dev/null || true
-          if [ "$ready" -ne 1 ]; then
-            echo 'Streamlit startup health check failed.'
-            exit 1
-          fi
-          echo 'Streamlit startup health check: PASS'
+          test "$ready" -eq 1
 
       - name: Final audit summary
         if: always()
         run: |
-          echo '========================================'
-          echo 'FINAL PROJECT AUDIT'
-          echo 'Python: 3.12'
-          echo 'Universe: NIFTY 500'
-          echo 'Strategies: S1 S2 S3 S4 S5'
-          echo 'Execution: PAPER ONLY'
-          echo 'Coverage gate: 490/500'
-          echo 'Collection budget: 15s'
-          echo 'Decision budget: 10s'
-          echo 'Cycle interval: 25s'
-          echo 'News filter: enabled in decision cycle'
-          echo 'Dashboard smoke test: enabled'
-          echo 'Full pytest: enabled'
-          echo '========================================'
+          echo 'SYSTEM AUDIT: COMPLETE'
+          echo 'Python: 3.12 | NIFTY 500 | S1-S5 | PAPER ONLY | 490/500 gate'
+          echo 'Collection: 15s | Decision: 10s | Cycle: 25s | News filter: enabled'
+          echo 'Full pytest + dashboard smoke test: enabled'
