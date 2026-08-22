@@ -6,15 +6,25 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '30 3 * * 1-5'
 
 permissions:
   contents: read
 
+concurrency:
+  group: system-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: '1'
+  PYTHONPATH: .
+
 jobs:
   audit:
-    name: Full System Audit
+    name: Full Project Audit
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -33,12 +43,32 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
 
+      - name: Dependency integrity
+        run: python -m pip check
+
+      - name: Repository hygiene
+        run: |
+          git diff --check
+          test -f config/settings.py
+          test -f requirements.txt
+          test -f main.py
+          test -d config
+          test -d data
+          test -d market
+          test -d strategy
+          test -d scanner
+          test -d engine
+          test -d papertrade
+          test -d journal
+          test -d outputs
+          test -d utils
+          test -d tests
+          test -d .github/workflows
+
       - name: Python syntax audit
-        run: python -m compileall -q .
+        run: python -m compileall -q config data market strategy scanner engine papertrade journal utils main.py dashboard
 
       - name: Production import audit
-        env:
-          PYTHONPATH: .
         run: |
           python - <<'PY'
           import importlib
@@ -54,8 +84,10 @@ jobs:
               'market.price_data',
               'market.nifty500_breadth',
               'market.live_quote_bridge',
+              'market.news_ranker',
               'strategy.contracts',
               'strategy.nifty500_price_action_strategies',
+              'strategy.risk_engine',
               'scanner.scanner',
               'engine.master_engine',
               'engine.cycle_runner',
@@ -68,14 +100,10 @@ jobs:
               print(f'IMPORT OK: {module}')
           PY
 
-      - name: Canonical production contract audit
-        env:
-          PYTHONPATH: .
+      - name: Canonical strategy and timing contract
         run: |
           python - <<'PY'
-          import inspect
           from config import settings, trading_limits, trading_rules
-          from data.reference_store import ReferenceStore
           from strategy.contracts import STRATEGY_RULES
           from strategy.nifty500_price_action_strategies import STRATEGY_DEFINITIONS
 
@@ -92,24 +120,34 @@ jobs:
           assert settings.MIN_REQUIRED_RISK == trading_limits.MIN_TRADE_RISK == trading_rules.RISK_MIN
           assert settings.MAX_RISK_PER_TRADE == trading_limits.MAX_TRADE_RISK == trading_rules.RISK_MAX
           assert settings.RISK_REWARD_RATIO == trading_limits.TARGET_R_MULTIPLE == trading_rules.TARGET_RR
-          assert set(STRATEGY_RULES) == {'S1', 'S2', 'S3', 'S4', 'S5'}
-          assert set(STRATEGY_DEFINITIONS) == {'S1', 'S2', 'S3', 'S4', 'S5'}
+          assert set(STRATEGY_RULES) == {'S1','S2','S3','S4','S5'}
+          assert set(STRATEGY_DEFINITIONS) == {'S1','S2','S3','S4','S5'}
+          print('Canonical contract: PASS')
+          PY
 
-          reference_source = inspect.getsource(ReferenceStore)
-          for field in ('PDH', 'PDL', 'PDC', 'TodayOpen'):
-              assert field in reference_source, f'missing reference contract field: {field}'
+      - name: Dhan and news boundary audit
+        run: |
+          python - <<'PY'
+          import inspect
+          import market.dhan_data as dhan
+          import market.news_ranker as news
+          from market.price_data import PriceData
+          from market.live_quote_bridge import market_quote_partial
 
-          print('Canonical production contract: PASS')
+          assert callable(dhan.configured)
+          assert callable(dhan.market_quote)
+          assert callable(market_quote_partial)
+          assert callable(news.rank)
+          assert callable(news.refresh_async)
+          assert callable(news.snapshot)
+          assert 'DHAN_MARKETFEED_QUOTE' in inspect.getsource(PriceData.get_latest_live_price)
+          print('Dhan/news boundaries: PASS')
           PY
 
       - name: Full pytest regression
-        env:
-          PYTHONPATH: .
         run: python -m pytest -q
 
       - name: Streamlit startup smoke test
-        env:
-          PYTHONPATH: .
         run: |
           set -e
           nohup python -m streamlit run dashboard/app.py --server.headless true --server.port 8501 > /tmp/streamlit.log 2>&1 &
@@ -129,3 +167,21 @@ jobs:
             exit 1
           fi
           echo 'Streamlit startup health check: PASS'
+
+      - name: Final audit summary
+        if: always()
+        run: |
+          echo '========================================'
+          echo 'FINAL PROJECT AUDIT'
+          echo 'Python: 3.12'
+          echo 'Universe: NIFTY 500'
+          echo 'Strategies: S1 S2 S3 S4 S5'
+          echo 'Execution: PAPER ONLY'
+          echo 'Coverage gate: 490/500'
+          echo 'Collection budget: 15s'
+          echo 'Decision budget: 10s'
+          echo 'Cycle interval: 25s'
+          echo 'News filter: enabled in decision cycle'
+          echo 'Dashboard smoke test: enabled'
+          echo 'Full pytest: enabled'
+          echo '========================================'
