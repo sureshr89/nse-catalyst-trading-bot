@@ -19,28 +19,29 @@ def _within(now, start, end):
 
 
 def _candidate(quote, ref, side):
-    """Cheap superset filter for S1-S5; never impose an extra entry rule.
+    """Validate only data needed by the cycle; never duplicate S1-S5 rules.
 
-    The authoritative strategy evaluator decides the final setup. This filter
-    must therefore keep S4/S5 breakouts even when price is on the opposite side
-    of today's open, while still rejecting obviously irrelevant symbols.
+    In particular, today's high/low already include the current LTP. Therefore
+    ``LTP > TodayHigh`` and ``LTP < TodayLow`` can never be reliable S4 gates.
+    S4 uses completed intraday history inside MasterEngine._evaluate_stock(), so
+    this cycle-level filter must not pre-reject a valid S4 candidate.
     """
     try:
         op = float(quote.get("TodayOpen")); hi = float(quote.get("TodayHigh")); lo = float(quote.get("TodayLow")); ltp = float(quote.get("LTP"))
         pdh = float(ref.get("PDH")); pdl = float(ref.get("PDL"))
     except (TypeError, ValueError):
         return False
-    if not all(map(lambda x: x == x and abs(x) != float("inf"), (op, hi, lo, ltp, pdh, pdl))):
+    values = (op, hi, lo, ltp, pdh, pdl)
+    if not all(x == x and abs(x) != float("inf") for x in values):
         return False
-    if pdl >= pdh:
+    if pdl >= pdh or min(op, hi, lo, ltp, pdh, pdl) <= 0:
         return False
-    if side == "BUY":
-        # Keep S1/S3 open-reclaim candidates, S5 PDH breaks and S4 intraday-high breaks.
-        return (op > pdh and lo <= pdh and ltp > op) or (pdl < op < pdh and lo <= pdl and ltp > op) or ltp > pdh or ltp > hi
-    if side == "SELL":
-        # Keep S1/S3 open-reversal candidates, S5 PDL breaks and S4 intraday-low breaks.
-        return (op < pdl and hi >= pdl and ltp < op) or (pdl < op < pdh and hi >= pdh and ltp < op) or ltp < pdl or ltp < lo
-    return False
+    side = str(side).upper().strip()
+    if side not in {"BUY", "SELL"}:
+        return False
+    # This is intentionally a validation-only superset filter. The authoritative
+    # evaluator decides S1-S5 and their exact entry conditions.
+    return True
 
 
 def _open_allowed(engine, signal):
