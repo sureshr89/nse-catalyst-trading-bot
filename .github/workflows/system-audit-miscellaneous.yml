@@ -1,0 +1,102 @@
+name: SYSTEM AUDIT MISCELLANEOUS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: system-audit-miscellaneous-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: '1'
+  PYTHONPATH: .
+
+jobs:
+  miscellaneous:
+    name: Repository Hygiene and Architecture Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Required project structure
+        run: |
+          set -e
+          for path in config data market strategy scanner engine papertrade journal outputs utils tests .github/workflows main.py requirements.txt; do
+            test -e "$path"
+          done
+
+      - name: Workflow inventory and legacy workflow guard
+        run: |
+          set -e
+          count=$(find .github/workflows -maxdepth 1 -type f -name '*.yml' | wc -l)
+          test "$count" -eq 3
+          test -f .github/workflows/system-audit.yml
+          test -f .github/workflows/system-audit-online.yml
+          test -f .github/workflows/system-audit-miscellaneous.yml
+          if find .github/workflows -maxdepth 1 -type f \( -name 'test-file-*.yml' -o -name 'system-audit-1.yml' \) | grep -q .; then
+            echo 'Obsolete workflow files remain'
+            exit 1
+          fi
+          echo "Active workflow count: $count"
+
+      - name: Stale architecture reference guard
+        run: |
+          set -e
+          tracked=$(git ls-files '*.py' '*.yml' '*.yaml' '*.md')
+          if printf '%s\n' "$tracked" | xargs grep -nE 'scanner\.scanner([^_a-zA-Z]|$)|journal\.trade_journal' -- 2>/dev/null; then
+            echo 'Found stale scanner/journal module reference'
+            exit 1
+          fi
+          if printf '%s\n' "$tracked" | xargs grep -nE 'clean-dhan-v1|clean-dhan-v2' -- 2>/dev/null; then
+            echo 'Found obsolete clean-dhan contract reference'
+            exit 1
+          fi
+          echo 'Stale architecture references: PASS'
+
+      - name: Python artifact hygiene
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)(__pycache__/|.*\.pyc$|.*\.pyo$)' | grep -q .; then
+            echo 'Tracked Python cache artifacts found'
+            exit 1
+          fi
+          echo 'Python artifact hygiene: PASS'
+
+      - name: Compile active production tree
+        run: |
+          python -m compileall -q config data market strategy scanner engine papertrade journal utils main.py dashboard
+
+      - name: Check workflow Python action versions
+        run: |
+          ! grep -R -nE 'actions/(checkout|setup-python)@v[1-4]$|actions/setup-python@v5$' .github/workflows
+          echo 'Workflow action versions: PASS'
+
+      - name: Miscellaneous audit summary
+        if: always()
+        run: |
+          echo '========================================'
+          echo 'SYSTEM AUDIT MISCELLANEOUS: COMPLETE'
+          echo 'Workflow count: 3'
+          echo 'Legacy workflow guard: enabled'
+          echo 'Stale architecture guard: enabled'
+          echo 'Python artifact hygiene: enabled'
+          echo 'Production compile: enabled'
+          echo '========================================'
