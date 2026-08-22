@@ -17,6 +17,7 @@ MAX_INSTRUMENTS_PER_REQUEST = 1000
 MIN_REQUEST_TIMEOUT_SECONDS = 0.25
 COLLECTION_WINDOW_SECONDS = float(LIVE_COLLECTION_WINDOW_SECONDS)
 REQUIRED_COVERAGE = MIN_DATA_COVERAGE_COUNT
+LIVE_PRICE_SOURCE = "DHAN_MARKETFEED_QUOTE"
 
 _CACHE_LOCK = threading.RLock()
 _CACHE_ROWS = pd.DataFrame()
@@ -69,7 +70,7 @@ def _parse_rows(response, mapping):
             "TodayOpen": op, "TodayHigh": high, "TodayLow": low,
             "TodayClose": ltp, "PreviousClose": prev, "NetChange": net,
             "Volume": volume, "change_pct": (ltp - prev) / prev * 100.0,
-            "UpdatedAt": now_text, "price_source": "DHAN_MARKETFEED_OHLC",
+            "UpdatedAt": now_text, "price_source": LIVE_PRICE_SOURCE,
         })
     return pd.DataFrame(rows).drop_duplicates("Symbol").reset_index(drop=True) if rows else pd.DataFrame()
 
