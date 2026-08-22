@@ -61,11 +61,14 @@ jobs:
         run: |
           set -e
           tracked=$(git ls-files '*.py' '*.yml' '*.yaml' '*.md')
-          if printf '%s\n' "$tracked" | xargs grep -nE 'scanner\.scanner([^_a-zA-Z]|$)|journal\.trade_journal' -- 2>/dev/null; then
+          # Do not scan this guard's own literal patterns; otherwise the audit
+          # would fail because it necessarily contains the legacy strings.
+          scan_files=$(printf '%s\n' "$tracked" | grep -v '^\.github/workflows/system-audit-miscellaneous\.yml$' || true)
+          if [ -n "$scan_files" ] && printf '%s\n' "$scan_files" | xargs grep -nE 'scanner\.scanner([^_a-zA-Z]|$)|journal\.trade_journal' -- 2>/dev/null; then
             echo 'Found stale scanner/journal module reference'
             exit 1
           fi
-          if printf '%s\n' "$tracked" | xargs grep -nE 'clean-dhan-v1|clean-dhan-v2' -- 2>/dev/null; then
+          if [ -n "$scan_files" ] && printf '%s\n' "$scan_files" | xargs grep -nE 'clean-dhan-v1|clean-dhan-v2' -- 2>/dev/null; then
             echo 'Found obsolete clean-dhan contract reference'
             exit 1
           fi
