@@ -1,11 +1,12 @@
 from engine.master_engine import MasterEngine
+from strategy.contracts import STRATEGY_VERSION
 
 
 def test_master_diagnostics_use_clean_dhan_s1_s5_contract():
     engine = MasterEngine.__new__(MasterEngine)
     diag = engine._blank_diag()
     assert diag["strategy"] == "S1-S5"
-    assert diag["strategy_version"] == "clean-dhan-v3"
+    assert diag["strategy_version"] == STRATEGY_VERSION
     assert diag["market_data_source"] == "DHAN_ONLY"
     assert diag["trade_path_status"] == "BLOCKED"
     assert diag["market_data_coverage"] == "0/500"
