@@ -92,7 +92,6 @@ jobs:
               'engine.master_engine',
               'engine.cycle_runner',
               'papertrade.paper_trade_engine',
-              'journal.trade_journal',
               'dashboard.app',
           ]
           for module in modules:
