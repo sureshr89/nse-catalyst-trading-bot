@@ -1,8 +1,11 @@
 """G6 regression checks for paper-only execution and trade lifecycle safety."""
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 from papertrade.paper_trade_engine import PaperTradeEngine
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _engine(tmp_path):
@@ -17,6 +20,12 @@ def _engine(tmp_path):
     return e
 
 
+def _session_time(hour=10, minute=0):
+    """Return a deterministic clock time on today's IST session date."""
+    today = datetime.now(IST).date()
+    return datetime(today.year, today.month, today.day, hour, minute, tzinfo=IST)
+
+
 def _valid_trade():
     return {
         "approved": True,
@@ -28,7 +37,7 @@ def _valid_trade():
         "target": 101.75,
         "quantity": 1000,
         "actual_risk": 1400.0,
-        "entry_time": datetime(2026, 8, 21, 10, 0, 0),
+        "entry_time": _session_time(),
     }
 
 
@@ -62,7 +71,7 @@ def test_stop_closes_buy_position_and_releases_capital(tmp_path):
     e = _engine(tmp_path)
     opened = e.open_trade(_valid_trade())
     assert opened["opened"] is True
-    closed = e.close_position("ABC", 98.6, datetime(2026, 8, 21, 10, 31), "STOP_LOSS")
+    closed = e.close_position("ABC", 98.6, _session_time(10, 31), "STOP_LOSS")
     assert closed is not None
     assert closed["status"] == "CLOSED"
     assert closed["pnl"] == -1400.0
@@ -80,7 +89,7 @@ def test_ambiguous_bar_uses_stop_first(tmp_path):
     class FixedSessionDateTime(real_datetime):
         @classmethod
         def now(cls, tz=None):
-            utc_value = real_datetime(2026, 8, 21, 5, 0, 0, tzinfo=timezone.utc)
+            utc_value = _session_time(10).astimezone(timezone.utc)
             return utc_value.astimezone(tz) if tz is not None else utc_value.replace(tzinfo=None)
 
     with patch.object(engine_module, "datetime", FixedSessionDateTime):
