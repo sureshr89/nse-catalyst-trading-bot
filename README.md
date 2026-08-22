@@ -6,23 +6,25 @@ NSE Catalyst is a **paper-trading-only** NIFTY 500 scanner. The active runtime h
 
 ### Authoritative data flow
 
-Dhan instrument master → verified NIFTY 500 mapping → Dhan 500-stock market quote → A/D + sector counts + NIFTY 500 alignment → candidate prefilter → Dhan completed 1-minute candles for candidates → S1-S5 → risk → paper trade → journal/dashboard.
+Dhan instrument master → verified NIFTY 500 mapping → fresh Dhan NIFTY 500 market quotes → A/D + sector counts + NIFTY 500 alignment → candidate prefilter → Dhan completed 1-minute candles for candidates → S1-S5 → risk → paper trade → journal/dashboard.
 
 **Yahoo Finance is not used.** No Yahoo price, Yahoo fallback, Yahoo news or legacy strategy path may create a signal.
 
 ### Common market gate
 
+The active production gate requires **at least 490 verified fresh NIFTY 500 quotes out of the 500-stock universe**. It does not require an impossible 500/500 response when a small number of valid symbols are unavailable from the provider.
+
 BUY requires:
 - NIFTY 500 change > 0%
 - A/D ratio > 1
 - positive sector count > negative sector count
-- 500/500 verified market coverage
+- at least 490/500 verified fresh market quotes
 
 SELL requires the inverse:
 - NIFTY 500 change < 0%
 - A/D ratio < 1
 - negative sector count > positive sector count
-- 500/500 verified market coverage
+- at least 490/500 verified fresh market quotes
 
 ### S1 — PDH/PDL Sweep + Open Reclaim
 
