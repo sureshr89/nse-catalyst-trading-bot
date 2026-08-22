@@ -100,11 +100,11 @@ def test_09_paper_trading_only():
 def test_10_contract_and_diagnostics_are_consistent():
     from strategy.contracts import STRATEGY_VERSION, strategy_metadata
     from engine.master_engine import MasterEngine
-    assert STRATEGY_VERSION == "2026.08.21.clean-dhan-v2"
+    assert STRATEGY_VERSION == "2026.08.21.clean-dhan-v3"
     for s in ("S1", "S2", "S3", "S4", "S5"):
         assert strategy_metadata(s)["strategy"] == s
         assert strategy_metadata(s)["version"] == STRATEGY_VERSION
     diag = MasterEngine._blank_diag(MasterEngine.__new__(MasterEngine))
-    assert diag["strategy_version"] == "clean-dhan-v3"
+    assert diag["strategy_version"] == STRATEGY_VERSION
     assert diag["market_data_source"] == "DHAN_ONLY"
     assert set(diag["signals_by_strategy"]) == {"S1", "S2", "S3", "S4", "S5"}
