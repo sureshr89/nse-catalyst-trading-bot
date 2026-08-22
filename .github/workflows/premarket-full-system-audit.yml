@@ -64,11 +64,6 @@ jobs:
           assert settings.MAX_STOCKS == 500
           assert settings.MIN_DATA_COVERAGE_PCT == 98.0
           assert settings.MIN_DATA_COVERAGE_COUNT == 490
-
-          # A 500-stock universe is still required, but live market data is
-          # explicitly allowed to pass at the canonical 490/500 gate. Do not
-          # use a repository-wide regex here: legitimate reference/universe
-          # code can mention 500 without defining a live-data safety gate.
           assert ReferenceStore is not None
           print('Canonical universe=500 and live coverage=490/500: PASS')
           PY
@@ -91,12 +86,22 @@ jobs:
           PYTHONPATH: .
         run: |
           python - <<'PY'
+          import inspect
           from data.reference_store import ReferenceStore
+          from strategy.nifty500_price_action_strategies import Nifty500PriceActionStrategies
 
-          required = {'PDH', 'PDL', 'PDC', 'TodayOpen'}
-          assert required == {'PDH', 'PDL', 'PDC', 'TodayOpen'}
-          assert ReferenceStore is not None
-          print('PDH/PDL/PDC/TodayOpen reference contract: PASS')
+          # Verify the production reference store exposes the actual reference
+          # fields used by the strategy contract, rather than asserting a
+          # self-evident hard-coded set.
+          source = inspect.getsource(ReferenceStore)
+          for field in ('PDH', 'PDL', 'PDC', 'TodayOpen'):
+              assert field in source, f'missing reference field in ReferenceStore: {field}'
+
+          strategy_source = inspect.getsource(Nifty500PriceActionStrategies)
+          for field in ('PDH', 'PDL'):
+              assert field in strategy_source, f'{field} not wired into S1-S5 strategy contract'
+
+          print('PDH/PDL/PDC/TodayOpen production reference contract: PASS')
           PY
 
       - name: Engine to dashboard snapshot contract audit
